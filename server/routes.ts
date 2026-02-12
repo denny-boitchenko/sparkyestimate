@@ -10,7 +10,7 @@ import {
 } from "@shared/schema";
 import { z } from "zod";
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 
 function parseId(raw: string): number | null {
   const n = parseInt(raw, 10);
@@ -173,7 +173,17 @@ export async function registerRoutes(
     projectId: z.string().regex(/^\d+$/, "projectId must be a number"),
   });
 
-  app.post("/api/ai-analyze", upload.single("file"), async (req, res) => {
+  app.post("/api/ai-analyze", (req, res, next) => {
+    upload.single("file")(req, res, (err) => {
+      if (err) {
+        if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+          return res.status(413).json({ message: "File exceeds the 100MB upload limit. Try compressing the PDF or splitting it into smaller pages." });
+        }
+        return res.status(400).json({ message: err.message || "File upload failed" });
+      }
+      next();
+    });
+  }, async (req, res) => {
     try {
       const file = req.file;
       if (!file) return res.status(400).json({ message: "No file uploaded" });
