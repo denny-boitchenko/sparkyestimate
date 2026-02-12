@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import multer from "multer";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 import { seedDatabase } from "./seed";
 import {
   insertProjectSchema, insertEstimateSchema, insertEstimateItemSchema,
@@ -196,8 +196,7 @@ export async function registerRoutes(
 
       if (!process.env.GEMINI_API_KEY) return res.status(500).json({ message: "Gemini API key not configured" });
 
-      const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-      const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
       const imageData = file.buffer.toString("base64");
       const mimeType = file.mimetype || "image/png";
@@ -245,12 +244,20 @@ Return ONLY valid JSON in this exact format:
 }`;
       }
 
-      const result = await model.generateContent([
-        { text: prompt },
-        { inlineData: { mimeType, data: imageData } },
-      ]);
+      const result = await ai.models.generateContent({
+        model: "gemini-2.0-flash",
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: prompt },
+              { inlineData: { mimeType, data: imageData } },
+            ],
+          },
+        ],
+      });
 
-      const responseText = result.response.text();
+      const responseText = result.text || "";
       let parsedResults: any;
       try {
         const jsonMatch = responseText.match(/\{[\s\S]*\}/);
