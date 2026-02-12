@@ -1,0 +1,70 @@
+What It Is
+A desktop application (Python + PyQt6) for Canadian residential electrical contractors that automates the most tedious part of bidding: counting devices on drawings and pricing them out. It uses Google Gemini AI vision to scan electrical drawings or floor plans, then generates full material/labour estimates based on CEC 2021 code requirements.
+
+The Core Workflow (5 Steps)
+Step 1: Import a PDF
+
+User loads a residential electrical drawing or architectural floor plan (PDF)
+PyMuPDF (fitz) extracts each page as an image
+User selects the analysis mode:
+Electrical Drawing Mode — for drawings with actual electrical symbols (outlets, switches, lights)
+Floor Plan Only Mode — for architectural-only PDFs with no electrical symbols; applies CEC 2021 minimum requirements per room type
+Step 2: AI Analysis
+
+In Electrical Mode: Gemini 2.0 Flash scans each page looking for 34 electrical symbol types (duplex receptacles, GFCI outlets, single/3-way/4-way/dimmer switches, recessed/pendant/track lights, ceiling fans, smoke detectors, data outlets, EV chargers, etc.). Returns symbol counts with confidence scores and approximate locations.
+In Floor Plan Mode: Gemini detects rooms (kitchen, bathroom, bedroom, garage, etc.) from 21 room types, then applies CEC 2021 minimum device requirements per room. For example, a kitchen requires split receptacles, GFCI protection, range hood, dedicated fridge circuit, etc.
+Analysis runs on background QThread workers to keep the UI responsive.
+Hallucination mitigation: 6-layer approach including confidence scores, sanity rules (e.g., a 1200 sqft house shouldn't have 50 outlets), dual-model cross-check, and CEC compliance checking.
+Step 3: Review & Edit (Review Tab)
+
+Shows detected devices organized by room in a tree widget ("Rooms" subtab)
+User can edit counts, add/remove devices, change floor levels
+"All Devices" subtab shows a flat aggregated table of every device type with editable counts
+Panel & Meter Placement: User clicks on the floor plan image to place the electrical panel and meter. This triggers wire distance calculation — Manhattan distance from panel to each room centroid × 1.5 routing factor + vertical offset per floor difference + 3ft makeup per device. Replaces flat default wire allowances with realistic distance-based estimates.
+Step 4: Estimate (Estimate Tab)
+
+The Estimator engine takes symbol counts and runs them through 39 default device assemblies. Each assembly is a complete installation bundle:
+
+Device (e.g., 15A duplex receptacle, TR)
+Box (e.g., single-gang device box, NM)
+Cover plate (e.g., single-gang duplex cover plate)
+Misc parts (wire nuts, ground pigtails, box connectors)
+Wire allowance (e.g., 15 ft of 14/2 NM-B per outlet)
+Labour hours (e.g., 0.18 hrs per outlet, from NECA Manual of Labour Units)
+Material cost (user-configurable)
+The estimate calculates:
+
+Per-line: qty × material cost, qty × wire footage, qty × labour hours
+Wire summary by type (14/2, 12/2, 10/3, etc.) with 15% waste factor
+Subtotals → overhead (default 15%) → profit (default 10%) → grand total
+Per-item markup percentages (optional)
+Global material and labour markup percentages
+Four inner subtabs:
+
+Line Items — the main 12-column estimate table with every cell editable (qty, box type, cover plate, material cost, markup, wire type, wire footage, labour hours)
+Panel Schedule — circuit breaker layout (circuit #, amps, poles, description, wire type, GFCI/AFCI flags)
+CEC Compliance — runs 12+ compliance check categories against CEC 2021 and returns a scored report (PASS/WARNING/FAIL per rule)
+Services — bundled service packages (e.g., Temp Power, Underground Service Entry, Overhead Service) that can be added to estimates
+Step 5: Export & Save
+
+Excel export (openpyxl): 3-sheet workbook — Material List, Wire Summary, Settings
+Client PDF export (reportlab): Formatted quote for customer presentation
+CEC Compliance Report: Exportable compliance results
+Material List: Simplified list for ordering
+Project save/load: SQLite database at ~/.sparkestimate/sparkestimate.db with full project state persistence
+Key Features
+Feature	Details
+39 Default Assemblies	From duplex receptacles to underground service entry, pre-configured for Canadian residential
+Wire Distance Calc	Panel placement → Manhattan distance × 1.5 routing × floor offsets → per-device wire allowance
+CEC 2021 Compliance	12+ check categories: smoke detectors, GFCI, AFCI, circuit loading, room-specific rules
+Dwelling Types	Single, 2-plex, 3-plex, 4-plex
+Custom Assemblies	Add your own device types with custom wire/labour/cost
+Custom Services	Bundle multiple items into reusable service packages
+Project Status Tracking	Draft → In Progress → Bid Sent → Won / Lost
+Per-Item Markups	Override markup % on individual line items
+Auto-Save Pricing	Material and wire prices auto-save on edit
+Multi-Quote	Multiple quotes per project for comparison
+Database Schema (SQLite)
+Table	Purpose
+settings	Key-value store (API key, labour rate, overhead %, profit %)
+materi...
