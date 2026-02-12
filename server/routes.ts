@@ -197,7 +197,7 @@ export async function registerRoutes(
       if (!process.env.GEMINI_API_KEY) return res.status(500).json({ message: "Gemini API key not configured" });
 
       const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-      const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
+      const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
       const imageData = file.buffer.toString("base64");
       const mimeType = file.mimetype || "image/png";
