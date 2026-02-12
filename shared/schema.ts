@@ -76,13 +76,63 @@ export const settings = pgTable("settings", {
   value: text("value").notNull(),
 });
 
+export const wireTypes = pgTable("wire_types", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  name: text("name").notNull().unique(),
+  costPerFoot: real("cost_per_foot").notNull().default(0),
+});
+
+export const serviceBundles = pgTable("service_bundles", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  name: text("name").notNull(),
+  items: jsonb("items").notNull().default([]),
+  materialCost: real("material_cost").notNull().default(0),
+  laborHours: real("labor_hours").notNull().default(0),
+});
+
+export const panelCircuits = pgTable("panel_circuits", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  estimateId: integer("estimate_id").notNull().references(() => estimates.id, { onDelete: "cascade" }),
+  circuitNumber: integer("circuit_number").notNull(),
+  amps: integer("amps").notNull().default(15),
+  poles: integer("poles").notNull().default(1),
+  description: text("description").notNull(),
+  wireType: text("wire_type"),
+  isGfci: boolean("is_gfci").notNull().default(false),
+  isAfci: boolean("is_afci").notNull().default(false),
+});
+
+export const estimateServices = pgTable("estimate_services", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  estimateId: integer("estimate_id").notNull().references(() => estimates.id, { onDelete: "cascade" }),
+  serviceBundleId: integer("service_bundle_id").notNull().references(() => serviceBundles.id),
+  name: text("name").notNull(),
+  materialCost: real("material_cost").notNull().default(0),
+  laborHours: real("labor_hours").notNull().default(0),
+});
+
+export const complianceDocuments = pgTable("compliance_documents", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  name: text("name").notNull(),
+  fileName: text("file_name").notNull(),
+  expiresAt: timestamp("expires_at"),
+  uploadedAt: timestamp("uploaded_at").defaultNow().notNull(),
+});
+
+// Insert schemas
 export const insertProjectSchema = createInsertSchema(projects).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertEstimateSchema = createInsertSchema(estimates).omit({ id: true, createdAt: true });
 export const insertEstimateItemSchema = createInsertSchema(estimateItems).omit({ id: true });
 export const insertDeviceAssemblySchema = createInsertSchema(deviceAssemblies).omit({ id: true });
 export const insertAiAnalysisSchema = createInsertSchema(aiAnalyses).omit({ id: true, createdAt: true });
 export const insertSettingSchema = createInsertSchema(settings).omit({ id: true });
+export const insertWireTypeSchema = createInsertSchema(wireTypes).omit({ id: true });
+export const insertServiceBundleSchema = createInsertSchema(serviceBundles).omit({ id: true });
+export const insertPanelCircuitSchema = createInsertSchema(panelCircuits).omit({ id: true });
+export const insertEstimateServiceSchema = createInsertSchema(estimateServices).omit({ id: true });
+export const insertComplianceDocumentSchema = createInsertSchema(complianceDocuments).omit({ id: true, uploadedAt: true });
 
+// Types
 export type Project = typeof projects.$inferSelect;
 export type InsertProject = z.infer<typeof insertProjectSchema>;
 export type Estimate = typeof estimates.$inferSelect;
@@ -95,6 +145,16 @@ export type AiAnalysis = typeof aiAnalyses.$inferSelect;
 export type InsertAiAnalysis = z.infer<typeof insertAiAnalysisSchema>;
 export type Setting = typeof settings.$inferSelect;
 export type InsertSetting = z.infer<typeof insertSettingSchema>;
+export type WireType = typeof wireTypes.$inferSelect;
+export type InsertWireType = z.infer<typeof insertWireTypeSchema>;
+export type ServiceBundle = typeof serviceBundles.$inferSelect;
+export type InsertServiceBundle = z.infer<typeof insertServiceBundleSchema>;
+export type PanelCircuit = typeof panelCircuits.$inferSelect;
+export type InsertPanelCircuit = z.infer<typeof insertPanelCircuitSchema>;
+export type EstimateService = typeof estimateServices.$inferSelect;
+export type InsertEstimateService = z.infer<typeof insertEstimateServiceSchema>;
+export type ComplianceDocument = typeof complianceDocuments.$inferSelect;
+export type InsertComplianceDocument = z.infer<typeof insertComplianceDocumentSchema>;
 
 export const PROJECT_STATUSES = ["draft", "in_progress", "bid_sent", "won", "lost"] as const;
 export const DWELLING_TYPES = ["single", "duplex", "triplex", "fourplex"] as const;
@@ -102,4 +162,11 @@ export const ANALYSIS_MODES = ["electrical", "floor_plan"] as const;
 
 export const DEVICE_CATEGORIES = [
   "receptacles", "switches", "lighting", "safety", "data_comm", "specialty", "service"
+] as const;
+
+export const DEFAULT_WIRE_TYPES = [
+  "14/2 NM-B", "14/3 NM-B", "12/2 NM-B", "12/3 NM-B",
+  "10/2 NM-B", "10/3 NM-B", "6/3 NM-B", "3 AWG NM-B",
+  "3/0 AL SER Cable", "18/2 Bell Wire", "18/5 Thermostat Wire",
+  "Cat6", "RG6 Coax"
 ] as const;
