@@ -6,7 +6,9 @@ import { GoogleGenAI } from "@google/genai";
 import { seedDatabase } from "./seed";
 import {
   insertProjectSchema, insertEstimateSchema, insertEstimateItemSchema,
-  insertDeviceAssemblySchema, ANALYSIS_MODES
+  insertDeviceAssemblySchema, insertWireTypeSchema, insertServiceBundleSchema,
+  insertPanelCircuitSchema, insertEstimateServiceSchema,
+  ANALYSIS_MODES
 } from "@shared/schema";
 import { z } from "zod";
 
@@ -160,6 +162,316 @@ export async function registerRoutes(
     } catch (err: any) {
       res.status(400).json({ message: err.message });
     }
+  });
+
+  app.patch("/api/device-assemblies/:id", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid assembly ID" });
+    const assembly = await storage.updateDeviceAssembly(id, req.body);
+    if (!assembly) return res.status(404).json({ message: "Assembly not found" });
+    res.json(assembly);
+  });
+
+  app.delete("/api/device-assemblies/:id", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid assembly ID" });
+    await storage.deleteDeviceAssembly(id);
+    res.status(204).send();
+  });
+
+  // Wire Types
+  app.get("/api/wire-types", async (_req, res) => {
+    const wts = await storage.getWireTypes();
+    res.json(wts);
+  });
+
+  app.post("/api/wire-types", async (req, res) => {
+    const parsed = insertWireTypeSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: parsed.error.issues.map(i => i.message).join(", ") });
+    try {
+      const wt = await storage.createWireType(parsed.data);
+      res.status(201).json(wt);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.patch("/api/wire-types/:id", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid wire type ID" });
+    const wt = await storage.updateWireType(id, req.body);
+    if (!wt) return res.status(404).json({ message: "Wire type not found" });
+    res.json(wt);
+  });
+
+  app.delete("/api/wire-types/:id", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid wire type ID" });
+    await storage.deleteWireType(id);
+    res.status(204).send();
+  });
+
+  // Service Bundles
+  app.get("/api/service-bundles", async (_req, res) => {
+    const bundles = await storage.getServiceBundles();
+    res.json(bundles);
+  });
+
+  app.post("/api/service-bundles", async (req, res) => {
+    const parsed = insertServiceBundleSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: parsed.error.issues.map(i => i.message).join(", ") });
+    try {
+      const bundle = await storage.createServiceBundle(parsed.data);
+      res.status(201).json(bundle);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.patch("/api/service-bundles/:id", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid service bundle ID" });
+    const bundle = await storage.updateServiceBundle(id, req.body);
+    if (!bundle) return res.status(404).json({ message: "Service bundle not found" });
+    res.json(bundle);
+  });
+
+  app.delete("/api/service-bundles/:id", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid service bundle ID" });
+    await storage.deleteServiceBundle(id);
+    res.status(204).send();
+  });
+
+  // Panel Circuits
+  app.get("/api/estimates/:id/panel-circuits", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid estimate ID" });
+    const circuits = await storage.getPanelCircuits(id);
+    res.json(circuits);
+  });
+
+  app.post("/api/panel-circuits", async (req, res) => {
+    const parsed = insertPanelCircuitSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: parsed.error.issues.map(i => i.message).join(", ") });
+    try {
+      const circuit = await storage.createPanelCircuit(parsed.data);
+      res.status(201).json(circuit);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.patch("/api/panel-circuits/:id", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid circuit ID" });
+    const circuit = await storage.updatePanelCircuit(id, req.body);
+    if (!circuit) return res.status(404).json({ message: "Circuit not found" });
+    res.json(circuit);
+  });
+
+  app.delete("/api/panel-circuits/:id", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid circuit ID" });
+    await storage.deletePanelCircuit(id);
+    res.status(204).send();
+  });
+
+  app.post("/api/estimates/:id/generate-panel", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid estimate ID" });
+
+    const items = await storage.getEstimateItems(id);
+    if (items.length === 0) return res.status(400).json({ message: "No line items to generate panel from" });
+
+    await storage.deleteAllPanelCircuits(id);
+
+    const circuitMap = new Map<string, { description: string; wireType: string | null; isGfci: boolean; isAfci: boolean; amps: number }>();
+
+    for (const item of items) {
+      const room = item.room || "General";
+      const key = `${room}-${item.deviceType}`;
+      const isGfci = item.deviceType.toLowerCase().includes("gfci") ||
+                     (item.room || "").toLowerCase().includes("kitchen") ||
+                     (item.room || "").toLowerCase().includes("bathroom") ||
+                     (item.room || "").toLowerCase().includes("garage");
+      const isAfci = (item.room || "").toLowerCase().includes("bedroom") ||
+                     (item.room || "").toLowerCase().includes("living") ||
+                     (item.room || "").toLowerCase().includes("den") ||
+                     (item.room || "").toLowerCase().includes("dining");
+
+      let amps = 15;
+      if (item.wireType?.includes("12/")) amps = 20;
+      if (item.wireType?.includes("10/")) amps = 30;
+      if (item.wireType?.includes("6/")) amps = 40;
+
+      if (circuitMap.has(key)) {
+        const existing = circuitMap.get(key)!;
+        existing.description += `, ${item.quantity}x ${item.deviceType}`;
+      } else {
+        circuitMap.set(key, {
+          description: `${room} - ${item.quantity}x ${item.deviceType}`,
+          wireType: item.wireType,
+          isGfci,
+          isAfci,
+          amps,
+        });
+      }
+    }
+
+    let circuitNumber = 1;
+    const created: any[] = [];
+    for (const [, data] of circuitMap) {
+      const circuit = await storage.createPanelCircuit({
+        estimateId: id,
+        circuitNumber,
+        amps: data.amps,
+        poles: data.amps > 20 ? 2 : 1,
+        description: data.description,
+        wireType: data.wireType,
+        isGfci: data.isGfci,
+        isAfci: data.isAfci,
+      });
+      created.push(circuit);
+      circuitNumber++;
+    }
+
+    res.json(created);
+  });
+
+  // Estimate Services
+  app.get("/api/estimates/:id/services", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid estimate ID" });
+    const services = await storage.getEstimateServices(id);
+    res.json(services);
+  });
+
+  app.post("/api/estimate-services", async (req, res) => {
+    const parsed = insertEstimateServiceSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: parsed.error.issues.map(i => i.message).join(", ") });
+    try {
+      const service = await storage.createEstimateService(parsed.data);
+      res.status(201).json(service);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.delete("/api/estimate-services/:id", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid service ID" });
+    await storage.deleteEstimateService(id);
+    res.status(204).send();
+  });
+
+  // CEC Compliance Check
+  app.post("/api/estimates/:id/compliance-check", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid estimate ID" });
+
+    const items = await storage.getEstimateItems(id);
+    const circuits = await storage.getPanelCircuits(id);
+
+    const rules: any[] = [];
+
+    const gfciLocations = ["kitchen", "bathroom", "garage", "outdoor", "laundry", "unfinished basement"];
+    const afciLocations = ["bedroom", "living", "dining", "den", "family", "hallway", "closet"];
+
+    const roomItems = items.reduce<Record<string, typeof items>>((acc, item) => {
+      const room = (item.room || "general").toLowerCase();
+      if (!acc[room]) acc[room] = [];
+      acc[room].push(item);
+      return acc;
+    }, {});
+
+    for (const [room, roomItemList] of Object.entries(roomItems)) {
+      const needsGfci = gfciLocations.some(loc => room.includes(loc));
+      if (needsGfci) {
+        const hasGfci = roomItemList.some(i => i.deviceType.toLowerCase().includes("gfci"));
+        rules.push({
+          rule: "CEC 26-700(11) - GFCI Protection",
+          location: room,
+          status: hasGfci ? "PASS" : "FAIL",
+          description: hasGfci
+            ? `GFCI protection present in ${room}`
+            : `GFCI receptacle required in ${room} per CEC 26-700(11)`,
+        });
+      }
+
+      const needsAfci = afciLocations.some(loc => room.includes(loc));
+      if (needsAfci) {
+        const afciCircuit = circuits.some(c => c.description.toLowerCase().includes(room) && c.isAfci);
+        rules.push({
+          rule: "CEC 26-656 - AFCI Protection",
+          location: room,
+          status: afciCircuit ? "PASS" : "WARN",
+          description: afciCircuit
+            ? `AFCI protection configured for ${room}`
+            : `AFCI protection recommended for ${room} per CEC 26-656`,
+        });
+      }
+    }
+
+    const hasSmokeDetectors = items.some(i => i.deviceType.toLowerCase().includes("smoke"));
+    rules.push({
+      rule: "CEC 32-110 - Smoke Detectors",
+      location: "All bedrooms & hallways",
+      status: hasSmokeDetectors ? "PASS" : "FAIL",
+      description: hasSmokeDetectors
+        ? "Smoke detectors included in estimate"
+        : "Smoke detectors required in every bedroom and adjacent hallway",
+    });
+
+    const hasCoDetector = items.some(i => i.deviceType.toLowerCase().includes("co") || i.deviceType.toLowerCase().includes("carbon"));
+    rules.push({
+      rule: "CEC 32-110 - CO Detectors",
+      location: "Near sleeping areas",
+      status: hasCoDetector ? "PASS" : "WARN",
+      description: hasCoDetector
+        ? "CO detector included"
+        : "CO detector recommended near sleeping areas if fuel-burning appliances present",
+    });
+
+    const kitchenItems = roomItems["kitchen"] || [];
+    if (kitchenItems.length > 0) {
+      const hasSplitRecep = kitchenItems.some(i => i.deviceType.toLowerCase().includes("split"));
+      rules.push({
+        rule: "CEC 26-712(d)(iv) - Kitchen Split Receptacles",
+        location: "Kitchen",
+        status: hasSplitRecep ? "PASS" : "INFO",
+        description: hasSplitRecep
+          ? "Kitchen split receptacles present"
+          : "Consider adding split receptacles for kitchen counter per CEC 26-712",
+      });
+    }
+
+    const totalAmps = circuits.reduce((sum, c) => sum + c.amps * c.poles, 0);
+    const panelSize = totalAmps <= 100 ? 100 : totalAmps <= 200 ? 200 : 400;
+    rules.push({
+      rule: "CEC 26-500 - Panel Sizing",
+      location: "Main Panel",
+      status: "INFO",
+      description: `Calculated load: ${totalAmps}A. Recommended panel size: ${panelSize}A`,
+    });
+
+    for (const circuit of circuits) {
+      let expectedWire = "14/2 NM-B";
+      if (circuit.amps >= 20) expectedWire = "12/2 NM-B";
+      if (circuit.amps >= 30) expectedWire = "10/2 NM-B";
+      if (circuit.amps >= 40) expectedWire = "6/3 NM-B";
+
+      if (circuit.wireType && !circuit.wireType.startsWith(expectedWire.split("/")[0])) {
+        rules.push({
+          rule: "CEC 14-104 - Wire Sizing",
+          location: `Circuit ${circuit.circuitNumber}`,
+          status: "WARN",
+          description: `${circuit.amps}A circuit using ${circuit.wireType}. Expected minimum: ${expectedWire}`,
+        });
+      }
+    }
+
+    res.json({ rules, summary: { total: rules.length, pass: rules.filter(r => r.status === "PASS").length, warn: rules.filter(r => r.status === "WARN").length, fail: rules.filter(r => r.status === "FAIL").length, info: rules.filter(r => r.status === "INFO").length } });
   });
 
   // AI Analysis

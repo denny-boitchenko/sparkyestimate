@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { deviceAssemblies, projects, estimates, estimateItems } from "@shared/schema";
+import { deviceAssemblies, projects, estimates, estimateItems, wireTypes, serviceBundles } from "@shared/schema";
 import { eq } from "drizzle-orm";
 
 const DEFAULT_ASSEMBLIES = [
@@ -125,5 +125,48 @@ export async function seedDatabase() {
     ]);
 
     console.log("Seeded 4 sample projects with estimates");
+  }
+
+  const existingWireTypes = await db.select().from(wireTypes);
+  if (existingWireTypes.length === 0) {
+    console.log("Seeding wire types...");
+    const defaultWires = [
+      { name: "14/2 NM-B", costPerFoot: 0.65 },
+      { name: "14/3 NM-B", costPerFoot: 0.95 },
+      { name: "12/2 NM-B", costPerFoot: 0.85 },
+      { name: "12/3 NM-B", costPerFoot: 1.25 },
+      { name: "10/2 NM-B", costPerFoot: 1.45 },
+      { name: "10/3 NM-B", costPerFoot: 2.10 },
+      { name: "6/3 NM-B", costPerFoot: 4.50 },
+      { name: "3 AWG NM-B", costPerFoot: 3.75 },
+      { name: "3/0 AL SER Cable", costPerFoot: 5.25 },
+      { name: "18/2 Bell Wire", costPerFoot: 0.15 },
+      { name: "18/5 Thermostat Wire", costPerFoot: 0.35 },
+      { name: "Cat6", costPerFoot: 0.45 },
+      { name: "RG6 Coax", costPerFoot: 0.30 },
+    ];
+    for (const wire of defaultWires) {
+      await db.insert(wireTypes).values(wire);
+    }
+    console.log(`Seeded ${defaultWires.length} wire types`);
+  }
+
+  const existingBundles = await db.select().from(serviceBundles);
+  if (existingBundles.length === 0) {
+    console.log("Seeding service bundles...");
+    const defaultBundles = [
+      { name: "Temporary Power", items: ["Temporary panel", "GFI receptacles", "Extension cords", "Ground rod"], materialCost: 450, laborHours: 4 },
+      { name: "Underground Service Entrance", items: ["100A panel", "Meter base", "PVC conduit", "Ground rod", "Service entrance cable"], materialCost: 1200, laborHours: 8 },
+      { name: "Overhead Service Entrance", items: ["200A panel", "Meter base", "Weather head", "Service mast", "SE cable"], materialCost: 1800, laborHours: 10 },
+      { name: "Panel Upgrade (100A to 200A)", items: ["200A panel", "200A breaker", "New meter base", "Grounding system"], materialCost: 1500, laborHours: 8 },
+      { name: "EV Charger Installation", items: ["50A breaker", "6/3 NM-B wire", "NEMA 14-50 receptacle", "Surface mount box"], materialCost: 280, laborHours: 3 },
+      { name: "Whole Home Surge Protection", items: ["Panel-mount surge protector", "2-pole breaker"], materialCost: 180, laborHours: 1 },
+      { name: "Generator Transfer Switch", items: ["Manual transfer switch", "Inlet box", "10/3 cable"], materialCost: 450, laborHours: 4 },
+      { name: "Hot Tub Circuit", items: ["50A GFCI breaker", "6/3 NM-B wire", "Disconnect box", "PVC conduit"], materialCost: 350, laborHours: 5 },
+    ];
+    for (const bundle of defaultBundles) {
+      await db.insert(serviceBundles).values(bundle);
+    }
+    console.log(`Seeded ${defaultBundles.length} service bundles`);
   }
 }

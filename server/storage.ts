@@ -1,11 +1,17 @@
 import {
   projects, estimates, estimateItems, deviceAssemblies, aiAnalyses, settings,
+  wireTypes, serviceBundles, panelCircuits, estimateServices, complianceDocuments,
   type Project, type InsertProject,
   type Estimate, type InsertEstimate,
   type EstimateItem, type InsertEstimateItem,
   type DeviceAssembly, type InsertDeviceAssembly,
   type AiAnalysis, type InsertAiAnalysis,
   type Setting, type InsertSetting,
+  type WireType, type InsertWireType,
+  type ServiceBundle, type InsertServiceBundle,
+  type PanelCircuit, type InsertPanelCircuit,
+  type EstimateService, type InsertEstimateService,
+  type ComplianceDocument, type InsertComplianceDocument,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc } from "drizzle-orm";
@@ -31,6 +37,8 @@ export interface IStorage {
 
   getDeviceAssemblies(): Promise<DeviceAssembly[]>;
   createDeviceAssembly(data: InsertDeviceAssembly): Promise<DeviceAssembly>;
+  updateDeviceAssembly(id: number, data: Partial<InsertDeviceAssembly>): Promise<DeviceAssembly | undefined>;
+  deleteDeviceAssembly(id: number): Promise<void>;
 
   getAiAnalyses(): Promise<AiAnalysis[]>;
   getAiAnalysesByProject(projectId: number): Promise<AiAnalysis[]>;
@@ -38,6 +46,31 @@ export interface IStorage {
 
   getSettings(): Promise<Setting[]>;
   upsertSetting(key: string, value: string): Promise<void>;
+
+  getWireTypes(): Promise<WireType[]>;
+  createWireType(data: InsertWireType): Promise<WireType>;
+  updateWireType(id: number, data: Partial<InsertWireType>): Promise<WireType | undefined>;
+  deleteWireType(id: number): Promise<void>;
+
+  getServiceBundles(): Promise<ServiceBundle[]>;
+  getServiceBundle(id: number): Promise<ServiceBundle | undefined>;
+  createServiceBundle(data: InsertServiceBundle): Promise<ServiceBundle>;
+  updateServiceBundle(id: number, data: Partial<InsertServiceBundle>): Promise<ServiceBundle | undefined>;
+  deleteServiceBundle(id: number): Promise<void>;
+
+  getPanelCircuits(estimateId: number): Promise<PanelCircuit[]>;
+  createPanelCircuit(data: InsertPanelCircuit): Promise<PanelCircuit>;
+  updatePanelCircuit(id: number, data: Partial<InsertPanelCircuit>): Promise<PanelCircuit | undefined>;
+  deletePanelCircuit(id: number): Promise<void>;
+  deleteAllPanelCircuits(estimateId: number): Promise<void>;
+
+  getEstimateServices(estimateId: number): Promise<EstimateService[]>;
+  createEstimateService(data: InsertEstimateService): Promise<EstimateService>;
+  deleteEstimateService(id: number): Promise<void>;
+
+  getComplianceDocuments(): Promise<ComplianceDocument[]>;
+  createComplianceDocument(data: InsertComplianceDocument): Promise<ComplianceDocument>;
+  deleteComplianceDocument(id: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -118,6 +151,15 @@ export class DatabaseStorage implements IStorage {
     return assembly;
   }
 
+  async updateDeviceAssembly(id: number, data: Partial<InsertDeviceAssembly>): Promise<DeviceAssembly | undefined> {
+    const [assembly] = await db.update(deviceAssemblies).set(data).where(eq(deviceAssemblies.id, id)).returning();
+    return assembly;
+  }
+
+  async deleteDeviceAssembly(id: number): Promise<void> {
+    await db.delete(deviceAssemblies).where(eq(deviceAssemblies.id, id));
+  }
+
   async getAiAnalyses(): Promise<AiAnalysis[]> {
     return db.select().from(aiAnalyses).orderBy(desc(aiAnalyses.createdAt));
   }
@@ -142,6 +184,95 @@ export class DatabaseStorage implements IStorage {
     } else {
       await db.insert(settings).values({ key, value });
     }
+  }
+
+  async getWireTypes(): Promise<WireType[]> {
+    return db.select().from(wireTypes);
+  }
+
+  async createWireType(data: InsertWireType): Promise<WireType> {
+    const [wt] = await db.insert(wireTypes).values(data).returning();
+    return wt;
+  }
+
+  async updateWireType(id: number, data: Partial<InsertWireType>): Promise<WireType | undefined> {
+    const [wt] = await db.update(wireTypes).set(data).where(eq(wireTypes.id, id)).returning();
+    return wt;
+  }
+
+  async deleteWireType(id: number): Promise<void> {
+    await db.delete(wireTypes).where(eq(wireTypes.id, id));
+  }
+
+  async getServiceBundles(): Promise<ServiceBundle[]> {
+    return db.select().from(serviceBundles);
+  }
+
+  async getServiceBundle(id: number): Promise<ServiceBundle | undefined> {
+    const [sb] = await db.select().from(serviceBundles).where(eq(serviceBundles.id, id));
+    return sb;
+  }
+
+  async createServiceBundle(data: InsertServiceBundle): Promise<ServiceBundle> {
+    const [sb] = await db.insert(serviceBundles).values(data).returning();
+    return sb;
+  }
+
+  async updateServiceBundle(id: number, data: Partial<InsertServiceBundle>): Promise<ServiceBundle | undefined> {
+    const [sb] = await db.update(serviceBundles).set(data).where(eq(serviceBundles.id, id)).returning();
+    return sb;
+  }
+
+  async deleteServiceBundle(id: number): Promise<void> {
+    await db.delete(serviceBundles).where(eq(serviceBundles.id, id));
+  }
+
+  async getPanelCircuits(estimateId: number): Promise<PanelCircuit[]> {
+    return db.select().from(panelCircuits).where(eq(panelCircuits.estimateId, estimateId));
+  }
+
+  async createPanelCircuit(data: InsertPanelCircuit): Promise<PanelCircuit> {
+    const [pc] = await db.insert(panelCircuits).values(data).returning();
+    return pc;
+  }
+
+  async updatePanelCircuit(id: number, data: Partial<InsertPanelCircuit>): Promise<PanelCircuit | undefined> {
+    const [pc] = await db.update(panelCircuits).set(data).where(eq(panelCircuits.id, id)).returning();
+    return pc;
+  }
+
+  async deletePanelCircuit(id: number): Promise<void> {
+    await db.delete(panelCircuits).where(eq(panelCircuits.id, id));
+  }
+
+  async deleteAllPanelCircuits(estimateId: number): Promise<void> {
+    await db.delete(panelCircuits).where(eq(panelCircuits.estimateId, estimateId));
+  }
+
+  async getEstimateServices(estimateId: number): Promise<EstimateService[]> {
+    return db.select().from(estimateServices).where(eq(estimateServices.estimateId, estimateId));
+  }
+
+  async createEstimateService(data: InsertEstimateService): Promise<EstimateService> {
+    const [es] = await db.insert(estimateServices).values(data).returning();
+    return es;
+  }
+
+  async deleteEstimateService(id: number): Promise<void> {
+    await db.delete(estimateServices).where(eq(estimateServices.id, id));
+  }
+
+  async getComplianceDocuments(): Promise<ComplianceDocument[]> {
+    return db.select().from(complianceDocuments).orderBy(desc(complianceDocuments.uploadedAt));
+  }
+
+  async createComplianceDocument(data: InsertComplianceDocument): Promise<ComplianceDocument> {
+    const [cd] = await db.insert(complianceDocuments).values(data).returning();
+    return cd;
+  }
+
+  async deleteComplianceDocument(id: number): Promise<void> {
+    await db.delete(complianceDocuments).where(eq(complianceDocuments.id, id));
   }
 }
 
