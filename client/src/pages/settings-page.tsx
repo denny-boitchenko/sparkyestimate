@@ -1326,6 +1326,9 @@ function EstimateTemplateTab() {
   const sm = new Map((settings || []).map(s => [s.key, s.value]));
 
   const [templateForm, setTemplateForm] = useState({
+    companyName: "",
+    companyPhone: "",
+    companyEmail: "",
     companyAddress: "",
     gstRate: "5",
     gstLabel: "GST 5%",
@@ -1336,6 +1339,9 @@ function EstimateTemplateTab() {
   useEffect(() => {
     if (settings) {
       setTemplateForm({
+        companyName: sm.get("companyName") || "",
+        companyPhone: sm.get("companyPhone") || "",
+        companyEmail: sm.get("companyEmail") || "",
         companyAddress: sm.get("companyAddress") || "",
         gstRate: sm.get("gstRate") || "5",
         gstLabel: sm.get("gstLabel") || "GST 5%",
@@ -1366,6 +1372,15 @@ function EstimateTemplateTab() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
+            <Label>Company Name</Label>
+            <Input
+              value={templateForm.companyName}
+              onChange={(e) => setTemplateForm(p => ({ ...p, companyName: e.target.value }))}
+              placeholder="Your Company Name"
+              data-testid="input-company-name"
+            />
+          </div>
+          <div className="space-y-2">
             <Label>Company Address</Label>
             <Input
               value={templateForm.companyAddress}
@@ -1373,6 +1388,26 @@ function EstimateTemplateTab() {
               placeholder="123 Main St, City, Province"
               data-testid="input-company-address"
             />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Company Phone</Label>
+              <Input
+                value={templateForm.companyPhone}
+                onChange={(e) => setTemplateForm(p => ({ ...p, companyPhone: e.target.value }))}
+                placeholder="(555) 123-4567"
+                data-testid="input-company-phone"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Company Email</Label>
+              <Input
+                value={templateForm.companyEmail}
+                onChange={(e) => setTemplateForm(p => ({ ...p, companyEmail: e.target.value }))}
+                placeholder="info@company.com"
+                data-testid="input-company-email"
+              />
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">

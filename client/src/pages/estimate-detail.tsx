@@ -214,26 +214,38 @@ export default function EstimateDetail() {
 
       const infoBoxX = pw - margin - 72;
       const infoBoxW = 72;
+      const midCol = infoBoxX + 38;
+
       doc.setFillColor(70, 70, 70);
-      doc.rect(infoBoxX, 15, infoBoxW, 8, "F");
-      doc.setFillColor(245, 245, 245);
-      doc.rect(infoBoxX, 23, infoBoxW, 16, "F");
-      doc.setDrawColor(200, 200, 200);
-      doc.rect(infoBoxX, 15, infoBoxW, 24, "S");
+      doc.rect(infoBoxX, 15, infoBoxW, 7, "F");
 
       doc.setFontSize(7.5);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(255, 255, 255);
-      doc.text("ESTIMATE", infoBoxX + 4, 20.5);
-      doc.text("ESTIMATE DATE", infoBoxX + 4, 28.5);
-      doc.text("TOTAL", infoBoxX + 4, 35);
-      doc.setTextColor(70, 70, 70);
-      doc.setFont("helvetica", "normal");
-      doc.text(`#${estimateId}`, infoBoxX + infoBoxW - 4, 20.5, { align: "right" });
-      doc.text(formattedDate, infoBoxX + infoBoxW - 4, 28.5, { align: "right" });
+      doc.text("ESTIMATE", infoBoxX + 4, 20);
+      doc.text(`#${estimateId}`, infoBoxX + infoBoxW - 4, 20, { align: "right" });
+
+      doc.setDrawColor(200, 200, 200);
+      doc.setFillColor(250, 250, 250);
+      doc.rect(infoBoxX, 22, infoBoxW, 7, "F");
+      doc.line(infoBoxX, 22, infoBoxX + infoBoxW, 22);
+      doc.setTextColor(60, 60, 60);
+      doc.setFontSize(7.5);
       doc.setFont("helvetica", "bold");
+      doc.text("ESTIMATE DATE", infoBoxX + 4, 27);
+      doc.setFont("helvetica", "normal");
+      doc.text(formattedDate, infoBoxX + infoBoxW - 4, 27, { align: "right" });
+
+      doc.setFillColor(250, 250, 250);
+      doc.rect(infoBoxX, 29, infoBoxW, 7, "F");
+      doc.line(infoBoxX, 29, infoBoxX + infoBoxW, 29);
+      doc.setFont("helvetica", "bold");
+      doc.text("TOTAL", infoBoxX + 4, 34);
       doc.setFontSize(9);
-      doc.text(`$${grandTotal.toFixed(2)}`, infoBoxX + infoBoxW - 4, 35.5, { align: "right" });
+      doc.text(`$${grandTotal.toFixed(2)}`, infoBoxX + infoBoxW - 4, 34, { align: "right" });
+
+      doc.setDrawColor(200, 200, 200);
+      doc.rect(infoBoxX, 15, infoBoxW, 21, "S");
 
       doc.setTextColor(30, 30, 30);
       doc.setFontSize(18);
