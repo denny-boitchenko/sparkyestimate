@@ -193,6 +193,8 @@ export default function EstimateDetail() {
       const doc = new jsPDF();
       const pw = doc.internal.pageSize.getWidth();
       const ph = doc.internal.pageSize.getHeight();
+      const margin = 20;
+      const contentW = pw - margin * 2;
 
       const settingsRes = await apiRequest("GET", "/api/settings");
       const settingsArr = await settingsRes.json();
@@ -205,57 +207,98 @@ export default function EstimateDetail() {
       const companyAddress = sm.companyAddress || "";
       const gstRate = parseFloat(sm.gstRate || "5") / 100;
       const gstLabel = sm.gstLabel || "GST 5%";
+      const estimateNotes = sm.estimateNotes || "";
+      const estimateTerms = sm.estimateTerms || "";
+      const grandTotal = data.summary?.grandTotal || 0;
+      const formattedDate = new Date().toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" });
 
-      doc.setFillColor(80, 80, 80);
-      doc.rect(pw - 70, 10, 60, 24, "F");
+      const infoBoxX = pw - margin - 72;
+      const infoBoxW = 72;
+      doc.setFillColor(70, 70, 70);
+      doc.rect(infoBoxX, 15, infoBoxW, 8, "F");
+      doc.setFillColor(245, 245, 245);
+      doc.rect(infoBoxX, 23, infoBoxW, 16, "F");
+      doc.setDrawColor(200, 200, 200);
+      doc.rect(infoBoxX, 15, infoBoxW, 24, "S");
+
+      doc.setFontSize(7.5);
+      doc.setFont("helvetica", "bold");
       doc.setTextColor(255, 255, 255);
-      doc.setFontSize(9);
-      doc.setFont("helvetica", "bold");
-      doc.text("ESTIMATE", pw - 65, 18);
-      doc.text("ESTIMATE DATE", pw - 65, 23);
-      doc.text("TOTAL", pw - 65, 28);
+      doc.text("ESTIMATE", infoBoxX + 4, 20.5);
+      doc.text("ESTIMATE DATE", infoBoxX + 4, 28.5);
+      doc.text("TOTAL", infoBoxX + 4, 35);
+      doc.setTextColor(70, 70, 70);
       doc.setFont("helvetica", "normal");
-      doc.text(`#${estimateId}`, pw - 15, 18, { align: "right" });
-      doc.text(new Date().toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }), pw - 15, 23, { align: "right" });
+      doc.text(`#${estimateId}`, infoBoxX + infoBoxW - 4, 20.5, { align: "right" });
+      doc.text(formattedDate, infoBoxX + infoBoxW - 4, 28.5, { align: "right" });
       doc.setFont("helvetica", "bold");
-      doc.text(`$${data.summary?.grandTotal?.toFixed(2) || "0.00"}`, pw - 15, 28, { align: "right" });
+      doc.setFontSize(9);
+      doc.text(`$${grandTotal.toFixed(2)}`, infoBoxX + infoBoxW - 4, 35.5, { align: "right" });
 
-      doc.setTextColor(0, 0, 0);
-      doc.setFontSize(16);
+      doc.setTextColor(30, 30, 30);
+      doc.setFontSize(18);
       doc.setFont("helvetica", "bold");
-      doc.text(companyName, 14, 20);
+      doc.text(companyName, margin, 24);
+
       doc.setFontSize(9);
       doc.setFont("helvetica", "normal");
-      let cy = 30;
-      if (companyAddress) { doc.text(companyAddress, 14, cy); cy += 5; }
-      if (companyPhone) { doc.text(companyPhone, 14, cy); cy += 5; }
-      if (companyEmail) { doc.text(companyEmail, 14, cy); cy += 5; }
+      doc.setTextColor(80, 80, 80);
+      let cy = 32;
+      if (companyAddress) { doc.text(companyAddress, margin, cy); cy += 5; }
+      if (companyPhone) { doc.text(companyPhone, margin, cy); cy += 5; }
+      if (companyEmail) { doc.text(companyEmail, margin, cy); cy += 5; }
 
-      const clientY = 50;
-      if (data.project) {
-        doc.setFillColor(240, 240, 240);
-        doc.rect(pw / 2, clientY - 5, pw / 2 - 14, 25, "F");
-        doc.setFontSize(8);
-        doc.setFont("helvetica", "bold");
-        doc.text("CONTACT US", pw / 2 + 4, clientY);
-        doc.setFont("helvetica", "normal");
-        doc.setFontSize(9);
-        if (data.project.clientName) doc.text(data.project.clientName, pw / 2 + 4, clientY + 6);
-        if (data.project.clientPhone) doc.text(data.project.clientPhone, pw / 2 + 4, clientY + 12);
-        if (data.project.clientEmail) doc.text(data.project.clientEmail, pw / 2 + 4, clientY + 18);
+      const sectionY = Math.max(cy + 8, 50);
 
-        doc.setFontSize(9);
-        doc.text(data.project.clientName || "", 14, clientY + 6);
-        if (data.project.address) doc.text(data.project.address, 14, clientY + 12);
+      doc.setDrawColor(220, 220, 220);
+      doc.line(margin, sectionY, pw - margin, sectionY);
+
+      const clientColW = contentW / 2;
+      let leftY = sectionY + 8;
+      doc.setTextColor(30, 30, 30);
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      if (data.project?.clientName) { doc.text(data.project.clientName, margin, leftY); leftY += 5; }
+      if (data.project?.address) {
+        const addrLines = doc.splitTextToSize(data.project.address, clientColW - 10);
+        doc.text(addrLines, margin, leftY);
+        leftY += addrLines.length * 5;
       }
 
-      let startY = 85;
-      doc.setFontSize(12);
+      const contactBoxX = margin + clientColW + 5;
+      const contactBoxW = clientColW - 5;
+      let contactY = sectionY + 4;
+      doc.setFillColor(248, 248, 248);
+      doc.rect(contactBoxX, contactY, contactBoxW, 28, "F");
+      contactY += 6;
+
+      doc.setFontSize(7.5);
       doc.setFont("helvetica", "bold");
-      doc.text("ESTIMATE", 14, startY);
-      startY += 5;
+      doc.setTextColor(100, 100, 100);
+      doc.text("CONTACT US", contactBoxX + 5, contactY);
+      contactY += 6;
+
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(50, 50, 50);
+      if (data.project?.clientName) { doc.text(data.project.clientName, contactBoxX + 5, contactY); contactY += 5; }
+      if (data.project?.clientPhone) { doc.text(data.project.clientPhone, contactBoxX + 5, contactY); contactY += 5; }
+      if (data.project?.clientEmail) { doc.text(data.project.clientEmail, contactBoxX + 5, contactY); contactY += 5; }
+
+      let startY = Math.max(leftY, sectionY + 38) + 6;
+
+      doc.setDrawColor(220, 220, 220);
+      doc.line(margin, startY - 4, pw - margin, startY - 4);
+
+      doc.setFontSize(13);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(30, 30, 30);
+      doc.text("ESTIMATE", margin, startY + 4);
+      startY += 10;
 
       const serviceRows: any[] = [];
+      let servicesSubtotal = 0;
+
       if (data.lineItems && data.lineItems.length > 0) {
         const roomGroups: Record<string, typeof data.lineItems> = {};
         for (const item of data.lineItems) {
@@ -265,85 +308,146 @@ export default function EstimateDetail() {
         }
         for (const [room, roomItems] of Object.entries(roomGroups)) {
           const roomTotal = (roomItems as any[]).reduce((s: number, i: any) => s + (i.total || 0), 0);
+          servicesSubtotal += roomTotal;
           const descs = (roomItems as any[]).map((i: any) => `${i.quantity}x ${i.deviceType}`).join(", ");
           serviceRows.push([
-            `Supply and install electrical for ${room}`,
-            `$${roomTotal.toFixed(2)}`
+            { content: `Supply and install electrical for ${room}`, styles: { fontStyle: "normal", fontSize: 9 } },
+            { content: `$${roomTotal.toFixed(2)}`, styles: { halign: "right" as const, fontSize: 9 } }
           ]);
           serviceRows.push([
-            { content: descs, styles: { fontSize: 7, textColor: [100, 100, 100], cellPadding: { left: 4, top: 1, bottom: 3, right: 2 } } },
-            ""
+            { content: descs, styles: { fontSize: 7, textColor: [120, 120, 120], cellPadding: { left: 6, top: 0, bottom: 4, right: 2 }, fontStyle: "italic" as const } },
+            { content: "", styles: {} }
           ]);
-        }
-      }
-      if (data.services && data.services.length > 0) {
-        for (const svc of data.services) {
-          serviceRows.push([svc.name, `$${svc.total?.toFixed(2) || "0.00"}`]);
         }
       }
 
+      if (data.services && data.services.length > 0) {
+        for (const svc of data.services) {
+          const svcTotal = svc.total || 0;
+          servicesSubtotal += svcTotal;
+          serviceRows.push([
+            { content: svc.name, styles: { fontStyle: "normal" as const, fontSize: 9 } },
+            { content: `$${svcTotal.toFixed(2)}`, styles: { halign: "right" as const, fontSize: 9 } }
+          ]);
+          if (svc.description) {
+            serviceRows.push([
+              { content: svc.description, styles: { fontSize: 7, textColor: [120, 120, 120], cellPadding: { left: 6, top: 0, bottom: 4, right: 2 }, fontStyle: "italic" as const } },
+              { content: "", styles: {} }
+            ]);
+          }
+        }
+      }
+
+      const amber = [230, 148, 20];
       if (serviceRows.length > 0) {
         (doc as any).autoTable({
           startY,
-          head: [
-            [
-              { content: "Services", styles: { fillColor: [255, 152, 0], textColor: [255, 255, 255], fontStyle: "bold" } },
-              { content: "Amount", styles: { fillColor: [255, 152, 0], textColor: [255, 255, 255], fontStyle: "bold", halign: "right" } }
-            ]
-          ],
+          margin: { left: margin, right: margin },
+          head: [[
+            { content: "Services", styles: { fillColor: amber, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 8.5 } },
+            { content: "Amount", styles: { fillColor: amber, textColor: [255, 255, 255], fontStyle: "bold", halign: "right", fontSize: 8.5 } }
+          ]],
           body: serviceRows,
           theme: "plain",
-          styles: { fontSize: 9, cellPadding: 3 },
-          columnStyles: { 0: { cellWidth: pw - 70 }, 1: { cellWidth: 42, halign: "right" } },
-          alternateRowStyles: {},
+          styles: { fontSize: 9, cellPadding: { left: 4, top: 3, bottom: 3, right: 4 }, overflow: "linebreak" },
+          columnStyles: { 0: { cellWidth: contentW - 45 }, 1: { cellWidth: 45, halign: "right" } },
+          didDrawCell: (hookData: any) => {
+            if (hookData.section === "body" && hookData.row.index % 2 === 0 && hookData.row.index > 0) {
+              doc.setDrawColor(230, 230, 230);
+              doc.line(hookData.cell.x, hookData.cell.y, hookData.cell.x + hookData.cell.width, hookData.cell.y);
+            }
+          },
         });
       }
 
       let finalY = (doc as any).lastAutoTable?.finalY || startY + 20;
-      finalY += 5;
 
-      const servicesSubtotal = data.summary?.grandTotal ? (data.summary.grandTotal / (1 + gstRate)) : 0;
-      const taxAmount = data.summary?.grandTotal ? data.summary.grandTotal - servicesSubtotal : 0;
+      if (servicesSubtotal === 0) servicesSubtotal = grandTotal / (1 + gstRate);
 
-      doc.setDrawColor(200, 200, 200);
-      doc.line(pw / 2, finalY, pw - 14, finalY);
-      finalY += 5;
-      const summaryX = pw / 2 + 5;
-      const valX = pw - 15;
-
-      doc.setFontSize(9);
+      finalY += 4;
+      doc.setFontSize(8.5);
       doc.setFont("helvetica", "normal");
-
-      const summaryLines = [
-        { label: "Services subtotal:", value: `$${servicesSubtotal.toFixed(2)}` },
-      ];
-
-      doc.setFontSize(10);
-      finalY += 3;
-      doc.setFont("helvetica", "bold");
-      doc.text("Subtotal", summaryX, finalY);
-      doc.text(`$${servicesSubtotal.toFixed(2)}`, valX, finalY, { align: "right" });
-
-      finalY += 6;
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(9);
-      doc.text(`Tax (${gstLabel})`, summaryX, finalY);
-      doc.text(`$${taxAmount.toFixed(2)}`, valX, finalY, { align: "right" });
+      doc.setTextColor(80, 80, 80);
+      doc.text(`Services subtotal: $${servicesSubtotal.toFixed(2)}`, pw - margin, finalY, { align: "right" });
 
       finalY += 8;
-      doc.setDrawColor(200, 200, 200);
-      doc.line(summaryX, finalY - 3, valX, finalY - 3);
-      doc.setFontSize(14);
-      doc.setFont("helvetica", "bold");
-      doc.text("Total", summaryX, finalY + 2);
-      doc.text(`$${data.summary?.grandTotal?.toFixed(2) || "0.00"}`, valX, finalY + 2, { align: "right" });
+      const summaryBoxX = pw / 2 + 10;
+      const summaryBoxW = pw - margin - summaryBoxX;
+      const valX = pw - margin;
+      const labelX = summaryBoxX;
 
+      doc.setDrawColor(220, 220, 220);
+      doc.setFillColor(250, 250, 250);
+      doc.rect(summaryBoxX, finalY - 4, summaryBoxW, 8, "F");
+      doc.line(summaryBoxX, finalY - 4, summaryBoxX + summaryBoxW, finalY - 4);
+      doc.line(summaryBoxX, finalY + 4, summaryBoxX + summaryBoxW, finalY + 4);
+
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(50, 50, 50);
+      doc.text("Subtotal", labelX + 4, finalY + 1);
+      doc.text(`$${servicesSubtotal.toFixed(2)}`, valX - 4, finalY + 1, { align: "right" });
+
+      finalY += 8;
+      const taxAmount = servicesSubtotal * gstRate;
+      doc.setFillColor(255, 255, 255);
+      doc.rect(summaryBoxX, finalY - 4, summaryBoxW, 8, "F");
+      doc.line(summaryBoxX, finalY + 4, summaryBoxX + summaryBoxW, finalY + 4);
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8.5);
+      doc.setTextColor(80, 80, 80);
+      doc.text(`Tax (${gstLabel})`, labelX + 4, finalY + 1);
+      doc.text(`$${taxAmount.toFixed(2)}`, valX - 4, finalY + 1, { align: "right" });
+
+      finalY += 12;
+      doc.setFontSize(13);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(30, 30, 30);
+      doc.text("Total", labelX + 4, finalY);
+      doc.text(`$${(servicesSubtotal + taxAmount).toFixed(2)}`, valX - 4, finalY, { align: "right" });
+
+      if (estimateNotes) {
+        finalY += 14;
+        if (finalY > ph - 50) { doc.addPage(); finalY = 25; }
+        doc.setFontSize(9);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(80, 80, 80);
+        doc.text("Notes", margin, finalY);
+        finalY += 5;
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(8);
+        doc.setTextColor(100, 100, 100);
+        const noteLines = doc.splitTextToSize(estimateNotes, contentW);
+        doc.text(noteLines, margin, finalY);
+        finalY += noteLines.length * 4;
+      }
+
+      if (estimateTerms) {
+        finalY += 6;
+        if (finalY > ph - 50) { doc.addPage(); finalY = 25; }
+        doc.setFontSize(9);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(80, 80, 80);
+        doc.text("Terms & Conditions", margin, finalY);
+        finalY += 5;
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(8);
+        doc.setTextColor(100, 100, 100);
+        const termLines = doc.splitTextToSize(estimateTerms, contentW);
+        doc.text(termLines, margin, finalY);
+      }
+
+      doc.setDrawColor(220, 220, 220);
+      doc.line(margin, ph - 18, pw - margin, ph - 18);
       doc.setFontSize(7);
       doc.setFont("helvetica", "normal");
-      doc.setTextColor(128, 128, 128);
-      doc.text(`${companyName}`, 14, ph - 12);
-      doc.text(`${companyEmail || companyPhone}`, pw / 2, ph - 12, { align: "center" });
-      doc.text(`1 of 1`, pw - 14, ph - 12, { align: "right" });
+      doc.setTextColor(150, 150, 150);
+      const footerParts = [companyName];
+      if (companyPhone) footerParts.push(companyPhone);
+      doc.text(footerParts.join(" | "), margin, ph - 12);
+      if (companyEmail) doc.text(companyEmail, pw / 2, ph - 12, { align: "center" });
+      doc.text("1 of 1", pw - margin, ph - 12, { align: "right" });
 
       doc.save(`Client-Estimate-${estimateId}.pdf`);
       toast({ title: "Client Estimate PDF exported" });
