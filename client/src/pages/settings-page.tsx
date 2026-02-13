@@ -1369,6 +1369,7 @@ function SupplierImportTab() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-12">Skip</TableHead>
+                  <TableHead>Type</TableHead>
                   <TableHead>Name</TableHead>
                   <TableHead>Category</TableHead>
                   <TableHead>Cost</TableHead>
@@ -1385,12 +1386,22 @@ function SupplierImportTab() {
                         data-testid={`checkbox-skip-item-${idx}`}
                       />
                     </TableCell>
+                    <TableCell data-testid={`text-preview-type-${idx}`}>
+                      <Badge variant={item.itemType === "wire" ? "secondary" : "default"} className="text-xs">
+                        {item.itemType === "wire" ? "Wire" : "Material"}
+                      </Badge>
+                    </TableCell>
                     <TableCell className="font-medium" data-testid={`text-preview-name-${idx}`}>{item.name}</TableCell>
                     <TableCell data-testid={`text-preview-category-${idx}`}>
-                      <Badge variant="outline" className="text-xs">{item.category || "materials"}</Badge>
+                      <Badge variant="outline" className="text-xs">
+                        {item.itemType === "wire" ? "wire" : (item.category || "materials")}
+                      </Badge>
                     </TableCell>
                     <TableCell data-testid={`text-preview-cost-${idx}`}>
-                      ${(item.materialCost || item.costPerFoot || 0).toFixed(2)}
+                      {item.itemType === "wire"
+                        ? `$${(item.costPerFoot || 0).toFixed(2)}/ft`
+                        : `$${(item.materialCost || 0).toFixed(2)}`
+                      }
                     </TableCell>
                     <TableCell data-testid={`text-preview-supplier-${idx}`}>{item.supplier || "-"}</TableCell>
                   </TableRow>

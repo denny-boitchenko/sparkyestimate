@@ -24,14 +24,18 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger
 } from "@/components/ui/dropdown-menu";
 import {
+  Accordion, AccordionContent, AccordionItem, AccordionTrigger
+} from "@/components/ui/accordion";
+import {
   ArrowLeft, Plus, Trash2, DollarSign, Clock, Cable,
   Package, Zap, ShieldCheck, Wrench, RefreshCw, Play,
-  Download, FileText, FileSpreadsheet, ScanLine, FileOutput
+  Download, FileText, FileSpreadsheet, ScanLine, FileOutput,
+  ChevronDown, Users, Layers
 } from "lucide-react";
 import { useLocation } from "wouter";
 import type {
   Estimate, EstimateItem, DeviceAssembly, PanelCircuit,
-  EstimateService, ServiceBundle
+  EstimateService, ServiceBundle, WireType, AiAnalysis
 } from "@shared/schema";
 
 export default function EstimateDetail() {
@@ -70,6 +74,14 @@ export default function EstimateDetail() {
 
   const { data: serviceBundles } = useQuery<ServiceBundle[]>({
     queryKey: ["/api/service-bundles"],
+  });
+
+  const { data: wireTypesData } = useQuery<WireType[]>({
+    queryKey: ["/api/wire-types"],
+  });
+
+  const { data: aiAnalyses } = useQuery<AiAnalysis[]>({
+    queryKey: ["/api/ai-analyses"],
   });
 
   const [complianceResults, setComplianceResults] = useState<{
@@ -1009,10 +1021,22 @@ export default function EstimateDetail() {
       </Card>
 
       <Tabs defaultValue="line-items">
-        <TabsList data-testid="tabs-estimate">
+        <TabsList data-testid="tabs-estimate" className="flex-wrap">
           <TabsTrigger value="line-items" data-testid="tab-line-items">
             <Package className="w-4 h-4 mr-1" />
             Line Items
+          </TabsTrigger>
+          <TabsTrigger value="materials" data-testid="tab-materials">
+            <Layers className="w-4 h-4 mr-1" />
+            Materials
+          </TabsTrigger>
+          <TabsTrigger value="wire" data-testid="tab-wire">
+            <Cable className="w-4 h-4 mr-1" />
+            Wire
+          </TabsTrigger>
+          <TabsTrigger value="labour" data-testid="tab-labour">
+            <Users className="w-4 h-4 mr-1" />
+            Labour
           </TabsTrigger>
           <TabsTrigger value="panel-schedule" data-testid="tab-panel-schedule">
             <Zap className="w-4 h-4 mr-1" />
@@ -1054,150 +1078,143 @@ export default function EstimateDetail() {
                     Add items from the device assembly library or create custom items
                   </p>
                 </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Device</TableHead>
-                        <TableHead>Room</TableHead>
-                        <TableHead className="text-right">Qty</TableHead>
-                        <TableHead className="text-right">Material $</TableHead>
-                        <TableHead className="text-right">Labor (hrs)</TableHead>
-                        <TableHead>Wire Type</TableHead>
-                        <TableHead className="text-right">Wire (ft)</TableHead>
-                        <TableHead>Box Type</TableHead>
-                        <TableHead>Cover Plate</TableHead>
-                        <TableHead className="text-right">Markup %</TableHead>
-                        <TableHead className="text-right">Total</TableHead>
-                        <TableHead></TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {items.map((item) => {
-                        const itemMaterial = item.quantity * item.materialCost;
-                        const itemMarkup = itemMaterial * (item.markupPct / 100);
-                        const itemLabor = item.quantity * item.laborHours * estimate.laborRate;
-                        const itemTotal = itemMaterial + itemMarkup + itemLabor;
-                        return (
-                          <TableRow key={item.id} data-testid={`row-item-${item.id}`}>
-                            <TableCell>
+              ) : (() => {
+                const roomGroups: Record<string, EstimateItem[]> = {};
+                for (const item of items) {
+                  const room = item.room || "Unassigned";
+                  if (!roomGroups[room]) roomGroups[room] = [];
+                  roomGroups[room].push(item);
+                }
+                const roomNames = Object.keys(roomGroups).sort();
+                return (
+                  <Accordion type="multiple" defaultValue={roomNames} className="w-full">
+                    {roomNames.map((roomName) => {
+                      const roomItems = roomGroups[roomName];
+                      const deviceCount = roomItems.reduce((s, i) => s + i.quantity, 0);
+                      return (
+                        <AccordionItem key={roomName} value={roomName} data-testid={`accordion-room-${roomName}`}>
+                          <AccordionTrigger className="hover:no-underline" data-testid={`trigger-room-${roomName}`}>
+                            <div className="flex items-center gap-3 flex-1 mr-2">
                               <Input
-                                className="min-w-[140px] text-sm font-medium"
-                                defaultValue={item.deviceType}
-                                key={`dt-${item.id}-${item.deviceType}`}
-                                onBlur={(e) => { if (e.target.value !== item.deviceType) updateItemMutation.mutate({ id: item.id, deviceType: e.target.value }); }}
-                                data-testid={`input-device-type-${item.id}`}
+                                className="text-sm font-semibold uppercase border-none shadow-none p-0 h-auto focus-visible:ring-0 bg-transparent max-w-[200px]"
+                                defaultValue={roomName === "Unassigned" ? "" : roomName}
+                                key={`rn-${roomName}`}
+                                placeholder="Room name"
+                                onClick={(e) => e.stopPropagation()}
+                                onBlur={(e) => {
+                                  const newRoom = e.target.value || null;
+                                  const oldRoom = roomName === "Unassigned" ? null : roomName;
+                                  if (newRoom !== oldRoom) {
+                                    for (const item of roomItems) {
+                                      updateItemMutation.mutate({ id: item.id, room: newRoom });
+                                    }
+                                  }
+                                }}
+                                data-testid={`input-room-name-${roomName}`}
                               />
-                            </TableCell>
-                            <TableCell>
-                              <Input
-                                className="min-w-[90px] text-sm"
-                                defaultValue={item.room || ""}
-                                key={`rm-${item.id}-${item.room}`}
-                                onBlur={(e) => { if (e.target.value !== (item.room || "")) updateItemMutation.mutate({ id: item.id, room: e.target.value || null }); }}
-                                data-testid={`input-room-${item.id}`}
-                              />
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <Input
-                                type="number"
-                                className="w-16 text-right"
-                                defaultValue={item.quantity}
-                                key={`qty-${item.id}-${item.quantity}`}
-                                onBlur={(e) => { const v = parseInt(e.target.value) || 1; if (v !== item.quantity) updateItemMutation.mutate({ id: item.id, quantity: v }); }}
-                                min={1}
-                                data-testid={`input-qty-${item.id}`}
-                              />
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <Input
-                                type="number"
-                                step="0.01"
-                                className="w-20 text-right"
-                                defaultValue={item.materialCost}
-                                key={`mc-${item.id}-${item.materialCost}`}
-                                onBlur={(e) => { const v = parseFloat(e.target.value) || 0; if (v !== item.materialCost) updateItemMutation.mutate({ id: item.id, materialCost: v }); }}
-                                data-testid={`input-material-${item.id}`}
-                              />
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <Input
-                                type="number"
-                                step="0.01"
-                                className="w-20 text-right"
-                                defaultValue={item.laborHours}
-                                key={`lh-${item.id}-${item.laborHours}`}
-                                onBlur={(e) => { const v = parseFloat(e.target.value) || 0; if (v !== item.laborHours) updateItemMutation.mutate({ id: item.id, laborHours: v }); }}
-                                data-testid={`input-labor-${item.id}`}
-                              />
-                            </TableCell>
-                            <TableCell>
-                              <Input
-                                className="min-w-[90px] text-xs"
-                                defaultValue={item.wireType || ""}
-                                key={`wt-${item.id}-${item.wireType}`}
-                                onBlur={(e) => { if (e.target.value !== (item.wireType || "")) updateItemMutation.mutate({ id: item.id, wireType: e.target.value || null }); }}
-                                data-testid={`input-wire-type-${item.id}`}
-                              />
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <Input
-                                type="number"
-                                className="w-16 text-right"
-                                defaultValue={item.wireFootage}
-                                key={`wf-${item.id}-${item.wireFootage}`}
-                                onBlur={(e) => { const v = parseFloat(e.target.value) || 0; if (v !== item.wireFootage) updateItemMutation.mutate({ id: item.id, wireFootage: v }); }}
-                                data-testid={`input-wire-footage-${item.id}`}
-                              />
-                            </TableCell>
-                            <TableCell>
-                              <Input
-                                className="min-w-[80px] text-xs"
-                                defaultValue={item.boxType || ""}
-                                key={`bt-${item.id}-${item.boxType}`}
-                                onBlur={(e) => { if (e.target.value !== (item.boxType || "")) updateItemMutation.mutate({ id: item.id, boxType: e.target.value || null }); }}
-                                data-testid={`input-box-type-${item.id}`}
-                              />
-                            </TableCell>
-                            <TableCell>
-                              <Input
-                                className="min-w-[80px] text-xs"
-                                defaultValue={item.coverPlate || ""}
-                                key={`cp-${item.id}-${item.coverPlate}`}
-                                onBlur={(e) => { if (e.target.value !== (item.coverPlate || "")) updateItemMutation.mutate({ id: item.id, coverPlate: e.target.value || null }); }}
-                                data-testid={`input-cover-plate-${item.id}`}
-                              />
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <Input
-                                type="number"
-                                step="0.1"
-                                className="w-16 text-right"
-                                defaultValue={item.markupPct}
-                                key={`mp-${item.id}-${item.markupPct}`}
-                                onBlur={(e) => { const v = parseFloat(e.target.value) || 0; if (v !== item.markupPct) updateItemMutation.mutate({ id: item.id, markupPct: v }); }}
-                                data-testid={`input-markup-${item.id}`}
-                              />
-                            </TableCell>
-                            <TableCell className="text-right text-sm font-medium">${itemTotal.toFixed(2)}</TableCell>
-                            <TableCell>
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                onClick={() => deleteItemMutation.mutate(item.id)}
-                                data-testid={`button-delete-item-${item.id}`}
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
+                              <Badge variant="secondary" className="text-xs">{deviceCount} devices</Badge>
+                            </div>
+                          </AccordionTrigger>
+                          <AccordionContent>
+                            <div className="overflow-x-auto">
+                              <Table>
+                                <TableHeader>
+                                  <TableRow>
+                                    <TableHead>Device</TableHead>
+                                    <TableHead className="text-right">Qty</TableHead>
+                                    <TableHead className="text-right">Material $</TableHead>
+                                    <TableHead className="text-right">Labor (hrs)</TableHead>
+                                    <TableHead>Wire Type</TableHead>
+                                    <TableHead className="text-right">Wire (ft)</TableHead>
+                                    <TableHead></TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {roomItems.map((item) => (
+                                    <TableRow key={item.id} data-testid={`row-item-${item.id}`}>
+                                      <TableCell>
+                                        <Input
+                                          className="min-w-[140px] text-sm font-medium"
+                                          defaultValue={item.deviceType}
+                                          key={`dt-${item.id}-${item.deviceType}`}
+                                          onBlur={(e) => { if (e.target.value !== item.deviceType) updateItemMutation.mutate({ id: item.id, deviceType: e.target.value }); }}
+                                          data-testid={`input-device-type-${item.id}`}
+                                        />
+                                      </TableCell>
+                                      <TableCell className="text-right">
+                                        <Input
+                                          type="number"
+                                          className="w-16 text-right"
+                                          defaultValue={item.quantity}
+                                          key={`qty-${item.id}-${item.quantity}`}
+                                          onBlur={(e) => { const v = parseInt(e.target.value) || 1; if (v !== item.quantity) updateItemMutation.mutate({ id: item.id, quantity: v }); }}
+                                          min={1}
+                                          data-testid={`input-qty-${item.id}`}
+                                        />
+                                      </TableCell>
+                                      <TableCell className="text-right">
+                                        <Input
+                                          type="number"
+                                          step="0.01"
+                                          className="w-20 text-right"
+                                          defaultValue={item.materialCost}
+                                          key={`mc-${item.id}-${item.materialCost}`}
+                                          onBlur={(e) => { const v = parseFloat(e.target.value) || 0; if (v !== item.materialCost) updateItemMutation.mutate({ id: item.id, materialCost: v }); }}
+                                          data-testid={`input-material-${item.id}`}
+                                        />
+                                      </TableCell>
+                                      <TableCell className="text-right">
+                                        <Input
+                                          type="number"
+                                          step="0.01"
+                                          className="w-20 text-right"
+                                          defaultValue={item.laborHours}
+                                          key={`lh-${item.id}-${item.laborHours}`}
+                                          onBlur={(e) => { const v = parseFloat(e.target.value) || 0; if (v !== item.laborHours) updateItemMutation.mutate({ id: item.id, laborHours: v }); }}
+                                          data-testid={`input-labor-${item.id}`}
+                                        />
+                                      </TableCell>
+                                      <TableCell>
+                                        <Input
+                                          className="min-w-[90px] text-xs"
+                                          defaultValue={item.wireType || ""}
+                                          key={`wt-${item.id}-${item.wireType}`}
+                                          onBlur={(e) => { if (e.target.value !== (item.wireType || "")) updateItemMutation.mutate({ id: item.id, wireType: e.target.value || null }); }}
+                                          data-testid={`input-wire-type-${item.id}`}
+                                        />
+                                      </TableCell>
+                                      <TableCell className="text-right">
+                                        <Input
+                                          type="number"
+                                          className="w-16 text-right"
+                                          defaultValue={item.wireFootage}
+                                          key={`wf-${item.id}-${item.wireFootage}`}
+                                          onBlur={(e) => { const v = parseFloat(e.target.value) || 0; if (v !== item.wireFootage) updateItemMutation.mutate({ id: item.id, wireFootage: v }); }}
+                                          data-testid={`input-wire-footage-${item.id}`}
+                                        />
+                                      </TableCell>
+                                      <TableCell>
+                                        <Button
+                                          size="icon"
+                                          variant="ghost"
+                                          onClick={() => deleteItemMutation.mutate(item.id)}
+                                          data-testid={`button-delete-item-${item.id}`}
+                                        >
+                                          <Trash2 className="w-4 h-4" />
+                                        </Button>
+                                      </TableCell>
+                                    </TableRow>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            </div>
+                          </AccordionContent>
+                        </AccordionItem>
+                      );
+                    })}
+                  </Accordion>
+                );
+              })()}
             </CardContent>
           </Card>
 
@@ -1256,6 +1273,224 @@ export default function EstimateDetail() {
                   <span className="text-chart-3">${grandTotal.toFixed(2)}</span>
                 </div>
               </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="materials">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base font-semibold">Materials Summary</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {!items || items.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-center">
+                  <div className="flex items-center justify-center w-12 h-12 rounded-md bg-muted mb-3">
+                    <Layers className="w-6 h-6 text-muted-foreground" />
+                  </div>
+                  <p className="text-sm font-medium">No materials</p>
+                  <p className="text-xs text-muted-foreground mt-1">Add line items to see materials summary</p>
+                </div>
+              ) : (() => {
+                const assemblyMap = new Map<string, DeviceAssembly>();
+                for (const a of (assemblies || [])) assemblyMap.set(a.name, a);
+                const materialGroups: Record<string, { qty: number; boxType: string; coverPlate: string; unitCost: number }> = {};
+                for (const item of items) {
+                  const key = item.deviceType;
+                  const assembly = assemblyMap.get(key);
+                  if (materialGroups[key]) {
+                    materialGroups[key].qty += item.quantity;
+                  } else {
+                    materialGroups[key] = {
+                      qty: item.quantity,
+                      boxType: assembly?.boxType || item.boxType || "-",
+                      coverPlate: assembly?.coverPlate || item.coverPlate || "-",
+                      unitCost: item.materialCost,
+                    };
+                  }
+                }
+                const materialRows = Object.entries(materialGroups).sort(([a], [b]) => a.localeCompare(b));
+                const materialGrandTotal = materialRows.reduce((s, [, d]) => s + d.qty * d.unitCost, 0);
+                return (
+                  <>
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Device</TableHead>
+                            <TableHead className="text-right">Qty Total</TableHead>
+                            <TableHead>Box Type</TableHead>
+                            <TableHead>Cover Plate</TableHead>
+                            <TableHead className="text-right">Unit Cost</TableHead>
+                            <TableHead className="text-right">Total Cost</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {materialRows.map(([device, d]) => (
+                            <TableRow key={device} data-testid={`row-material-${device}`}>
+                              <TableCell className="text-sm font-medium">{device}</TableCell>
+                              <TableCell className="text-right text-sm">{d.qty}</TableCell>
+                              <TableCell className="text-sm text-muted-foreground">{d.boxType}</TableCell>
+                              <TableCell className="text-sm text-muted-foreground">{d.coverPlate}</TableCell>
+                              <TableCell className="text-right text-sm">${d.unitCost.toFixed(2)}</TableCell>
+                              <TableCell className="text-right text-sm font-medium">${(d.qty * d.unitCost).toFixed(2)}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                    <div className="border-t mt-4 pt-4 flex justify-end gap-4">
+                      <span className="text-sm font-medium">Total Material Cost:</span>
+                      <span className="text-sm font-bold" data-testid="text-materials-grand-total">${materialGrandTotal.toFixed(2)}</span>
+                    </div>
+                  </>
+                );
+              })()}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="wire">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base font-semibold">Wire Usage Summary</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {!items || items.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-center">
+                  <div className="flex items-center justify-center w-12 h-12 rounded-md bg-muted mb-3">
+                    <Cable className="w-6 h-6 text-muted-foreground" />
+                  </div>
+                  <p className="text-sm font-medium">No wire data</p>
+                  <p className="text-xs text-muted-foreground mt-1">Add line items to see wire usage</p>
+                </div>
+              ) : (() => {
+                const wireMap = new Map<string, number>();
+                for (const item of items) {
+                  const wt = item.wireType || "14/2 NM-B";
+                  const totalFt = item.quantity * item.wireFootage;
+                  wireMap.set(wt, (wireMap.get(wt) || 0) + totalFt);
+                }
+                const wireCostMap = new Map<string, number>();
+                for (const wt of (wireTypesData || [])) {
+                  wireCostMap.set(wt.name, wt.costPerFoot);
+                }
+                const wireRows = Array.from(wireMap.entries()).sort(([a], [b]) => a.localeCompare(b));
+                const wireGrandTotal = wireRows.reduce((s, [wt, ft]) => s + ft * (wireCostMap.get(wt) || 0), 0);
+                return (
+                  <>
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Wire Type</TableHead>
+                            <TableHead className="text-right">Total Footage</TableHead>
+                            <TableHead className="text-right">Cost/ft</TableHead>
+                            <TableHead className="text-right">Total Cost</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {wireRows.map(([wireType, totalFt]) => {
+                            const costPerFt = wireCostMap.get(wireType) || 0;
+                            return (
+                              <TableRow key={wireType} data-testid={`row-wire-${wireType}`}>
+                                <TableCell className="text-sm font-medium">{wireType}</TableCell>
+                                <TableCell className="text-right text-sm">{totalFt.toFixed(0)} ft</TableCell>
+                                <TableCell className="text-right text-sm">${costPerFt.toFixed(2)}</TableCell>
+                                <TableCell className="text-right text-sm font-medium">${(totalFt * costPerFt).toFixed(2)}</TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                    <div className="border-t mt-4 pt-4 flex justify-end gap-4">
+                      <span className="text-sm font-medium">Total Wire Cost:</span>
+                      <span className="text-sm font-bold" data-testid="text-wire-grand-total">${wireGrandTotal.toFixed(2)}</span>
+                    </div>
+                  </>
+                );
+              })()}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="labour">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base font-semibold">Labour Breakdown</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {!items || items.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-center">
+                  <div className="flex items-center justify-center w-12 h-12 rounded-md bg-muted mb-3">
+                    <Users className="w-6 h-6 text-muted-foreground" />
+                  </div>
+                  <p className="text-sm font-medium">No labour data</p>
+                  <p className="text-xs text-muted-foreground mt-1">Add line items to see labour breakdown</p>
+                </div>
+              ) : (() => {
+                const labourRoomGroups: Record<string, EstimateItem[]> = {};
+                for (const item of items) {
+                  const room = item.room || "Unassigned";
+                  if (!labourRoomGroups[room]) labourRoomGroups[room] = [];
+                  labourRoomGroups[room].push(item);
+                }
+                const labourRoomNames = Object.keys(labourRoomGroups).sort();
+                let grandTotalHours = 0;
+                let grandTotalLabourCost = 0;
+                return (
+                  <>
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Room</TableHead>
+                            <TableHead>Device</TableHead>
+                            <TableHead className="text-right">Qty</TableHead>
+                            <TableHead className="text-right">Hours/Unit</TableHead>
+                            <TableHead className="text-right">Total Hours</TableHead>
+                            <TableHead className="text-right">Rate ($/hr)</TableHead>
+                            <TableHead className="text-right">Total Cost</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {labourRoomNames.map((roomName) => {
+                            const roomItems = labourRoomGroups[roomName];
+                            return roomItems.map((item, idx) => {
+                              const totalHrs = item.quantity * item.laborHours;
+                              const totalCost = totalHrs * estimate.laborRate;
+                              grandTotalHours += totalHrs;
+                              grandTotalLabourCost += totalCost;
+                              return (
+                                <TableRow key={item.id} data-testid={`row-labour-${item.id}`}>
+                                  <TableCell className="text-sm font-medium">{idx === 0 ? roomName : ""}</TableCell>
+                                  <TableCell className="text-sm">{item.deviceType}</TableCell>
+                                  <TableCell className="text-right text-sm">{item.quantity}</TableCell>
+                                  <TableCell className="text-right text-sm">{item.laborHours.toFixed(2)}</TableCell>
+                                  <TableCell className="text-right text-sm">{totalHrs.toFixed(2)}</TableCell>
+                                  <TableCell className="text-right text-sm">${estimate.laborRate.toFixed(2)}</TableCell>
+                                  <TableCell className="text-right text-sm font-medium">${totalCost.toFixed(2)}</TableCell>
+                                </TableRow>
+                              );
+                            });
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                    <div className="border-t mt-4 pt-4 space-y-2 max-w-sm ml-auto">
+                      <div className="flex justify-between gap-4 text-sm">
+                        <span className="text-muted-foreground">Total Hours</span>
+                        <span data-testid="text-labour-total-hours">{grandTotalHours.toFixed(2)} hrs</span>
+                      </div>
+                      <div className="flex justify-between gap-4 text-sm font-bold">
+                        <span>Total Labour Cost</span>
+                        <span data-testid="text-labour-total-cost">${grandTotalLabourCost.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
             </CardContent>
           </Card>
         </TabsContent>
@@ -1577,23 +1812,83 @@ export default function EstimateDetail() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
               <CardTitle className="text-base font-semibold">AI Drawing Analysis</CardTitle>
+              <Link href="/ai-analysis">
+                <Button size="sm" data-testid="button-go-ai-analysis">
+                  <ScanLine className="w-4 h-4 mr-1" />
+                  Open AI Analysis
+                </Button>
+              </Link>
             </CardHeader>
             <CardContent>
-              <div className="flex flex-col items-center justify-center py-12 text-center">
-                <div className="flex items-center justify-center w-12 h-12 rounded-md bg-primary/10 dark:bg-primary/20 mb-3">
-                  <ScanLine className="w-6 h-6 text-primary" />
-                </div>
-                <p className="text-sm font-medium">Analyze drawings with AI</p>
-                <p className="text-xs text-muted-foreground mt-1 mb-4">
-                  Upload electrical drawings or floor plans to auto-detect devices and generate line items
-                </p>
-                <Link href="/ai-analysis">
-                  <Button data-testid="button-go-ai-analysis">
-                    <ScanLine className="w-4 h-4 mr-2" />
-                    Open AI Analysis
-                  </Button>
-                </Link>
-              </div>
+              {(() => {
+                const projectAnalyses = (aiAnalyses || []).filter(a => a.projectId === estimate.projectId);
+                if (projectAnalyses.length === 0) {
+                  return (
+                    <div className="flex flex-col items-center justify-center py-12 text-center">
+                      <div className="flex items-center justify-center w-12 h-12 rounded-md bg-primary/10 dark:bg-primary/20 mb-3">
+                        <ScanLine className="w-6 h-6 text-primary" />
+                      </div>
+                      <p className="text-sm font-medium">No analyses yet</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Upload electrical drawings or floor plans to auto-detect devices and generate line items
+                      </p>
+                    </div>
+                  );
+                }
+                return (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>File Name</TableHead>
+                          <TableHead>Mode</TableHead>
+                          <TableHead>Date</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead className="text-right">Rooms</TableHead>
+                          <TableHead className="text-right">Devices</TableHead>
+                          <TableHead></TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {projectAnalyses.map((analysis) => {
+                          const results = analysis.results as any;
+                          const roomCount = results?.rooms?.length || results?.roomCount || 0;
+                          const deviceCount = results?.devices?.length || results?.deviceCount || results?.rooms?.reduce((s: number, r: any) => s + (r.devices?.length || 0), 0) || 0;
+                          return (
+                            <TableRow key={analysis.id} data-testid={`row-analysis-${analysis.id}`}>
+                              <TableCell className="text-sm font-medium">{analysis.fileName}</TableCell>
+                              <TableCell>
+                                <Badge variant="secondary" className="text-xs">{analysis.analysisMode}</Badge>
+                              </TableCell>
+                              <TableCell className="text-sm text-muted-foreground">
+                                {new Date(analysis.createdAt).toLocaleDateString("en-CA")}
+                              </TableCell>
+                              <TableCell>
+                                <Badge
+                                  variant={analysis.status === "completed" ? "default" : "secondary"}
+                                  className="text-xs"
+                                  data-testid={`badge-analysis-status-${analysis.id}`}
+                                >
+                                  {analysis.status}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="text-right text-sm">{roomCount}</TableCell>
+                              <TableCell className="text-right text-sm">{deviceCount}</TableCell>
+                              <TableCell>
+                                <Link href="/ai-analysis">
+                                  <Button size="sm" variant="outline" data-testid={`button-view-analysis-${analysis.id}`}>
+                                    View
+                                  </Button>
+                                </Link>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                );
+              })()}
             </CardContent>
           </Card>
         </TabsContent>

@@ -584,15 +584,19 @@ STANDARDIZED ROOM TYPES (use these exactly):
 - closet_walkin
 - closet_standard
 - entry_foyer
-- utility_room (mechanical/furnace/water heater)
+- utility_room (water heater, general utility)
+- mechanical_room (furnace room, MECH, panel board location)
 - office_den
 - mudroom
 - pantry
 - stairway
-- open_to_below (double-height space, deck, patio)
+- deck (outdoor deck, covered or uncovered)
+- patio (outdoor patio, separate from deck)
+- open_to_below (double-height space only)
+- sunroom
 
 IMPORTANT INSTRUCTIONS:
-- Look for room labels/text on the drawing. Common abbreviations: WIC = walk-in closet, MECH = utility room, ENS = ensuite bathroom, PWD = powder room, BR = bedroom
+- Look for room labels/text on the drawing. Common abbreviations: WIC = walk-in closet, MECH = mechanical_room, ENS = ensuite bathroom, PWD = powder room, BR = bedroom
 - Look for a ROOM SCHEDULE TABLE if one exists on this page — it lists room names, areas, and floor levels
 - Count ALL rooms including hallways, closets, and stairways
 - If a room label is visible on the drawing, use it for room_name
@@ -604,7 +608,8 @@ IMPORTANT INSTRUCTIONS:
 - For FAMILY ROOM/REC ROOM, use "family_room" type
 - BATH/ENSUITE/BATHROOM = "bathroom", POWDER = "powder_room"
 - SUITE in basement context = "basement_finished"
-- DECK/PATIO = "open_to_below"
+- DECK = "deck", PATIO = "patio" (separate outdoor spaces, each needs own devices)
+- MECH/FURNACE ROOM = "mechanical_room" (panel board location)
 
 RESPOND WITH VALID JSON ONLY (no markdown, no explanation):
 {
@@ -823,13 +828,7 @@ COUNT CAREFULLY. Double-check your counts. Mark confidence lower if symbols are 
               notes: d.note,
             }));
 
-            if ((roomType === "utility_room" || roomType === "garage") && !panelBoardAdded) {
-              deviceList.push({
-                type: "Panel Board",
-                count: 1,
-                confidence: 0.95,
-                notes: "CEC 26-400 — Main panel board (200A typical residential)",
-              });
+            if (roomType === "mechanical_room" && !panelBoardAdded) {
               panelBoardAdded = true;
             }
 
@@ -845,9 +844,10 @@ COUNT CAREFULLY. Double-check your counts. Mark confidence lower if symbols are 
         }
 
         if (!panelBoardAdded && allRooms.length > 0) {
-          const mechRoom = allRooms.find((r: any) => r.type === "utility_room");
+          const mechRoom = allRooms.find((r: any) => r.type === "mechanical_room");
           const garageRoom = allRooms.find((r: any) => r.type === "garage");
-          const targetRoom = mechRoom || garageRoom || allRooms[0];
+          const utilRoom = allRooms.find((r: any) => r.type === "utility_room");
+          const targetRoom = mechRoom || garageRoom || utilRoom || allRooms[0];
           targetRoom.devices.push({
             type: "Panel Board",
             count: 1,
@@ -1000,12 +1000,52 @@ COUNT CAREFULLY. Double-check your counts. Mark confidence lower if symbols are 
 
       const assemblies = await storage.getDeviceAssemblies();
 
+      const panelRoom = results.rooms.find((r: any) =>
+        r.type === "mechanical_room" || r.type === "garage" || r.type === "utility_room"
+      );
+      const panelRoomName = panelRoom?.name || "MECH";
+
+      const WIRE_DISTANCE_MAP: Record<string, number> = {
+        mechanical_room: 10,
+        garage: 15,
+        utility_room: 15,
+        laundry_room: 20,
+        kitchen: 30,
+        mudroom: 20,
+        entry_foyer: 25,
+        hallway: 25,
+        powder_room: 25,
+        bathroom: 35,
+        living_room: 35,
+        family_room: 35,
+        dining_room: 30,
+        office_den: 30,
+        pantry: 25,
+        closet_walkin: 30,
+        closet_standard: 30,
+        primary_bedroom: 45,
+        bedroom: 40,
+        basement_finished: 40,
+        basement_unfinished: 30,
+        stairway: 25,
+        deck: 35,
+        patio: 35,
+        sunroom: 35,
+      };
+
       for (const room of results.rooms) {
+        const roomType = room.type || "bedroom";
+        const baseWireDistance = WIRE_DISTANCE_MAP[roomType] || 30;
+
         for (const device of (room.devices || [])) {
           const matchedAssembly = assemblies.find(a =>
             a.name.toLowerCase().includes(device.type?.toLowerCase().split("(")[0].trim() || "") ||
             device.type?.toLowerCase().includes(a.name.toLowerCase().split("(")[0].trim())
           );
+
+          const estimatedWireFootage = matchedAssembly?.wireFootage
+            ? Math.max(matchedAssembly.wireFootage, baseWireDistance)
+            : baseWireDistance;
 
           await storage.createEstimateItem({
             estimateId: estimate.id,
@@ -1016,7 +1056,7 @@ COUNT CAREFULLY. Double-check your counts. Mark confidence lower if symbols are 
             materialCost: matchedAssembly?.materialCost || 0,
             laborHours: matchedAssembly?.laborHours || 0.25,
             wireType: device.wireType || matchedAssembly?.wireType || "14/2 NM-B",
-            wireFootage: matchedAssembly?.wireFootage || 15,
+            wireFootage: estimatedWireFootage,
             markupPct: 0,
             boxType: matchedAssembly?.boxType || null,
             coverPlate: matchedAssembly?.coverPlate || null,
@@ -1065,22 +1105,21 @@ COUNT CAREFULLY. Double-check your counts. Mark confidence lower if symbols are 
         fileContent = file.buffer.toString("base64");
       }
 
-      const prompt = importType === "wire" ?
-        `Parse this supplier price list/catalog for electrical wire products. For each wire product found, extract:
-- name: the wire type name (e.g., "14/2 NM-B", "12/3 NM-B")
-- costPerFoot: price per foot (calculate from per-roll or per-meter if needed)
+      const prompt = `Analyze this supplier price list/catalog document using vision. Categorize EVERY product into either "material" or "wire" type.
+
+WIRE items include: NM-B cables, TECK cables, armoured cables, Romex, any wire/cable sold by length (per foot, per metre, per roll/spool).
+MATERIAL items include: receptacles, switches, light fixtures, boxes, cover plates, connectors, breakers, panels, and all other electrical devices/parts.
+
+For WIRE items, extract:
+- itemType: "wire"
+- name: wire type name (e.g., "14/2 NM-B", "12/3 NM-B", "10/2 NM-B")
+- costPerFoot: price per foot (convert from per-roll, per-metre, or per-spool pricing)
 - supplier: "${supplierName}"
 - partNumber: supplier part number if available
-- description: any additional details
+- description: any additional details (roll size, colour, etc.)
 
-Return ONLY valid JSON:
-{
-  "items": [
-    { "name": "14/2 NM-B", "costPerFoot": 0.45, "supplier": "${supplierName}", "partNumber": "ABC123", "description": "75m roll" }
-  ],
-  "notes": "any observations"
-}` :
-        `Parse this supplier price list/catalog for electrical materials/devices. For each product found, extract:
+For MATERIAL items, extract:
+- itemType: "material"
 - name: device/product name (e.g., "Duplex Receptacle (15A)")
 - materialCost: unit price
 - supplier: "${supplierName}"
@@ -1091,9 +1130,10 @@ Return ONLY valid JSON:
 Return ONLY valid JSON:
 {
   "items": [
-    { "name": "Duplex Receptacle (15A)", "materialCost": 8.50, "supplier": "${supplierName}", "partNumber": "XYZ789", "category": "receptacles", "description": "15A TR duplex receptacle, white" }
+    { "itemType": "material", "name": "Duplex Receptacle (15A)", "materialCost": 8.50, "supplier": "${supplierName}", "partNumber": "XYZ789", "category": "receptacles", "description": "15A TR duplex receptacle, white" },
+    { "itemType": "wire", "name": "14/2 NM-B", "costPerFoot": 0.45, "supplier": "${supplierName}", "partNumber": "ABC123", "description": "75m roll" }
   ],
-  "notes": "any observations"
+  "notes": "any observations about the document"
 }`;
 
       let parts: any[];
@@ -1155,7 +1195,9 @@ Return ONLY valid JSON:
       for (const item of items) {
         if (item.skip) continue;
 
-        if (importType === "wire") {
+        const isWire = item.itemType === "wire" || importType === "wire";
+
+        if (isWire) {
           try {
             await storage.createWireType({
               name: item.name,

@@ -326,6 +326,22 @@ export const CEC_ROOM_REQUIREMENTS: Record<string, CECRoomRequirement> = {
     cec_rules: ["26-720(e)(iii)", "26-704(1)"],
     notes: "At least 1 duplex receptacle. GFCI if sink present.",
   },
+  mechanical_room: {
+    room_type: "mechanical_room",
+    min_receptacles: 1,
+    receptacle_type: "duplex",
+    uses_wall_spacing_rule: false,
+    wall_spacing_m: 0,
+    min_lighting_outlets: 1,
+    min_switches: 1,
+    needs_gfci: false,
+    needs_afci: true,
+    needs_exhaust_fan: false,
+    needs_smoke_detector: false,
+    needs_co_detector: false,
+    cec_rules: ["26-720(e)(iii)", "26-704(1)", "26-400"],
+    notes: "Panel board location. 1 receptacle + 1 light minimum. Clear working space per CEC 26-400.",
+  },
   office_den: {
     room_type: "office_den",
     min_receptacles: 3,
@@ -421,6 +437,22 @@ export const CEC_ROOM_REQUIREMENTS: Record<string, CECRoomRequirement> = {
     needs_co_detector: false,
     cec_rules: ["26-724(a)", "26-710(f)"],
     notes: "1 weatherproof GFCI receptacle required per CEC 26-724(a). Exterior lighting at exit door.",
+  },
+  patio: {
+    room_type: "patio",
+    min_receptacles: 1,
+    receptacle_type: "gfci_weather",
+    uses_wall_spacing_rule: false,
+    wall_spacing_m: 0,
+    min_lighting_outlets: 1,
+    min_switches: 1,
+    needs_gfci: true,
+    needs_afci: false,
+    needs_exhaust_fan: false,
+    needs_smoke_detector: false,
+    needs_co_detector: false,
+    cec_rules: ["26-724(a)", "26-710(f)"],
+    notes: "1 weatherproof GFCI receptacle required per CEC 26-724(a). Exterior lighting at patio door.",
   },
   sunroom: {
     room_type: "sunroom",
@@ -538,8 +570,11 @@ export function generateDevicesForRoom(room: DetectedRoom): Array<{ type: string
   } else if (room.room_type === "laundry_room") {
     devices.push({ type: "duplex_receptacle", count: 2, note: "CEC 26-720(e), 26-654(b) — Washer (dedicated) + 1 additional" });
     devices.push({ type: "dryer_outlet", count: 1, note: "CEC 26-744(2) — Dryer NEMA 14-30 dedicated circuit" });
-  } else if (room.room_type === "deck") {
-    devices.push({ type: "gfci_weather_receptacle", count: 1, note: "CEC 26-724(a) — 1 weatherproof GFCI receptacle required" });
+  } else if (room.room_type === "deck" || room.room_type === "patio") {
+    devices.push({ type: "gfci_weather_receptacle", count: 1, note: `CEC 26-724(a) — 1 weatherproof GFCI receptacle required for ${room.room_type}` });
+  } else if (room.room_type === "mechanical_room") {
+    devices.push({ type: "duplex_receptacle", count: 1, note: "CEC 26-720(e)(iii) — 1 receptacle for mechanical room" });
+    devices.push({ type: "panel_board", count: 1, note: "CEC 26-400 — Panel board location, clear working space required" });
   } else if (room.room_type === "open_to_below") {
     // No devices
   } else if (room.room_type === "stairway") {
@@ -579,6 +614,10 @@ export function generateDevicesForRoom(room: DetectedRoom): Array<{ type: string
       devices.push({ type: "fluorescent_light", count: Math.max(1, Math.floor(room.approx_area_sqft / 200)), note: "CEC 30-200 — Guarded luminaire if <2m" });
     } else if (room.room_type === "deck") {
       devices.push({ type: "exterior_light", count: 1, note: "CEC 30-200 — Exterior light at deck exit" });
+    } else if (room.room_type === "patio") {
+      devices.push({ type: "exterior_light", count: 1, note: "CEC 30-200 — Exterior light at patio" });
+    } else if (room.room_type === "mechanical_room") {
+      devices.push({ type: "surface_mount_light", count: 1, note: "CEC 30-200 — Luminaire for mechanical room" });
     } else {
       devices.push({ type: "surface_mount_light", count: req.min_lighting_outlets, note: buildNote(room.room_type, req, "surface_mount_light") });
     }
