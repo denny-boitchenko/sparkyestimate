@@ -26,7 +26,7 @@ import {
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger
 } from "@/components/ui/dropdown-menu";
-import type { Project } from "@shared/schema";
+import type { Project, Customer } from "@shared/schema";
 import { PROJECT_STATUSES, DWELLING_TYPES } from "@shared/schema";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -72,6 +72,7 @@ function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onOpenChan
   const { toast } = useToast();
   const [form, setForm] = useState({
     name: "",
+    customerId: "",
     clientName: "",
     clientEmail: "",
     clientPhone: "",
@@ -80,16 +81,44 @@ function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onOpenChan
     notes: "",
   });
 
+  const { data: customers } = useQuery<Customer[]>({
+    queryKey: ["/api/customers"],
+  });
+
+  const handleCustomerSelect = (value: string) => {
+    if (value === "none") {
+      setForm(p => ({ ...p, customerId: "" }));
+      return;
+    }
+    const customer = customers?.find(c => c.id === parseInt(value));
+    if (customer) {
+      setForm(p => ({
+        ...p,
+        customerId: value,
+        clientName: customer.name,
+        clientEmail: customer.email || "",
+        clientPhone: customer.phone || "",
+        address: [customer.address, customer.city, customer.province, customer.postalCode].filter(Boolean).join(", "),
+      }));
+    }
+  };
+
   const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
-      const res = await apiRequest("POST", "/api/projects", data);
+      const payload: any = { ...data };
+      if (data.customerId) {
+        payload.customerId = parseInt(data.customerId);
+      } else {
+        delete payload.customerId;
+      }
+      const res = await apiRequest("POST", "/api/projects", payload);
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
       toast({ title: "Project created successfully" });
       onOpenChange(false);
-      setForm({ name: "", clientName: "", clientEmail: "", clientPhone: "", address: "", dwellingType: "single", notes: "" });
+      setForm({ name: "", customerId: "", clientName: "", clientEmail: "", clientPhone: "", address: "", dwellingType: "single", notes: "" });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -116,6 +145,21 @@ function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onOpenChan
               required
               data-testid="input-project-name"
             />
+          </div>
+          <div className="space-y-2">
+            <Label>Link to Customer</Label>
+            <Select value={form.customerId || "none"} onValueChange={handleCustomerSelect}>
+              <SelectTrigger data-testid="select-customer">
+                <SelectValue placeholder="Select a customer (optional)" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">No linked customer</SelectItem>
+                {(customers || []).map(c => (
+                  <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">Selecting a customer will auto-fill client info below</p>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
@@ -213,6 +257,15 @@ export default function Projects() {
   const { data: projects, isLoading } = useQuery<Project[]>({
     queryKey: ["/api/projects"],
   });
+
+  const { data: customers } = useQuery<Customer[]>({
+    queryKey: ["/api/customers"],
+  });
+
+  const customerMap = (customers || []).reduce<Record<number, Customer>>((acc, c) => {
+    acc[c.id] = c;
+    return acc;
+  }, {});
 
   const deleteMutation = useMutation({
     mutationFn: async (id: number) => {

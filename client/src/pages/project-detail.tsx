@@ -21,7 +21,7 @@ import {
   ArrowLeft, Edit, Zap, MapPin, Phone, Mail, Building2,
   Calculator, Plus, Trash2, Calendar, FileText
 } from "lucide-react";
-import type { Project, Estimate } from "@shared/schema";
+import type { Project, Estimate, Customer } from "@shared/schema";
 
 function StatusBadge({ status }: { status: string }) {
   const config: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
@@ -53,6 +53,15 @@ export default function ProjectDetail() {
   const { data: estimates } = useQuery<Estimate[]>({
     queryKey: ["/api/projects", projectId, "estimates"],
     enabled: projectId > 0,
+  });
+
+  const { data: linkedCustomer } = useQuery<Customer>({
+    queryKey: ["/api/customers", project?.customerId],
+    enabled: !!project?.customerId,
+  });
+
+  const { data: allCustomers } = useQuery<Customer[]>({
+    queryKey: ["/api/customers"],
   });
 
   const [editForm, setEditForm] = useState<Partial<Project>>({});
@@ -124,6 +133,7 @@ export default function ProjectDetail() {
   const startEditing = () => {
     setEditForm({
       name: project.name,
+      customerId: project.customerId,
       clientName: project.clientName,
       clientEmail: project.clientEmail,
       clientPhone: project.clientPhone,
@@ -179,7 +189,15 @@ export default function ProjectDetail() {
                   </div>
                   <div>
                     <p className="text-sm font-medium">{project.clientName}</p>
-                    <p className="text-xs text-muted-foreground">Client</p>
+                    {linkedCustomer ? (
+                      <Link href={`/customers`}>
+                        <Badge variant="secondary" className="text-xs mt-0.5" data-testid="badge-linked-customer">
+                          Linked to {linkedCustomer.name}
+                        </Badge>
+                      </Link>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">Client</p>
+                    )}
                   </div>
                 </div>
                 {project.clientEmail && (
@@ -303,6 +321,35 @@ export default function ProjectDetail() {
             <div className="space-y-2">
               <Label>Project Name</Label>
               <Input value={editForm.name || ""} onChange={(e) => setEditForm(p => ({ ...p, name: e.target.value }))} data-testid="input-edit-name" />
+            </div>
+            <div className="space-y-2">
+              <Label>Link to Customer</Label>
+              <Select
+                value={editForm.customerId ? String(editForm.customerId) : "none"}
+                onValueChange={(v) => {
+                  if (v === "none") {
+                    setEditForm(p => ({ ...p, customerId: null as any }));
+                  } else {
+                    const cust = allCustomers?.find(c => c.id === parseInt(v));
+                    setEditForm(p => ({
+                      ...p,
+                      customerId: parseInt(v),
+                      clientName: cust?.name || p.clientName,
+                      clientEmail: cust?.email || p.clientEmail,
+                      clientPhone: cust?.phone || p.clientPhone,
+                      address: cust ? [cust.address, cust.city, cust.province, cust.postalCode].filter(Boolean).join(", ") : p.address,
+                    }));
+                  }
+                }}
+              >
+                <SelectTrigger data-testid="select-edit-customer"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No linked customer</SelectItem>
+                  {(allCustomers || []).map(c => (
+                    <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">

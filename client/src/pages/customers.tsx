@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -19,7 +20,8 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Plus, Pencil, Trash2, Users, Search } from "lucide-react";
-import type { Customer } from "@shared/schema";
+import type { Customer, Project } from "@shared/schema";
+import { Link } from "wouter";
 
 interface CustomerFormData {
   name: string;
@@ -240,6 +242,17 @@ export default function Customers() {
     queryKey: ["/api/customers"],
   });
 
+  const { data: projects } = useQuery<Project[]>({
+    queryKey: ["/api/projects"],
+  });
+
+  const projectCountByCustomer = (projects || []).reduce<Record<number, number>>((acc, p) => {
+    if (p.customerId) {
+      acc[p.customerId] = (acc[p.customerId] || 0) + 1;
+    }
+    return acc;
+  }, {});
+
   const deleteMutation = useMutation({
     mutationFn: async (id: number) => {
       await apiRequest("DELETE", `/api/customers/${id}`);
@@ -395,9 +408,17 @@ export default function Customers() {
                         </span>
                       </TableCell>
                       <TableCell>
-                        <span className="text-sm text-muted-foreground" data-testid={`text-customer-projects-${customer.id}`}>
-                          --
-                        </span>
+                        {projectCountByCustomer[customer.id] ? (
+                          <Link href={`/projects?customer=${customer.id}`}>
+                            <Badge variant="secondary" data-testid={`text-customer-projects-${customer.id}`}>
+                              {projectCountByCustomer[customer.id]} project{projectCountByCustomer[customer.id] !== 1 ? "s" : ""}
+                            </Badge>
+                          </Link>
+                        ) : (
+                          <span className="text-sm text-muted-foreground" data-testid={`text-customer-projects-${customer.id}`}>
+                            0
+                          </span>
+                        )}
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
