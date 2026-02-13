@@ -59,6 +59,7 @@ export const deviceAssemblies = pgTable("device_assemblies", {
   laborHours: real("labor_hours").notNull().default(0.18),
   materialCost: real("material_cost").notNull().default(0),
   isDefault: boolean("is_default").notNull().default(true),
+  supplier: text("supplier"),
 });
 
 export const aiAnalyses = pgTable("ai_analyses", {
@@ -67,6 +68,7 @@ export const aiAnalyses = pgTable("ai_analyses", {
   fileName: text("file_name").notNull(),
   analysisMode: text("analysis_mode").notNull(),
   results: jsonb("results"),
+  status: text("status").notNull().default("completed"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -80,6 +82,7 @@ export const wireTypes = pgTable("wire_types", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   name: text("name").notNull().unique(),
   costPerFoot: real("cost_per_foot").notNull().default(0),
+  supplier: text("supplier"),
 });
 
 export const serviceBundles = pgTable("service_bundles", {
@@ -115,8 +118,21 @@ export const complianceDocuments = pgTable("compliance_documents", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   name: text("name").notNull(),
   fileName: text("file_name").notNull(),
+  version: text("version"),
+  fileSize: integer("file_size"),
+  isActive: boolean("is_active").notNull().default(true),
   expiresAt: timestamp("expires_at"),
   uploadedAt: timestamp("uploaded_at").defaultNow().notNull(),
+});
+
+export const supplierImports = pgTable("supplier_imports", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  supplierName: text("supplier_name").notNull(),
+  fileName: text("file_name").notNull(),
+  status: text("status").notNull().default("pending"),
+  previewData: jsonb("preview_data"),
+  importedCount: integer("imported_count").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 // Insert schemas
@@ -131,6 +147,7 @@ export const insertServiceBundleSchema = createInsertSchema(serviceBundles).omit
 export const insertPanelCircuitSchema = createInsertSchema(panelCircuits).omit({ id: true });
 export const insertEstimateServiceSchema = createInsertSchema(estimateServices).omit({ id: true });
 export const insertComplianceDocumentSchema = createInsertSchema(complianceDocuments).omit({ id: true, uploadedAt: true });
+export const insertSupplierImportSchema = createInsertSchema(supplierImports).omit({ id: true, createdAt: true });
 
 // Types
 export type Project = typeof projects.$inferSelect;
@@ -155,6 +172,8 @@ export type EstimateService = typeof estimateServices.$inferSelect;
 export type InsertEstimateService = z.infer<typeof insertEstimateServiceSchema>;
 export type ComplianceDocument = typeof complianceDocuments.$inferSelect;
 export type InsertComplianceDocument = z.infer<typeof insertComplianceDocumentSchema>;
+export type SupplierImport = typeof supplierImports.$inferSelect;
+export type InsertSupplierImport = z.infer<typeof insertSupplierImportSchema>;
 
 export const PROJECT_STATUSES = ["draft", "in_progress", "bid_sent", "won", "lost"] as const;
 export const DWELLING_TYPES = ["single", "duplex", "triplex", "fourplex"] as const;

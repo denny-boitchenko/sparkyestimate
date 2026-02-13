@@ -21,8 +21,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger
+} from "@/components/ui/dropdown-menu";
+import {
   ArrowLeft, Plus, Trash2, DollarSign, Clock, Cable,
-  Package, Zap, ShieldCheck, Wrench, RefreshCw, Play
+  Package, Zap, ShieldCheck, Wrench, RefreshCw, Play,
+  Download, FileText, FileSpreadsheet
 } from "lucide-react";
 import type {
   Estimate, EstimateItem, DeviceAssembly, PanelCircuit,
@@ -179,6 +183,64 @@ export default function EstimateDetail() {
     },
   });
 
+  const handleExport = async (type: "material-list" | "client-estimate" | "cec-report") => {
+    try {
+      const res = await apiRequest("GET", `/api/estimates/${estimateId}/export/${type}`);
+      const data = await res.json();
+      const { jsPDF } = await import("jspdf");
+      await import("jspdf-autotable");
+      const doc = new jsPDF();
+      doc.setFontSize(16);
+      doc.text(data.title || `${type} Export`, 14, 20);
+      doc.setFontSize(10);
+      doc.text(`Estimate: ${estimate?.name || ""}`, 14, 30);
+      doc.text(`Date: ${new Date().toLocaleDateString("en-CA")}`, 14, 36);
+
+      let yPos = 45;
+      if (data.items && data.items.length > 0) {
+        const headers = Object.keys(data.items[0]);
+        const rows = data.items.map((item: any) => headers.map(h => String(item[h] ?? "")));
+        (doc as any).autoTable({
+          head: [headers],
+          body: rows,
+          startY: yPos,
+          styles: { fontSize: 8 },
+          headStyles: { fillColor: [41, 98, 255] },
+        });
+      }
+
+      if (data.summary) {
+        const finalY = (doc as any).lastAutoTable?.finalY || yPos + 10;
+        doc.setFontSize(10);
+        Object.entries(data.summary).forEach(([key, val], i) => {
+          doc.text(`${key}: ${val}`, 14, finalY + 10 + i * 6);
+        });
+      }
+
+      doc.save(`${type}-${estimateId}.pdf`);
+      toast({ title: "PDF exported successfully" });
+    } catch (err: any) {
+      toast({ title: "Export failed", description: err.message, variant: "destructive" });
+    }
+  };
+
+  const handleExcelExport = async () => {
+    try {
+      const res = await fetch(`/api/estimates/${estimateId}/export/excel`, { credentials: "include" });
+      if (!res.ok) throw new Error("Export failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `estimate-${estimateId}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({ title: "Excel exported successfully" });
+    } catch (err: any) {
+      toast({ title: "Export failed", description: err.message, variant: "destructive" });
+    }
+  };
+
   const deleteServiceMutation = useMutation({
     mutationFn: async (id: number) => {
       await apiRequest("DELETE", `/api/estimate-services/${id}`);
@@ -255,6 +317,34 @@ export default function EstimateDetail() {
           <p className="text-sm text-muted-foreground">
             Created {new Date(estimate.createdAt).toLocaleDateString("en-CA")}
           </p>
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" data-testid="button-export">
+                <Download className="w-4 h-4 mr-2" />
+                Export
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => handleExport("material-list")} data-testid="button-export-material">
+                <FileText className="w-4 h-4 mr-2" />
+                Material List PDF
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleExport("client-estimate")} data-testid="button-export-client">
+                <FileText className="w-4 h-4 mr-2" />
+                Client Estimate PDF
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleExport("cec-report")} data-testid="button-export-cec">
+                <FileText className="w-4 h-4 mr-2" />
+                CEC Report PDF
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleExcelExport()} data-testid="button-export-excel">
+                <FileSpreadsheet className="w-4 h-4 mr-2" />
+                Excel Export
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
@@ -436,29 +526,104 @@ export default function EstimateDetail() {
                         return (
                           <TableRow key={item.id} data-testid={`row-item-${item.id}`}>
                             <TableCell>
-                              <div>
-                                <p className="text-sm font-medium">{item.deviceType}</p>
-                                <p className="text-xs text-muted-foreground truncate max-w-[200px]">{item.description}</p>
-                              </div>
+                              <Input
+                                className="min-w-[140px] text-sm font-medium"
+                                defaultValue={item.deviceType}
+                                key={`dt-${item.id}-${item.deviceType}`}
+                                onBlur={(e) => { if (e.target.value !== item.deviceType) updateItemMutation.mutate({ id: item.id, deviceType: e.target.value }); }}
+                                data-testid={`input-device-type-${item.id}`}
+                              />
                             </TableCell>
-                            <TableCell className="text-sm">{item.room || "-"}</TableCell>
+                            <TableCell>
+                              <Input
+                                className="min-w-[90px] text-sm"
+                                defaultValue={item.room || ""}
+                                key={`rm-${item.id}-${item.room}`}
+                                onBlur={(e) => { if (e.target.value !== (item.room || "")) updateItemMutation.mutate({ id: item.id, room: e.target.value || null }); }}
+                                data-testid={`input-room-${item.id}`}
+                              />
+                            </TableCell>
                             <TableCell className="text-right">
                               <Input
                                 type="number"
                                 className="w-16 text-right"
-                                value={item.quantity}
-                                onChange={(e) => updateItemMutation.mutate({ id: item.id, quantity: parseInt(e.target.value) || 1 })}
+                                defaultValue={item.quantity}
+                                key={`qty-${item.id}-${item.quantity}`}
+                                onBlur={(e) => { const v = parseInt(e.target.value) || 1; if (v !== item.quantity) updateItemMutation.mutate({ id: item.id, quantity: v }); }}
                                 min={1}
                                 data-testid={`input-qty-${item.id}`}
                               />
                             </TableCell>
-                            <TableCell className="text-right text-sm">${item.materialCost.toFixed(2)}</TableCell>
-                            <TableCell className="text-right text-sm">{item.laborHours.toFixed(2)}</TableCell>
-                            <TableCell className="text-xs">{item.wireType || "-"}</TableCell>
-                            <TableCell className="text-right text-sm">{item.wireFootage.toFixed(0)}</TableCell>
-                            <TableCell className="text-xs">{item.boxType || "-"}</TableCell>
-                            <TableCell className="text-xs">{item.coverPlate || "-"}</TableCell>
-                            <TableCell className="text-right text-sm">{item.markupPct}%</TableCell>
+                            <TableCell className="text-right">
+                              <Input
+                                type="number"
+                                step="0.01"
+                                className="w-20 text-right"
+                                defaultValue={item.materialCost}
+                                key={`mc-${item.id}-${item.materialCost}`}
+                                onBlur={(e) => { const v = parseFloat(e.target.value) || 0; if (v !== item.materialCost) updateItemMutation.mutate({ id: item.id, materialCost: v }); }}
+                                data-testid={`input-material-${item.id}`}
+                              />
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Input
+                                type="number"
+                                step="0.01"
+                                className="w-20 text-right"
+                                defaultValue={item.laborHours}
+                                key={`lh-${item.id}-${item.laborHours}`}
+                                onBlur={(e) => { const v = parseFloat(e.target.value) || 0; if (v !== item.laborHours) updateItemMutation.mutate({ id: item.id, laborHours: v }); }}
+                                data-testid={`input-labor-${item.id}`}
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                className="min-w-[90px] text-xs"
+                                defaultValue={item.wireType || ""}
+                                key={`wt-${item.id}-${item.wireType}`}
+                                onBlur={(e) => { if (e.target.value !== (item.wireType || "")) updateItemMutation.mutate({ id: item.id, wireType: e.target.value || null }); }}
+                                data-testid={`input-wire-type-${item.id}`}
+                              />
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Input
+                                type="number"
+                                className="w-16 text-right"
+                                defaultValue={item.wireFootage}
+                                key={`wf-${item.id}-${item.wireFootage}`}
+                                onBlur={(e) => { const v = parseFloat(e.target.value) || 0; if (v !== item.wireFootage) updateItemMutation.mutate({ id: item.id, wireFootage: v }); }}
+                                data-testid={`input-wire-footage-${item.id}`}
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                className="min-w-[80px] text-xs"
+                                defaultValue={item.boxType || ""}
+                                key={`bt-${item.id}-${item.boxType}`}
+                                onBlur={(e) => { if (e.target.value !== (item.boxType || "")) updateItemMutation.mutate({ id: item.id, boxType: e.target.value || null }); }}
+                                data-testid={`input-box-type-${item.id}`}
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                className="min-w-[80px] text-xs"
+                                defaultValue={item.coverPlate || ""}
+                                key={`cp-${item.id}-${item.coverPlate}`}
+                                onBlur={(e) => { if (e.target.value !== (item.coverPlate || "")) updateItemMutation.mutate({ id: item.id, coverPlate: e.target.value || null }); }}
+                                data-testid={`input-cover-plate-${item.id}`}
+                              />
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Input
+                                type="number"
+                                step="0.1"
+                                className="w-16 text-right"
+                                defaultValue={item.markupPct}
+                                key={`mp-${item.id}-${item.markupPct}`}
+                                onBlur={(e) => { const v = parseFloat(e.target.value) || 0; if (v !== item.markupPct) updateItemMutation.mutate({ id: item.id, markupPct: v }); }}
+                                data-testid={`input-markup-${item.id}`}
+                              />
+                            </TableCell>
                             <TableCell className="text-right text-sm font-medium">${itemTotal.toFixed(2)}</TableCell>
                             <TableCell>
                               <Button

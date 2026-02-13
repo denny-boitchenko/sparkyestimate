@@ -474,10 +474,70 @@ export async function registerRoutes(
     res.json({ rules, summary: { total: rules.length, pass: rules.filter(r => r.status === "PASS").length, warn: rules.filter(r => r.status === "WARN").length, fail: rules.filter(r => r.status === "FAIL").length, info: rules.filter(r => r.status === "INFO").length } });
   });
 
+  // CEC Compliance Documents
+  app.get("/api/compliance-documents", async (_req, res) => {
+    const docs = await storage.getComplianceDocuments();
+    res.json(docs);
+  });
+
+  app.get("/api/compliance-documents/active", async (_req, res) => {
+    const doc = await storage.getActiveComplianceDocument();
+    res.json(doc || null);
+  });
+
+  app.post("/api/compliance-documents/upload", (req, res, next) => {
+    upload.single("file")(req, res, (err) => {
+      if (err) return res.status(400).json({ message: err.message || "Upload failed" });
+      next();
+    });
+  }, async (req, res) => {
+    try {
+      const file = req.file;
+      if (!file) return res.status(400).json({ message: "No file uploaded" });
+
+      await storage.deactivateAllComplianceDocuments();
+
+      const doc = await storage.createComplianceDocument({
+        name: req.body.name || "CEC Document",
+        fileName: file.originalname,
+        version: req.body.version || null,
+        fileSize: file.size,
+        isActive: true,
+      });
+
+      res.status(201).json(doc);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.delete("/api/compliance-documents/:id", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid document ID" });
+    await storage.deleteComplianceDocument(id);
+    res.status(204).send();
+  });
+
   // AI Analysis
   app.get("/api/ai-analyses", async (_req, res) => {
     const analyses = await storage.getAiAnalyses();
     res.json(analyses);
+  });
+
+  app.get("/api/ai-analyses/:id", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid analysis ID" });
+    const analysis = await storage.getAiAnalysis(id);
+    if (!analysis) return res.status(404).json({ message: "Analysis not found" });
+    res.json(analysis);
+  });
+
+  app.patch("/api/ai-analyses/:id", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid analysis ID" });
+    const analysis = await storage.updateAiAnalysis(id, req.body);
+    if (!analysis) return res.status(404).json({ message: "Analysis not found" });
+    res.json(analysis);
   });
 
   const analyzeBodySchema = z.object({
@@ -489,7 +549,7 @@ export async function registerRoutes(
     upload.single("file")(req, res, (err) => {
       if (err) {
         if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
-          return res.status(413).json({ message: "File exceeds the 100MB upload limit. Try compressing the PDF or splitting it into smaller pages." });
+          return res.status(413).json({ message: "File exceeds the 100MB upload limit." });
         }
         return res.status(400).json({ message: err.message || "File upload failed" });
       }
@@ -517,16 +577,25 @@ export async function registerRoutes(
       if (mode === "electrical") {
         prompt = `Analyze this electrical drawing or floor plan. Identify all electrical symbols and devices present.
 For each device found, provide:
-- type: the device type (e.g., "duplex_receptacle", "gfci_receptacle", "single_pole_switch", "3_way_switch", "dimmer_switch", "recessed_light", "ceiling_light", "pendant_light", "ceiling_fan", "smoke_detector", "co_detector", "data_outlet", "coax_outlet", "outdoor_receptacle", "exhaust_fan", "range_receptacle", "dryer_receptacle", "ev_charger")
+- type: the device type (e.g., "Duplex Receptacle (15A)", "GFCI Receptacle (20A)", "Single-Pole Switch", "3-Way Switch", "Dimmer Switch", "Recessed Light (Pot Light)", "Surface Mount Light", "Ceiling Fan", "Smoke/CO Combo Detector", "Data Outlet", "TV / Coax Outlet", "Outdoor Receptacle (GFCI)", "Exhaust Fan (Bathroom)", "Range Hood Fan", "Range Receptacle (50A)", "Dryer Receptacle (30A)", "EV Charger Receptacle (50A)", "Panel Board / Load Center (200A)", "Fluorescent / LED Batten", "Exterior Light", "Thermostat")
 - count: how many of this type you see
 - confidence: your confidence level (0.0 to 1.0)
 - room: which room it appears to be in (if identifiable)
+- floor: which floor (e.g., "Main Floor", "Basement", "Upper Floor")
+- wireType: recommended wire type (e.g., "14/2 NM-B", "12/2 NM-B")
 - description: brief description
+
+Group results by room when possible.
 
 Return ONLY valid JSON in this exact format:
 {
-  "devices": [
-    { "type": "duplex_receptacle", "count": 4, "confidence": 0.85, "room": "Kitchen", "description": "Standard 15A duplex receptacles" }
+  "rooms": [
+    { "name": "KITCHEN", "type": "Kitchen", "floor": "Main Floor", "devices": [
+      { "type": "Duplex Receptacle (15A)", "count": 4, "confidence": 0.85, "wireType": "14/2 NM-B", "description": "Standard 15A duplex receptacles" }
+    ]}
+  ],
+  "allDevices": [
+    { "type": "Duplex Receptacle (15A)", "totalCount": 77, "wireType": "14/2 NM-B" }
   ],
   "notes": "Any additional observations about the drawing"
 }`;
@@ -534,23 +603,21 @@ Return ONLY valid JSON in this exact format:
         prompt = `Analyze this architectural floor plan. Identify all rooms visible in the plan.
 For each room, determine the room type and apply CEC 2021 (Canadian Electrical Code) minimum requirements.
 
-Room types to look for: kitchen, bathroom, bedroom, living_room, dining_room, garage, laundry, hallway, basement, foyer, den, office, closet, pantry, mudroom, utility_room, workshop, rec_room, sunroom, porch, deck
+Room types to look for: Kitchen, Bathroom, Bedroom, Living Room, Dining Room, Garage, Laundry, Hallway, Basement, Entry Foyer, Den, Office, Closet, Closet Walkin, Pantry, Mudroom, Utility Room, Workshop, Rec Room, Family Room, Sunroom, Porch, Deck
 
-For each room, list the minimum electrical devices required by CEC 2021:
-- Kitchens: min 2 split receptacles, 1 GFCI above counter, dedicated fridge circuit, range hood, range receptacle
-- Bathrooms: GFCI receptacle, exhaust fan, light fixture
-- Bedrooms: min 1 receptacle per wall, smoke detector, AFCI protection
-- Living rooms: 1 receptacle per 3.6m of wall
-- Garages: GFCI receptacle, light fixture
-- All rooms: smoke detectors per code, appropriate lighting
+For each room, list the minimum electrical devices required by CEC 2021.
+Group by floor when possible (Main Floor, Basement, Upper Floor).
 
 Return ONLY valid JSON in this exact format:
 {
   "rooms": [
-    { "name": "Kitchen", "type": "kitchen", "devices": [
-      { "type": "split_receptacle", "count": 2, "description": "Split receptacles for countertop" },
-      { "type": "gfci_receptacle", "count": 1, "description": "GFCI above sink" }
+    { "name": "KITCHEN", "type": "Kitchen", "floor": "Main Floor", "devices": [
+      { "type": "Split Receptacle (Kitchen)", "count": 2, "wireType": "14/3 NM-B", "description": "Split receptacles for countertop" },
+      { "type": "GFCI Receptacle (20A)", "count": 1, "wireType": "12/2 NM-B", "description": "GFCI above sink" }
     ]}
+  ],
+  "allDevices": [
+    { "type": "Duplex Receptacle (15A)", "totalCount": 77, "wireType": "14/2 NM-B" }
   ],
   "notes": "Additional observations"
 }`;
@@ -576,10 +643,10 @@ Return ONLY valid JSON in this exact format:
         if (jsonMatch) {
           parsedResults = JSON.parse(jsonMatch[0]);
         } else {
-          parsedResults = { devices: [], notes: responseText };
+          parsedResults = { rooms: [], allDevices: [], notes: responseText };
         }
       } catch {
-        parsedResults = { devices: [], notes: responseText };
+        parsedResults = { rooms: [], allDevices: [], notes: responseText };
       }
 
       const analysis = await storage.createAiAnalysis({
@@ -587,6 +654,7 @@ Return ONLY valid JSON in this exact format:
         fileName: file.originalname,
         analysisMode: mode,
         results: parsedResults,
+        status: "review",
       });
 
       res.json(analysis);
@@ -594,6 +662,435 @@ Return ONLY valid JSON in this exact format:
       console.error("AI Analysis error:", err);
       res.status(500).json({ message: err.message || "Analysis failed" });
     }
+  });
+
+  // Generate Estimate from AI Analysis
+  app.post("/api/ai-analyses/:id/generate-estimate", async (req, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (!id) return res.status(400).json({ message: "Invalid analysis ID" });
+
+      const analysis = await storage.getAiAnalysis(id);
+      if (!analysis) return res.status(404).json({ message: "Analysis not found" });
+
+      const results = analysis.results as any;
+      if (!results?.rooms) return res.status(400).json({ message: "No rooms data in analysis" });
+
+      const estimate = await storage.createEstimate({
+        projectId: analysis.projectId,
+        name: `AI Generated - ${analysis.fileName}`,
+        overheadPct: 15,
+        profitPct: 10,
+        materialMarkupPct: 0,
+        laborMarkupPct: 0,
+        laborRate: 85,
+      });
+
+      const assemblies = await storage.getDeviceAssemblies();
+
+      for (const room of results.rooms) {
+        for (const device of (room.devices || [])) {
+          const matchedAssembly = assemblies.find(a =>
+            a.name.toLowerCase().includes(device.type?.toLowerCase().split("(")[0].trim() || "") ||
+            device.type?.toLowerCase().includes(a.name.toLowerCase().split("(")[0].trim())
+          );
+
+          await storage.createEstimateItem({
+            estimateId: estimate.id,
+            deviceType: device.type || "Unknown Device",
+            description: device.description || device.type || "",
+            room: room.name || "General",
+            quantity: device.count || 1,
+            materialCost: matchedAssembly?.materialCost || 0,
+            laborHours: matchedAssembly?.laborHours || 0.25,
+            wireType: device.wireType || matchedAssembly?.wireType || "14/2 NM-B",
+            wireFootage: matchedAssembly?.wireFootage || 15,
+            markupPct: 0,
+            boxType: matchedAssembly?.boxType || null,
+            coverPlate: matchedAssembly?.coverPlate || null,
+          });
+        }
+      }
+
+      await storage.updateAiAnalysis(id, { status: "estimated" });
+
+      res.json({ estimateId: estimate.id, message: "Estimate generated" });
+    } catch (err: any) {
+      console.error("Generate estimate error:", err);
+      res.status(500).json({ message: err.message || "Failed to generate estimate" });
+    }
+  });
+
+  // Supplier Import with AI
+  app.get("/api/supplier-imports", async (_req, res) => {
+    const imports = await storage.getSupplierImports();
+    res.json(imports);
+  });
+
+  app.post("/api/supplier-imports/preview", (req, res, next) => {
+    upload.single("file")(req, res, (err) => {
+      if (err) return res.status(400).json({ message: err.message || "Upload failed" });
+      next();
+    });
+  }, async (req, res) => {
+    try {
+      const file = req.file;
+      if (!file) return res.status(400).json({ message: "No file uploaded" });
+
+      const supplierName = req.body.supplierName || "Unknown Supplier";
+      const importType = req.body.importType || "materials";
+
+      if (!process.env.GEMINI_API_KEY) return res.status(500).json({ message: "Gemini API key not configured" });
+
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+      let fileContent: string;
+      const mimeType = file.mimetype;
+
+      if (mimeType === "text/csv" || file.originalname.endsWith(".csv")) {
+        fileContent = file.buffer.toString("utf-8");
+      } else {
+        fileContent = file.buffer.toString("base64");
+      }
+
+      const prompt = importType === "wire" ?
+        `Parse this supplier price list/catalog for electrical wire products. For each wire product found, extract:
+- name: the wire type name (e.g., "14/2 NM-B", "12/3 NM-B")
+- costPerFoot: price per foot (calculate from per-roll or per-meter if needed)
+- supplier: "${supplierName}"
+- partNumber: supplier part number if available
+- description: any additional details
+
+Return ONLY valid JSON:
+{
+  "items": [
+    { "name": "14/2 NM-B", "costPerFoot": 0.45, "supplier": "${supplierName}", "partNumber": "ABC123", "description": "75m roll" }
+  ],
+  "notes": "any observations"
+}` :
+        `Parse this supplier price list/catalog for electrical materials/devices. For each product found, extract:
+- name: device/product name (e.g., "Duplex Receptacle (15A)")
+- materialCost: unit price
+- supplier: "${supplierName}"
+- partNumber: supplier part number if available
+- category: one of: receptacles, switches, lighting, safety, data_comm, specialty, service
+- description: brief description
+
+Return ONLY valid JSON:
+{
+  "items": [
+    { "name": "Duplex Receptacle (15A)", "materialCost": 8.50, "supplier": "${supplierName}", "partNumber": "XYZ789", "category": "receptacles", "description": "15A TR duplex receptacle, white" }
+  ],
+  "notes": "any observations"
+}`;
+
+      let parts: any[];
+      if (mimeType === "text/csv" || file.originalname.endsWith(".csv")) {
+        parts = [{ text: prompt + "\n\nCSV Content:\n" + fileContent }];
+      } else {
+        parts = [
+          { text: prompt },
+          { inlineData: { mimeType: mimeType || "application/pdf", data: fileContent } },
+        ];
+      }
+
+      const result = await ai.models.generateContent({
+        model: "gemini-2.0-flash",
+        contents: [{ role: "user", parts }],
+      });
+
+      const responseText = result.text || "";
+      let parsedItems: any;
+      try {
+        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          parsedItems = JSON.parse(jsonMatch[0]);
+        } else {
+          parsedItems = { items: [], notes: responseText };
+        }
+      } catch {
+        parsedItems = { items: [], notes: responseText };
+      }
+
+      const importRecord = await storage.createSupplierImport({
+        supplierName,
+        fileName: file.originalname,
+        status: "preview",
+        previewData: { ...parsedItems, importType },
+        importedCount: 0,
+      });
+
+      res.json(importRecord);
+    } catch (err: any) {
+      console.error("Supplier import preview error:", err);
+      res.status(500).json({ message: err.message || "Import preview failed" });
+    }
+  });
+
+  app.post("/api/supplier-imports/:id/commit", async (req, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (!id) return res.status(400).json({ message: "Invalid import ID" });
+
+      const importRecord = await storage.getSupplierImport(id);
+      if (!importRecord) return res.status(404).json({ message: "Import not found" });
+
+      const preview = importRecord.previewData as any;
+      const items = req.body.items || preview?.items || [];
+      const importType = preview?.importType || "materials";
+
+      let count = 0;
+      for (const item of items) {
+        if (item.skip) continue;
+
+        if (importType === "wire") {
+          try {
+            await storage.createWireType({
+              name: item.name,
+              costPerFoot: parseFloat(item.costPerFoot) || 0,
+              supplier: item.supplier || importRecord.supplierName,
+            });
+            count++;
+          } catch {
+            const existing = (await storage.getWireTypes()).find(w => w.name === item.name);
+            if (existing) {
+              await storage.updateWireType(existing.id, {
+                costPerFoot: parseFloat(item.costPerFoot) || existing.costPerFoot,
+                supplier: item.supplier || importRecord.supplierName,
+              });
+              count++;
+            }
+          }
+        } else {
+          await storage.createDeviceAssembly({
+            name: item.name,
+            category: item.category || "receptacles",
+            device: item.description || item.name,
+            materialCost: parseFloat(item.materialCost) || 0,
+            laborHours: 0.25,
+            wireType: null,
+            wireFootage: 15,
+            isDefault: false,
+            supplier: item.supplier || importRecord.supplierName,
+          });
+          count++;
+        }
+      }
+
+      await storage.updateSupplierImport(id, {
+        status: "completed",
+        importedCount: count,
+      });
+
+      res.json({ imported: count, message: `${count} items imported successfully` });
+    } catch (err: any) {
+      console.error("Supplier import commit error:", err);
+      res.status(500).json({ message: err.message || "Import commit failed" });
+    }
+  });
+
+  // Export endpoints
+  app.get("/api/estimates/:id/export/material-list", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid estimate ID" });
+
+    const estimate = await storage.getEstimate(id);
+    if (!estimate) return res.status(404).json({ message: "Estimate not found" });
+
+    const items = await storage.getEstimateItems(id);
+    const project = await storage.getProject(estimate.projectId);
+
+    res.json({
+      project: project ? { name: project.name, clientName: project.clientName, address: project.address } : null,
+      estimate: { name: estimate.name, laborRate: estimate.laborRate },
+      items: items.map(item => ({
+        deviceType: item.deviceType,
+        description: item.description,
+        room: item.room,
+        quantity: item.quantity,
+        materialCost: item.materialCost,
+        wireType: item.wireType,
+        wireFootage: item.wireFootage,
+        boxType: item.boxType,
+        coverPlate: item.coverPlate,
+        totalMaterial: item.quantity * item.materialCost,
+      })),
+      totalMaterial: items.reduce((sum, i) => sum + i.quantity * i.materialCost, 0),
+    });
+  });
+
+  app.get("/api/estimates/:id/export/client-estimate", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid estimate ID" });
+
+    const estimate = await storage.getEstimate(id);
+    if (!estimate) return res.status(404).json({ message: "Estimate not found" });
+
+    const items = await storage.getEstimateItems(id);
+    const services = await storage.getEstimateServices(id);
+    const project = await storage.getProject(estimate.projectId);
+    const settingsData = await storage.getSettings();
+    const settingsMap = Object.fromEntries(settingsData.map(s => [s.key, s.value]));
+
+    const totalMaterialCost = items.reduce((sum, item) => {
+      const cost = item.quantity * item.materialCost;
+      const markup = cost * (item.markupPct / 100);
+      return sum + cost + markup;
+    }, 0);
+    const totalLaborHours = items.reduce((sum, item) => sum + item.quantity * item.laborHours, 0);
+    const totalLaborCost = totalLaborHours * estimate.laborRate;
+
+    const serviceMaterialCost = services.reduce((sum, s) => sum + s.materialCost, 0);
+    const serviceLaborHours = services.reduce((sum, s) => sum + s.laborHours, 0);
+    const serviceLaborCost = serviceLaborHours * estimate.laborRate;
+
+    const combinedMaterialCost = totalMaterialCost + serviceMaterialCost;
+    const combinedLaborCost = totalLaborCost + serviceLaborCost;
+    const materialWithMarkup = combinedMaterialCost * (1 + estimate.materialMarkupPct / 100);
+    const laborWithMarkup = combinedLaborCost * (1 + estimate.laborMarkupPct / 100);
+    const subtotal = materialWithMarkup + laborWithMarkup;
+    const overhead = subtotal * (estimate.overheadPct / 100);
+    const subtotalWithOverhead = subtotal + overhead;
+    const profit = subtotalWithOverhead * (estimate.profitPct / 100);
+    const grandTotal = subtotalWithOverhead + profit;
+
+    res.json({
+      company: {
+        name: settingsMap.companyName || "SparkyEstimate",
+        phone: settingsMap.companyPhone || "",
+        email: settingsMap.companyEmail || "",
+      },
+      project: project ? { name: project.name, clientName: project.clientName, clientEmail: project.clientEmail, clientPhone: project.clientPhone, address: project.address } : null,
+      estimate: { name: estimate.name, date: estimate.createdAt },
+      lineItems: items.map(item => ({
+        deviceType: item.deviceType,
+        description: item.description,
+        room: item.room,
+        quantity: item.quantity,
+        unitPrice: item.materialCost + item.laborHours * estimate.laborRate,
+        total: item.quantity * (item.materialCost + item.laborHours * estimate.laborRate),
+      })),
+      services: services.map(s => ({
+        name: s.name,
+        total: s.materialCost + s.laborHours * estimate.laborRate,
+      })),
+      summary: {
+        subtotal,
+        overhead,
+        profit,
+        grandTotal,
+      },
+    });
+  });
+
+  app.get("/api/estimates/:id/export/cec-report", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid estimate ID" });
+
+    const estimate = await storage.getEstimate(id);
+    if (!estimate) return res.status(404).json({ message: "Estimate not found" });
+
+    const items = await storage.getEstimateItems(id);
+    const circuits = await storage.getPanelCircuits(id);
+    const project = await storage.getProject(estimate.projectId);
+
+    const rules: any[] = [];
+    const gfciLocations = ["kitchen", "bathroom", "garage", "outdoor", "laundry", "unfinished basement"];
+    const afciLocations = ["bedroom", "living", "dining", "den", "family", "hallway", "closet"];
+
+    const roomItems = items.reduce<Record<string, typeof items>>((acc, item) => {
+      const room = (item.room || "general").toLowerCase();
+      if (!acc[room]) acc[room] = [];
+      acc[room].push(item);
+      return acc;
+    }, {});
+
+    for (const [room, roomItemList] of Object.entries(roomItems)) {
+      const needsGfci = gfciLocations.some(loc => room.includes(loc));
+      if (needsGfci) {
+        const hasGfci = roomItemList.some(i => i.deviceType.toLowerCase().includes("gfci"));
+        rules.push({ rule: "CEC 26-700(11) - GFCI Protection", location: room, status: hasGfci ? "PASS" : "FAIL", description: hasGfci ? `GFCI protection present in ${room}` : `GFCI receptacle required in ${room}` });
+      }
+      const needsAfci = afciLocations.some(loc => room.includes(loc));
+      if (needsAfci) {
+        const afciCircuit = circuits.some(c => c.description.toLowerCase().includes(room) && c.isAfci);
+        rules.push({ rule: "CEC 26-656 - AFCI Protection", location: room, status: afciCircuit ? "PASS" : "WARN", description: afciCircuit ? `AFCI protection configured for ${room}` : `AFCI protection recommended for ${room}` });
+      }
+    }
+
+    const hasSmokeDetectors = items.some(i => i.deviceType.toLowerCase().includes("smoke"));
+    rules.push({ rule: "CEC 32-110 - Smoke Detectors", location: "All bedrooms & hallways", status: hasSmokeDetectors ? "PASS" : "FAIL", description: hasSmokeDetectors ? "Smoke detectors included" : "Smoke detectors required" });
+
+    res.json({
+      project: project ? { name: project.name, address: project.address, clientName: project.clientName } : null,
+      estimate: { name: estimate.name },
+      rules,
+      summary: { total: rules.length, pass: rules.filter(r => r.status === "PASS").length, warn: rules.filter(r => r.status === "WARN").length, fail: rules.filter(r => r.status === "FAIL").length, info: rules.filter(r => r.status === "INFO").length },
+      panelSchedule: circuits.map(c => ({ circuit: c.circuitNumber, amps: c.amps, poles: c.poles, description: c.description, wireType: c.wireType, gfci: c.isGfci, afci: c.isAfci })),
+    });
+  });
+
+  app.get("/api/estimates/:id/export/excel", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid estimate ID" });
+
+    const estimate = await storage.getEstimate(id);
+    if (!estimate) return res.status(404).json({ message: "Estimate not found" });
+
+    const items = await storage.getEstimateItems(id);
+    const circuits = await storage.getPanelCircuits(id);
+    const services = await storage.getEstimateServices(id);
+    const project = await storage.getProject(estimate.projectId);
+
+    const XLSX = await import("xlsx");
+    const wb = XLSX.utils.book_new();
+
+    const itemRows = items.map(item => ({
+      "Device": item.deviceType,
+      "Description": item.description,
+      "Room": item.room || "",
+      "Qty": item.quantity,
+      "Material $": item.materialCost,
+      "Labor (hrs)": item.laborHours,
+      "Wire Type": item.wireType || "",
+      "Wire (ft)": item.wireFootage,
+      "Box Type": item.boxType || "",
+      "Cover Plate": item.coverPlate || "",
+      "Markup %": item.markupPct,
+      "Total Material": item.quantity * item.materialCost,
+      "Total Labor": item.quantity * item.laborHours * estimate.laborRate,
+    }));
+    const ws1 = XLSX.utils.json_to_sheet(itemRows);
+    XLSX.utils.book_append_sheet(wb, ws1, "Line Items");
+
+    const circuitRows = circuits.map(c => ({
+      "Circuit #": c.circuitNumber,
+      "Amps": c.amps,
+      "Poles": c.poles,
+      "Description": c.description,
+      "Wire Type": c.wireType || "",
+      "GFCI": c.isGfci ? "Yes" : "No",
+      "AFCI": c.isAfci ? "Yes" : "No",
+    }));
+    const ws2 = XLSX.utils.json_to_sheet(circuitRows);
+    XLSX.utils.book_append_sheet(wb, ws2, "Panel Schedule");
+
+    if (services.length > 0) {
+      const serviceRows = services.map(s => ({
+        "Service": s.name,
+        "Material $": s.materialCost,
+        "Labor (hrs)": s.laborHours,
+      }));
+      const ws3 = XLSX.utils.json_to_sheet(serviceRows);
+      XLSX.utils.book_append_sheet(wb, ws3, "Services");
+    }
+
+    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+    const fileName = `${project?.name || "Estimate"}_${estimate.name}.xlsx`.replace(/[^a-zA-Z0-9_\-. ]/g, "");
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    res.send(buf);
   });
 
   // Settings

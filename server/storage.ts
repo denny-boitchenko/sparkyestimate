@@ -1,6 +1,7 @@
 import {
   projects, estimates, estimateItems, deviceAssemblies, aiAnalyses, settings,
   wireTypes, serviceBundles, panelCircuits, estimateServices, complianceDocuments,
+  supplierImports,
   type Project, type InsertProject,
   type Estimate, type InsertEstimate,
   type EstimateItem, type InsertEstimateItem,
@@ -12,6 +13,7 @@ import {
   type PanelCircuit, type InsertPanelCircuit,
   type EstimateService, type InsertEstimateService,
   type ComplianceDocument, type InsertComplianceDocument,
+  type SupplierImport, type InsertSupplierImport,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc } from "drizzle-orm";
@@ -41,8 +43,10 @@ export interface IStorage {
   deleteDeviceAssembly(id: number): Promise<void>;
 
   getAiAnalyses(): Promise<AiAnalysis[]>;
+  getAiAnalysis(id: number): Promise<AiAnalysis | undefined>;
   getAiAnalysesByProject(projectId: number): Promise<AiAnalysis[]>;
   createAiAnalysis(data: InsertAiAnalysis): Promise<AiAnalysis>;
+  updateAiAnalysis(id: number, data: Partial<InsertAiAnalysis>): Promise<AiAnalysis | undefined>;
 
   getSettings(): Promise<Setting[]>;
   upsertSetting(key: string, value: string): Promise<void>;
@@ -69,8 +73,16 @@ export interface IStorage {
   deleteEstimateService(id: number): Promise<void>;
 
   getComplianceDocuments(): Promise<ComplianceDocument[]>;
+  getActiveComplianceDocument(): Promise<ComplianceDocument | undefined>;
   createComplianceDocument(data: InsertComplianceDocument): Promise<ComplianceDocument>;
+  updateComplianceDocument(id: number, data: Partial<InsertComplianceDocument>): Promise<ComplianceDocument | undefined>;
   deleteComplianceDocument(id: number): Promise<void>;
+  deactivateAllComplianceDocuments(): Promise<void>;
+
+  getSupplierImports(): Promise<SupplierImport[]>;
+  getSupplierImport(id: number): Promise<SupplierImport | undefined>;
+  createSupplierImport(data: InsertSupplierImport): Promise<SupplierImport>;
+  updateSupplierImport(id: number, data: Partial<InsertSupplierImport>): Promise<SupplierImport | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -164,12 +176,22 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(aiAnalyses).orderBy(desc(aiAnalyses.createdAt));
   }
 
+  async getAiAnalysis(id: number): Promise<AiAnalysis | undefined> {
+    const [analysis] = await db.select().from(aiAnalyses).where(eq(aiAnalyses.id, id));
+    return analysis;
+  }
+
   async getAiAnalysesByProject(projectId: number): Promise<AiAnalysis[]> {
     return db.select().from(aiAnalyses).where(eq(aiAnalyses.projectId, projectId)).orderBy(desc(aiAnalyses.createdAt));
   }
 
   async createAiAnalysis(data: InsertAiAnalysis): Promise<AiAnalysis> {
     const [analysis] = await db.insert(aiAnalyses).values(data).returning();
+    return analysis;
+  }
+
+  async updateAiAnalysis(id: number, data: Partial<InsertAiAnalysis>): Promise<AiAnalysis | undefined> {
+    const [analysis] = await db.update(aiAnalyses).set(data).where(eq(aiAnalyses.id, id)).returning();
     return analysis;
   }
 
@@ -266,13 +288,46 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(complianceDocuments).orderBy(desc(complianceDocuments.uploadedAt));
   }
 
+  async getActiveComplianceDocument(): Promise<ComplianceDocument | undefined> {
+    const [doc] = await db.select().from(complianceDocuments).where(eq(complianceDocuments.isActive, true));
+    return doc;
+  }
+
   async createComplianceDocument(data: InsertComplianceDocument): Promise<ComplianceDocument> {
     const [cd] = await db.insert(complianceDocuments).values(data).returning();
     return cd;
   }
 
+  async updateComplianceDocument(id: number, data: Partial<InsertComplianceDocument>): Promise<ComplianceDocument | undefined> {
+    const [cd] = await db.update(complianceDocuments).set(data).where(eq(complianceDocuments.id, id)).returning();
+    return cd;
+  }
+
   async deleteComplianceDocument(id: number): Promise<void> {
     await db.delete(complianceDocuments).where(eq(complianceDocuments.id, id));
+  }
+
+  async deactivateAllComplianceDocuments(): Promise<void> {
+    await db.update(complianceDocuments).set({ isActive: false });
+  }
+
+  async getSupplierImports(): Promise<SupplierImport[]> {
+    return db.select().from(supplierImports).orderBy(desc(supplierImports.createdAt));
+  }
+
+  async getSupplierImport(id: number): Promise<SupplierImport | undefined> {
+    const [si] = await db.select().from(supplierImports).where(eq(supplierImports.id, id));
+    return si;
+  }
+
+  async createSupplierImport(data: InsertSupplierImport): Promise<SupplierImport> {
+    const [si] = await db.insert(supplierImports).values(data).returning();
+    return si;
+  }
+
+  async updateSupplierImport(id: number, data: Partial<InsertSupplierImport>): Promise<SupplierImport | undefined> {
+    const [si] = await db.update(supplierImports).set(data).where(eq(supplierImports.id, id)).returning();
+    return si;
   }
 }
 

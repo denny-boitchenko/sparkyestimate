@@ -10,14 +10,15 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
   DollarSign, Percent, Wrench, Save, CheckCircle2, Shield,
-  Plus, Pencil, Trash2, Cable, Package, Settings
+  Plus, Pencil, Trash2, Cable, Package, Settings, Upload
 } from "lucide-react";
-import { useState, useEffect } from "react";
-import type { Setting, DeviceAssembly, WireType, ServiceBundle } from "@shared/schema";
+import { useState, useEffect, useRef } from "react";
+import type { Setting, DeviceAssembly, WireType, ServiceBundle, ComplianceDocument, SupplierImport } from "@shared/schema";
 import { DEVICE_CATEGORIES } from "@shared/schema";
 
 interface SettingsData {
@@ -283,7 +284,6 @@ function GeneralTab({ form, setForm, onSave, isSaving }: {
 function MaterialsTab() {
   const { toast } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingId, setEditingId] = useState<number | null>(null);
   const [deviceForm, setDeviceForm] = useState<DeviceFormData>(defaultDeviceForm);
 
   const { data: assemblies, isLoading } = useQuery<DeviceAssembly[]>({
@@ -317,26 +317,11 @@ function MaterialsTab() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: number; data: DeviceFormData }) => {
-      await apiRequest("PATCH", `/api/device-assemblies/${id}`, {
-        name: data.name,
-        category: data.category,
-        device: data.device,
-        boxType: data.boxType || null,
-        coverPlate: data.coverPlate || null,
-        miscParts: data.miscParts || null,
-        wireType: data.wireType || null,
-        wireFootage: parseFloat(data.wireFootage) || 0,
-        laborHours: parseFloat(data.laborHours) || 0,
-        materialCost: parseFloat(data.materialCost) || 0,
-      });
+    mutationFn: async ({ id, data }: { id: number; data: Record<string, unknown> }) => {
+      await apiRequest("PATCH", `/api/device-assemblies/${id}`, data);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/device-assemblies"] });
-      toast({ title: "Device assembly updated" });
-      setDialogOpen(false);
-      setEditingId(null);
-      setDeviceForm(defaultDeviceForm);
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -356,35 +341,22 @@ function MaterialsTab() {
     },
   });
 
-  const openEdit = (assembly: DeviceAssembly) => {
-    setEditingId(assembly.id);
-    setDeviceForm({
-      name: assembly.name,
-      category: assembly.category,
-      device: assembly.device,
-      boxType: assembly.boxType || "",
-      coverPlate: assembly.coverPlate || "",
-      miscParts: assembly.miscParts || "",
-      wireType: assembly.wireType || "",
-      wireFootage: String(assembly.wireFootage),
-      laborHours: String(assembly.laborHours),
-      materialCost: String(assembly.materialCost),
-    });
-    setDialogOpen(true);
-  };
-
   const openCreate = () => {
-    setEditingId(null);
     setDeviceForm(defaultDeviceForm);
     setDialogOpen(true);
   };
 
-  const handleSubmit = () => {
-    if (editingId) {
-      updateMutation.mutate({ id: editingId, data: deviceForm });
+  const handleInlineBlur = (id: number, field: string, newValue: string, originalValue: string | number | null | undefined) => {
+    const orig = originalValue == null ? "" : String(originalValue);
+    if (newValue === orig) return;
+    const numericFields = ["materialCost", "laborHours", "wireFootage"];
+    const payload: Record<string, unknown> = {};
+    if (numericFields.includes(field)) {
+      payload[field] = parseFloat(newValue) || 0;
     } else {
-      createMutation.mutate(deviceForm);
+      payload[field] = newValue || null;
     }
+    updateMutation.mutate({ id, data: payload });
   };
 
   if (isLoading) {
@@ -411,43 +383,97 @@ function MaterialsTab() {
                 <TableHead>Labor Hrs</TableHead>
                 <TableHead>Wire Type</TableHead>
                 <TableHead>Wire Ft</TableHead>
+                <TableHead>Supplier</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {assemblies && assemblies.length > 0 ? assemblies.map((a) => (
                 <TableRow key={a.id} data-testid={`row-device-${a.id}`}>
-                  <TableCell className="font-medium" data-testid={`text-device-name-${a.id}`}>{a.name}</TableCell>
-                  <TableCell><Badge variant="outline" className="text-xs">{a.category}</Badge></TableCell>
-                  <TableCell data-testid={`text-device-device-${a.id}`}>{a.device}</TableCell>
-                  <TableCell data-testid={`text-device-material-${a.id}`}>${a.materialCost.toFixed(2)}</TableCell>
-                  <TableCell data-testid={`text-device-labor-${a.id}`}>{a.laborHours}</TableCell>
-                  <TableCell data-testid={`text-device-wire-${a.id}`}>{a.wireType || "-"}</TableCell>
-                  <TableCell data-testid={`text-device-footage-${a.id}`}>{a.wireFootage}</TableCell>
                   <TableCell>
-                    <div className="flex items-center gap-1">
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        onClick={() => openEdit(a)}
-                        data-testid={`button-edit-device-${a.id}`}
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        onClick={() => deleteMutation.mutate(a.id)}
-                        data-testid={`button-delete-device-${a.id}`}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    </div>
+                    <Input
+                      key={`name-${a.id}-${a.name}`}
+                      defaultValue={a.name}
+                      onBlur={(e) => handleInlineBlur(a.id, "name", e.target.value, a.name)}
+                      className="min-w-[120px]"
+                      data-testid={`input-device-name-${a.id}`}
+                    />
+                  </TableCell>
+                  <TableCell><Badge variant="outline" className="text-xs">{a.category}</Badge></TableCell>
+                  <TableCell>
+                    <Input
+                      key={`device-${a.id}-${a.device}`}
+                      defaultValue={a.device}
+                      onBlur={(e) => handleInlineBlur(a.id, "device", e.target.value, a.device)}
+                      className="min-w-[120px]"
+                      data-testid={`input-device-device-${a.id}`}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Input
+                      key={`materialCost-${a.id}-${a.materialCost}`}
+                      type="number"
+                      step="0.01"
+                      defaultValue={a.materialCost}
+                      onBlur={(e) => handleInlineBlur(a.id, "materialCost", e.target.value, a.materialCost)}
+                      className="w-24"
+                      data-testid={`input-device-material-${a.id}`}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Input
+                      key={`laborHours-${a.id}-${a.laborHours}`}
+                      type="number"
+                      step="0.01"
+                      defaultValue={a.laborHours}
+                      onBlur={(e) => handleInlineBlur(a.id, "laborHours", e.target.value, a.laborHours)}
+                      className="w-20"
+                      data-testid={`input-device-labor-${a.id}`}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Input
+                      key={`wireType-${a.id}-${a.wireType}`}
+                      defaultValue={a.wireType || ""}
+                      onBlur={(e) => handleInlineBlur(a.id, "wireType", e.target.value, a.wireType)}
+                      className="min-w-[100px]"
+                      data-testid={`input-device-wire-${a.id}`}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Input
+                      key={`wireFootage-${a.id}-${a.wireFootage}`}
+                      type="number"
+                      step="0.1"
+                      defaultValue={a.wireFootage}
+                      onBlur={(e) => handleInlineBlur(a.id, "wireFootage", e.target.value, a.wireFootage)}
+                      className="w-20"
+                      data-testid={`input-device-footage-${a.id}`}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Input
+                      key={`supplier-${a.id}-${a.supplier}`}
+                      defaultValue={a.supplier || ""}
+                      onBlur={(e) => handleInlineBlur(a.id, "supplier", e.target.value, a.supplier)}
+                      className="min-w-[100px]"
+                      data-testid={`input-device-supplier-${a.id}`}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => deleteMutation.mutate(a.id)}
+                      data-testid={`button-delete-device-${a.id}`}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
                   </TableCell>
                 </TableRow>
               )) : (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
                     No device assemblies found
                   </TableCell>
                 </TableRow>
@@ -460,7 +486,7 @@ function MaterialsTab() {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>{editingId ? "Edit Device Assembly" : "Add Device Assembly"}</DialogTitle>
+            <DialogTitle>Add Device Assembly</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
@@ -575,11 +601,11 @@ function MaterialsTab() {
               Cancel
             </Button>
             <Button
-              onClick={handleSubmit}
-              disabled={createMutation.isPending || updateMutation.isPending}
+              onClick={() => createMutation.mutate(deviceForm)}
+              disabled={createMutation.isPending}
               data-testid="button-submit-device"
             >
-              {(createMutation.isPending || updateMutation.isPending) ? "Saving..." : (editingId ? "Update" : "Create")}
+              {createMutation.isPending ? "Creating..." : "Create"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -592,8 +618,6 @@ function WireTypesTab() {
   const { toast } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [wireForm, setWireForm] = useState<WireTypeFormData>({ name: "", costPerFoot: "0" });
-  const [editingCostId, setEditingCostId] = useState<number | null>(null);
-  const [editingCostValue, setEditingCostValue] = useState("");
 
   const { data: wireTypesData, isLoading } = useQuery<WireType[]>({
     queryKey: ["/api/wire-types"],
@@ -618,12 +642,11 @@ function WireTypesTab() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: async ({ id, costPerFoot }: { id: number; costPerFoot: number }) => {
-      await apiRequest("PATCH", `/api/wire-types/${id}`, { costPerFoot });
+    mutationFn: async ({ id, data }: { id: number; data: Record<string, unknown> }) => {
+      await apiRequest("PATCH", `/api/wire-types/${id}`, data);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/wire-types"] });
-      toast({ title: "Wire type updated" });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -643,12 +666,16 @@ function WireTypesTab() {
     },
   });
 
-  const handleCostBlur = (id: number) => {
-    const val = parseFloat(editingCostValue);
-    if (!isNaN(val)) {
-      updateMutation.mutate({ id, costPerFoot: val });
+  const handleInlineBlur = (id: number, field: string, newValue: string, originalValue: string | number | null | undefined) => {
+    const orig = originalValue == null ? "" : String(originalValue);
+    if (newValue === orig) return;
+    const payload: Record<string, unknown> = {};
+    if (field === "costPerFoot") {
+      payload[field] = parseFloat(newValue) || 0;
+    } else {
+      payload[field] = newValue || null;
     }
-    setEditingCostId(null);
+    updateMutation.mutate({ id, data: payload });
   };
 
   if (isLoading) {
@@ -670,38 +697,41 @@ function WireTypesTab() {
               <TableRow>
                 <TableHead>Name</TableHead>
                 <TableHead>Cost per Foot</TableHead>
+                <TableHead>Supplier</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {wireTypesData && wireTypesData.length > 0 ? wireTypesData.map((wt) => (
                 <TableRow key={wt.id} data-testid={`row-wire-type-${wt.id}`}>
-                  <TableCell className="font-medium" data-testid={`text-wire-name-${wt.id}`}>{wt.name}</TableCell>
                   <TableCell>
-                    {editingCostId === wt.id ? (
-                      <Input
-                        type="number"
-                        step="0.01"
-                        value={editingCostValue}
-                        onChange={(e) => setEditingCostValue(e.target.value)}
-                        onBlur={() => handleCostBlur(wt.id)}
-                        onKeyDown={(e) => { if (e.key === "Enter") handleCostBlur(wt.id); }}
-                        autoFocus
-                        className="w-24"
-                        data-testid={`input-wire-cost-${wt.id}`}
-                      />
-                    ) : (
-                      <span
-                        className="cursor-pointer hover-elevate px-2 py-1 rounded-md"
-                        onClick={() => {
-                          setEditingCostId(wt.id);
-                          setEditingCostValue(String(wt.costPerFoot));
-                        }}
-                        data-testid={`text-wire-cost-${wt.id}`}
-                      >
-                        ${wt.costPerFoot.toFixed(2)}
-                      </span>
-                    )}
+                    <Input
+                      key={`name-${wt.id}-${wt.name}`}
+                      defaultValue={wt.name}
+                      onBlur={(e) => handleInlineBlur(wt.id, "name", e.target.value, wt.name)}
+                      className="min-w-[140px]"
+                      data-testid={`input-wire-name-${wt.id}`}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Input
+                      key={`cost-${wt.id}-${wt.costPerFoot}`}
+                      type="number"
+                      step="0.01"
+                      defaultValue={wt.costPerFoot}
+                      onBlur={(e) => handleInlineBlur(wt.id, "costPerFoot", e.target.value, wt.costPerFoot)}
+                      className="w-24"
+                      data-testid={`input-wire-cost-${wt.id}`}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Input
+                      key={`supplier-${wt.id}-${wt.supplier}`}
+                      defaultValue={wt.supplier || ""}
+                      onBlur={(e) => handleInlineBlur(wt.id, "supplier", e.target.value, wt.supplier)}
+                      className="min-w-[100px]"
+                      data-testid={`input-wire-supplier-${wt.id}`}
+                    />
                   </TableCell>
                   <TableCell>
                     <Button
@@ -716,7 +746,7 @@ function WireTypesTab() {
                 </TableRow>
               )) : (
                 <TableRow>
-                  <TableCell colSpan={3} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
                     No wire types found
                   </TableCell>
                 </TableRow>
@@ -1003,6 +1033,412 @@ function ServicesTab() {
   );
 }
 
+function CecDocumentsTab() {
+  const { toast } = useToast();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [docName, setDocName] = useState("");
+  const [docVersion, setDocVersion] = useState("");
+  const [docFile, setDocFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const { data: documents, isLoading } = useQuery<ComplianceDocument[]>({
+    queryKey: ["/api/compliance-documents"],
+  });
+
+  const uploadMutation = useMutation({
+    mutationFn: async () => {
+      if (!docFile) throw new Error("No file selected");
+      const formData = new FormData();
+      formData.append("name", docName || "CEC Document");
+      formData.append("version", docVersion);
+      formData.append("file", docFile);
+      const res = await fetch("/api/compliance-documents/upload", {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || res.statusText);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/compliance-documents"] });
+      toast({ title: "CEC document uploaded" });
+      setDialogOpen(false);
+      setDocName("");
+      setDocVersion("");
+      setDocFile(null);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("DELETE", `/api/compliance-documents/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/compliance-documents"] });
+      toast({ title: "Document deleted" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const formatFileSize = (bytes: number | null) => {
+    if (!bytes) return "-";
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  if (isLoading) {
+    return <div className="space-y-4"><Skeleton className="h-64" /></div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <Button onClick={() => setDialogOpen(true)} data-testid="button-upload-cec-document">
+          <Upload className="w-4 h-4 mr-2" />
+          Upload CEC Document
+        </Button>
+      </div>
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Version</TableHead>
+                <TableHead>File Size</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Uploaded</TableHead>
+                <TableHead>Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {documents && documents.length > 0 ? documents.map((doc) => (
+                <TableRow key={doc.id} data-testid={`row-cec-doc-${doc.id}`}>
+                  <TableCell className="font-medium" data-testid={`text-cec-name-${doc.id}`}>{doc.name}</TableCell>
+                  <TableCell data-testid={`text-cec-version-${doc.id}`}>{doc.version || "-"}</TableCell>
+                  <TableCell data-testid={`text-cec-size-${doc.id}`}>{formatFileSize(doc.fileSize)}</TableCell>
+                  <TableCell>
+                    <Badge
+                      variant={doc.isActive ? "default" : "secondary"}
+                      data-testid={`badge-cec-status-${doc.id}`}
+                    >
+                      {doc.isActive ? "Active" : "Inactive"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell data-testid={`text-cec-uploaded-${doc.id}`}>
+                    {new Date(doc.uploadedAt).toLocaleDateString()}
+                  </TableCell>
+                  <TableCell>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => deleteMutation.mutate(doc.id)}
+                      data-testid={`button-delete-cec-doc-${doc.id}`}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              )) : (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                    No CEC documents uploaded
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Upload CEC Document</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Name</Label>
+              <Input
+                value={docName}
+                onChange={(e) => setDocName(e.target.value)}
+                placeholder="CEC 2021"
+                data-testid="input-cec-doc-name"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Version</Label>
+              <Input
+                value={docVersion}
+                onChange={(e) => setDocVersion(e.target.value)}
+                placeholder="C22.1:21"
+                data-testid="input-cec-doc-version"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>File</Label>
+              <Input
+                ref={fileInputRef}
+                type="file"
+                onChange={(e) => setDocFile(e.target.files?.[0] || null)}
+                data-testid="input-cec-doc-file"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDialogOpen(false)}
+              data-testid="button-cancel-cec-upload"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => uploadMutation.mutate()}
+              disabled={uploadMutation.isPending || !docFile}
+              data-testid="button-submit-cec-upload"
+            >
+              {uploadMutation.isPending ? "Uploading..." : "Upload"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function SupplierImportTab() {
+  const { toast } = useToast();
+  const [supplierName, setSupplierName] = useState("");
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [previewData, setPreviewData] = useState<any>(null);
+  const [previewImportId, setPreviewImportId] = useState<number | null>(null);
+  const [skippedIndices, setSkippedIndices] = useState<Set<number>>(new Set());
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const { data: importHistory, isLoading } = useQuery<SupplierImport[]>({
+    queryKey: ["/api/supplier-imports"],
+  });
+
+  const uploadMutation = useMutation({
+    mutationFn: async () => {
+      if (!importFile) throw new Error("No file selected");
+      const formData = new FormData();
+      formData.append("supplierName", supplierName || "Unknown Supplier");
+      formData.append("file", importFile);
+      const res = await fetch("/api/supplier-imports/preview", {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || res.statusText);
+      }
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      setPreviewData(data.previewData);
+      setPreviewImportId(data.id);
+      setSkippedIndices(new Set());
+      toast({ title: "File processed", description: "Review items below before committing" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const commitMutation = useMutation({
+    mutationFn: async () => {
+      if (!previewImportId || !previewData) throw new Error("No preview data");
+      const items = (previewData.items || []).map((item: any, idx: number) => ({
+        ...item,
+        skip: skippedIndices.has(idx),
+      }));
+      const res = await apiRequest("POST", `/api/supplier-imports/${previewImportId}/commit`, { items });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/supplier-imports"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/device-assemblies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/wire-types"] });
+      toast({ title: "Import complete", description: data.message || "Items imported successfully" });
+      setPreviewData(null);
+      setPreviewImportId(null);
+      setSkippedIndices(new Set());
+      setImportFile(null);
+      setSupplierName("");
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const toggleSkip = (index: number) => {
+    setSkippedIndices(prev => {
+      const next = new Set(prev);
+      if (next.has(index)) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
+  };
+
+  if (isLoading) {
+    return <div className="space-y-4"><Skeleton className="h-64" /></div>;
+  }
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base font-semibold flex items-center gap-2">
+            <Upload className="w-4 h-4" />
+            Import Supplier Price List
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Supplier Name</Label>
+              <Input
+                value={supplierName}
+                onChange={(e) => setSupplierName(e.target.value)}
+                placeholder="e.g. Nedco, Sonepar"
+                data-testid="input-supplier-name"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>File (CSV or PDF)</Label>
+              <Input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv,.pdf"
+                onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+                data-testid="input-supplier-file"
+              />
+            </div>
+          </div>
+          <div className="flex justify-end">
+            <Button
+              onClick={() => uploadMutation.mutate()}
+              disabled={uploadMutation.isPending || !importFile}
+              data-testid="button-upload-supplier"
+            >
+              <Upload className="w-4 h-4 mr-2" />
+              {uploadMutation.isPending ? "Processing..." : "Upload & Preview"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {previewData && previewData.items && previewData.items.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base font-semibold flex items-center justify-between gap-2 flex-wrap">
+              <span>Preview ({previewData.items.length} items found)</span>
+              <Button
+                onClick={() => commitMutation.mutate()}
+                disabled={commitMutation.isPending}
+                data-testid="button-commit-import"
+              >
+                {commitMutation.isPending ? "Importing..." : "Commit Import"}
+              </Button>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-12">Skip</TableHead>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Category</TableHead>
+                  <TableHead>Cost</TableHead>
+                  <TableHead>Supplier</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {previewData.items.map((item: any, idx: number) => (
+                  <TableRow key={idx} data-testid={`row-preview-item-${idx}`} className={skippedIndices.has(idx) ? "opacity-50" : ""}>
+                    <TableCell>
+                      <Checkbox
+                        checked={skippedIndices.has(idx)}
+                        onCheckedChange={() => toggleSkip(idx)}
+                        data-testid={`checkbox-skip-item-${idx}`}
+                      />
+                    </TableCell>
+                    <TableCell className="font-medium" data-testid={`text-preview-name-${idx}`}>{item.name}</TableCell>
+                    <TableCell data-testid={`text-preview-category-${idx}`}>
+                      <Badge variant="outline" className="text-xs">{item.category || "materials"}</Badge>
+                    </TableCell>
+                    <TableCell data-testid={`text-preview-cost-${idx}`}>
+                      ${(item.materialCost || item.costPerFoot || 0).toFixed(2)}
+                    </TableCell>
+                    <TableCell data-testid={`text-preview-supplier-${idx}`}>{item.supplier || "-"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {importHistory && importHistory.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base font-semibold">Import History</CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Supplier</TableHead>
+                  <TableHead>File</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Imported</TableHead>
+                  <TableHead>Date</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {importHistory.map((imp) => (
+                  <TableRow key={imp.id} data-testid={`row-import-history-${imp.id}`}>
+                    <TableCell className="font-medium" data-testid={`text-import-supplier-${imp.id}`}>{imp.supplierName}</TableCell>
+                    <TableCell data-testid={`text-import-file-${imp.id}`}>{imp.fileName}</TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={imp.status === "completed" ? "default" : "secondary"}
+                        data-testid={`badge-import-status-${imp.id}`}
+                      >
+                        {imp.status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell data-testid={`text-import-count-${imp.id}`}>{imp.importedCount}</TableCell>
+                    <TableCell data-testid={`text-import-date-${imp.id}`}>
+                      {new Date(imp.createdAt).toLocaleDateString()}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const { toast } = useToast();
   const [form, setForm] = useState<SettingsData>(defaultSettings);
@@ -1080,6 +1516,14 @@ export default function SettingsPage() {
             <Wrench className="w-4 h-4 mr-2" />
             Services
           </TabsTrigger>
+          <TabsTrigger value="cec" data-testid="tab-cec">
+            <Shield className="w-4 h-4 mr-2" />
+            CEC
+          </TabsTrigger>
+          <TabsTrigger value="supplier-import" data-testid="tab-supplier-import">
+            <Upload className="w-4 h-4 mr-2" />
+            Supplier Import
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="general">
@@ -1101,6 +1545,14 @@ export default function SettingsPage() {
 
         <TabsContent value="services">
           <ServicesTab />
+        </TabsContent>
+
+        <TabsContent value="cec">
+          <CecDocumentsTab />
+        </TabsContent>
+
+        <TabsContent value="supplier-import">
+          <SupplierImportTab />
         </TabsContent>
       </Tabs>
     </div>

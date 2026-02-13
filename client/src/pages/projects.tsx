@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger
+  Dialog, DialogContent, DialogHeader, DialogTitle
 } from "@/components/ui/dialog";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue
@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/table";
 import {
   Plus, Search, FolderOpen, Zap, MapPin, Phone, Mail,
-  Building2, MoreHorizontal, Calendar, LayoutGrid, List
+  Building2, MoreHorizontal, Calendar, Users, List, ChevronDown, ChevronRight
 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger
@@ -29,16 +29,33 @@ import {
 import type { Project } from "@shared/schema";
 import { PROJECT_STATUSES, DWELLING_TYPES } from "@shared/schema";
 
+const STATUS_COLORS: Record<string, string> = {
+  draft: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
+  in_progress: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
+  bid_sent: "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300",
+  won: "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300",
+  lost: "bg-red-100 text-red-700 dark:bg-red-800 dark:text-red-300",
+};
+
+const STATUS_LABELS: Record<string, string> = {
+  draft: "Draft",
+  in_progress: "In Progress",
+  bid_sent: "Bid Sent",
+  won: "Won",
+  lost: "Lost",
+};
+
 function StatusBadge({ status }: { status: string }) {
-  const config: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
-    draft: { label: "Draft", variant: "secondary" },
-    in_progress: { label: "In Progress", variant: "default" },
-    bid_sent: { label: "Bid Sent", variant: "outline" },
-    won: { label: "Won", variant: "default" },
-    lost: { label: "Lost", variant: "destructive" },
-  };
-  const c = config[status] || { label: status, variant: "secondary" };
-  return <Badge variant={c.variant}>{c.label}</Badge>;
+  const colorClass = STATUS_COLORS[status] || STATUS_COLORS.draft;
+  const label = STATUS_LABELS[status] || status;
+  return (
+    <span
+      className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium ${colorClass}`}
+      data-testid={`badge-status-${status}`}
+    >
+      {label}
+    </span>
+  );
 }
 
 function DwellingBadge({ type }: { type: string }) {
@@ -187,8 +204,9 @@ function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onOpenChan
 export default function Projects() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [viewMode, setViewMode] = useState<"client" | "project">("client");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [expandedClients, setExpandedClients] = useState<Set<string>>(new Set());
   const [, navigate] = useLocation();
   const { toast } = useToast();
 
@@ -222,16 +240,67 @@ export default function Projects() {
     return matchSearch && matchStatus;
   });
 
+  const clientGroups = filtered.reduce<Record<string, Project[]>>((acc, p) => {
+    const client = p.clientName || "Unknown Client";
+    if (!acc[client]) acc[client] = [];
+    acc[client].push(p);
+    return acc;
+  }, {});
+
+  const toggleClient = (client: string) => {
+    setExpandedClients(prev => {
+      const next = new Set(prev);
+      if (next.has(client)) next.delete(client);
+      else next.add(client);
+      return next;
+    });
+  };
+
+  const toggleAllClients = () => {
+    const allKeys = Object.keys(clientGroups);
+    if (expandedClients.size === allKeys.length) {
+      setExpandedClients(new Set());
+    } else {
+      setExpandedClients(new Set(allKeys));
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="p-6 space-y-6">
         <Skeleton className="h-8 w-32" />
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {[1, 2, 3].map(i => <Skeleton key={i} className="h-48" />)}
+        <div className="space-y-4">
+          {[1, 2, 3].map(i => <Skeleton key={i} className="h-24" />)}
         </div>
       </div>
     );
   }
+
+  const ProjectActions = ({ project }: { project: Project }) => (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button size="icon" variant="ghost" data-testid={`button-menu-${project.id}`}>
+          <MoreHorizontal className="w-4 h-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onClick={() => navigate(`/projects/${project.id}`)}>
+          View Details
+        </DropdownMenuItem>
+        {PROJECT_STATUSES.filter(s => s !== project.status).map(s => (
+          <DropdownMenuItem key={s} onClick={() => updateStatusMutation.mutate({ id: project.id, status: s })}>
+            Mark {STATUS_LABELS[s]}
+          </DropdownMenuItem>
+        ))}
+        <DropdownMenuItem
+          onClick={() => deleteMutation.mutate(project.id)}
+          className="text-destructive"
+        >
+          Delete
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 
   return (
     <div className="p-6 space-y-6">
@@ -275,19 +344,19 @@ export default function Projects() {
         <div className="flex gap-1">
           <Button
             size="icon"
-            variant={viewMode === "grid" ? "default" : "ghost"}
-            onClick={() => setViewMode("grid")}
-            className={viewMode === "grid" ? "toggle-elevate toggle-elevated" : ""}
-            data-testid="button-view-grid"
+            variant={viewMode === "client" ? "default" : "ghost"}
+            onClick={() => setViewMode("client")}
+            className={viewMode === "client" ? "toggle-elevate toggle-elevated" : ""}
+            data-testid="button-view-client"
           >
-            <LayoutGrid className="w-4 h-4" />
+            <Users className="w-4 h-4" />
           </Button>
           <Button
             size="icon"
-            variant={viewMode === "list" ? "default" : "ghost"}
-            onClick={() => setViewMode("list")}
-            className={viewMode === "list" ? "toggle-elevate toggle-elevated" : ""}
-            data-testid="button-view-list"
+            variant={viewMode === "project" ? "default" : "ghost"}
+            onClick={() => setViewMode("project")}
+            className={viewMode === "project" ? "toggle-elevate toggle-elevated" : ""}
+            data-testid="button-view-project"
           >
             <List className="w-4 h-4" />
           </Button>
@@ -314,78 +383,103 @@ export default function Projects() {
             )}
           </CardContent>
         </Card>
-      ) : viewMode === "grid" ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filtered.map((project) => (
-            <Card
-              key={project.id}
-              className="hover-elevate active-elevate-2 cursor-pointer group"
-              data-testid={`card-project-${project.id}`}
-            >
-              <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0 pb-3">
-                <div className="flex items-center gap-3 min-w-0" onClick={() => navigate(`/projects/${project.id}`)}>
-                  <div className="flex items-center justify-center w-10 h-10 rounded-md bg-primary/10 dark:bg-primary/20 flex-shrink-0">
-                    <Zap className="w-5 h-5 text-primary" />
+      ) : viewMode === "client" ? (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm text-muted-foreground">
+              {Object.keys(clientGroups).length} client{Object.keys(clientGroups).length !== 1 ? "s" : ""}, {filtered.length} project{filtered.length !== 1 ? "s" : ""}
+            </p>
+            <Button variant="ghost" size="sm" onClick={toggleAllClients} data-testid="button-toggle-all-clients">
+              {expandedClients.size === Object.keys(clientGroups).length ? "Collapse All" : "Expand All"}
+            </Button>
+          </div>
+          {Object.entries(clientGroups).sort(([a], [b]) => a.localeCompare(b)).map(([client, clientProjects]) => {
+            const isExpanded = expandedClients.has(client);
+            const statusCounts = clientProjects.reduce<Record<string, number>>((acc, p) => {
+              acc[p.status] = (acc[p.status] || 0) + 1;
+              return acc;
+            }, {});
+
+            return (
+              <Card key={client} data-testid={`card-client-${client}`}>
+                <div
+                  className="flex items-center justify-between gap-3 p-4 cursor-pointer hover-elevate"
+                  onClick={() => toggleClient(client)}
+                  data-testid={`button-toggle-client-${client}`}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    {isExpanded ? <ChevronDown className="w-4 h-4 flex-shrink-0" /> : <ChevronRight className="w-4 h-4 flex-shrink-0" />}
+                    <div className="flex items-center justify-center w-9 h-9 rounded-md bg-primary/10 dark:bg-primary/20 flex-shrink-0">
+                      <Users className="w-4 h-4 text-primary" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold" data-testid={`text-client-name-${client}`}>{client}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {clientProjects.length} project{clientProjects.length !== 1 ? "s" : ""}
+                        {clientProjects[0]?.clientEmail ? ` · ${clientProjects[0].clientEmail}` : ""}
+                      </p>
+                    </div>
                   </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold truncate">{project.name}</p>
-                    <p className="text-xs text-muted-foreground truncate">{project.clientName}</p>
+                  <div className="flex items-center gap-1.5 flex-shrink-0 flex-wrap">
+                    {Object.entries(statusCounts).map(([status, count]) => (
+                      <StatusBadge key={status} status={status} />
+                    ))}
                   </div>
                 </div>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button size="icon" variant="ghost" data-testid={`button-menu-${project.id}`}>
-                      <MoreHorizontal className="w-4 h-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={() => navigate(`/projects/${project.id}`)}>
-                      View Details
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => updateStatusMutation.mutate({ id: project.id, status: "in_progress" })}>
-                      Mark In Progress
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => updateStatusMutation.mutate({ id: project.id, status: "bid_sent" })}>
-                      Mark Bid Sent
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => updateStatusMutation.mutate({ id: project.id, status: "won" })}>
-                      Mark Won
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => deleteMutation.mutate(project.id)}
-                      className="text-destructive"
-                    >
-                      Delete
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </CardHeader>
-              <CardContent onClick={() => navigate(`/projects/${project.id}`)}>
-                <div className="space-y-3">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <StatusBadge status={project.status} />
-                    <DwellingBadge type={project.dwellingType} />
+                {isExpanded && (
+                  <div className="border-t">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Project</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Type</TableHead>
+                          <TableHead>Address</TableHead>
+                          <TableHead>Created</TableHead>
+                          <TableHead></TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {clientProjects.map(project => (
+                          <TableRow
+                            key={project.id}
+                            className="cursor-pointer"
+                            data-testid={`row-project-${project.id}`}
+                          >
+                            <TableCell onClick={() => navigate(`/projects/${project.id}`)}>
+                              <div className="flex items-center gap-2">
+                                <Zap className="w-4 h-4 text-primary flex-shrink-0" />
+                                <span className="text-sm font-medium">{project.name}</span>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <StatusBadge status={project.status} />
+                            </TableCell>
+                            <TableCell>
+                              <DwellingBadge type={project.dwellingType} />
+                            </TableCell>
+                            <TableCell onClick={() => navigate(`/projects/${project.id}`)}>
+                              <span className="text-sm text-muted-foreground truncate max-w-[200px] block">
+                                {project.address || "-"}
+                              </span>
+                            </TableCell>
+                            <TableCell>
+                              <span className="text-sm text-muted-foreground">
+                                {new Date(project.createdAt).toLocaleDateString("en-CA")}
+                              </span>
+                            </TableCell>
+                            <TableCell>
+                              <ProjectActions project={project} />
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
                   </div>
-                  {project.address && (
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <MapPin className="w-3 h-3 flex-shrink-0" />
-                      <span className="truncate">{project.address}</span>
-                    </div>
-                  )}
-                  {project.clientPhone && (
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <Phone className="w-3 h-3 flex-shrink-0" />
-                      <span>{project.clientPhone}</span>
-                    </div>
-                  )}
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <Calendar className="w-3 h-3 flex-shrink-0" />
-                    <span>{new Date(project.createdAt).toLocaleDateString("en-CA")}</span>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                )}
+              </Card>
+            );
+          })}
         </div>
       ) : (
         <Card>
@@ -436,33 +530,7 @@ export default function Projects() {
                         </span>
                       </TableCell>
                       <TableCell>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button size="icon" variant="ghost" data-testid={`button-list-menu-${project.id}`}>
-                              <MoreHorizontal className="w-4 h-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => navigate(`/projects/${project.id}`)}>
-                              View Details
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => updateStatusMutation.mutate({ id: project.id, status: "in_progress" })}>
-                              Mark In Progress
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => updateStatusMutation.mutate({ id: project.id, status: "bid_sent" })}>
-                              Mark Bid Sent
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => updateStatusMutation.mutate({ id: project.id, status: "won" })}>
-                              Mark Won
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => deleteMutation.mutate(project.id)}
-                              className="text-destructive"
-                            >
-                              Delete
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                        <ProjectActions project={project} />
                       </TableCell>
                     </TableRow>
                   ))}
