@@ -19,7 +19,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
   Upload, ScanLine, Zap, FileImage, CheckCircle2,
   Lightbulb, Plug, ToggleLeft, ShieldAlert, Wifi, Clock,
-  DoorOpen, ChevronRight, ArrowLeft, Sparkles, Plus
+  DoorOpen, ChevronRight, ArrowLeft, Sparkles, Plus, Trash2
 } from "lucide-react";
 import type { Project, AiAnalysis } from "@shared/schema";
 
@@ -102,6 +102,19 @@ export default function AiAnalysisPage() {
     },
     onError: (err: Error) => {
       toast({ title: "Analysis Failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deleteAnalysisMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("DELETE", `/api/ai-analyses/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ai-analyses"] });
+      toast({ title: "Analysis deleted" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
     },
   });
 
@@ -404,6 +417,14 @@ export default function AiAnalysisPage() {
                           >
                             {statusLabel}
                           </Badge>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            onClick={(e) => { e.stopPropagation(); deleteAnalysisMutation.mutate(analysis.id); }}
+                            data-testid={`button-delete-analysis-${analysis.id}`}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
                         </div>
                       </div>
                     );

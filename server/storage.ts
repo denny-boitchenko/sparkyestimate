@@ -47,6 +47,7 @@ export interface IStorage {
   getAiAnalysesByProject(projectId: number): Promise<AiAnalysis[]>;
   createAiAnalysis(data: InsertAiAnalysis): Promise<AiAnalysis>;
   updateAiAnalysis(id: number, data: Partial<InsertAiAnalysis>): Promise<AiAnalysis | undefined>;
+  deleteAiAnalysis(id: number): Promise<void>;
 
   getSettings(): Promise<Setting[]>;
   upsertSetting(key: string, value: string): Promise<void>;
@@ -193,6 +194,10 @@ export class DatabaseStorage implements IStorage {
   async updateAiAnalysis(id: number, data: Partial<InsertAiAnalysis>): Promise<AiAnalysis | undefined> {
     const [analysis] = await db.update(aiAnalyses).set(data).where(eq(aiAnalyses.id, id)).returning();
     return analysis;
+  }
+
+  async deleteAiAnalysis(id: number): Promise<void> {
+    await db.delete(aiAnalyses).where(eq(aiAnalyses.id, id));
   }
 
   async getSettings(): Promise<Setting[]> {

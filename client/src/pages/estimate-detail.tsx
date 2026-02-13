@@ -26,7 +26,7 @@ import {
 import {
   ArrowLeft, Plus, Trash2, DollarSign, Clock, Cable,
   Package, Zap, ShieldCheck, Wrench, RefreshCw, Play,
-  Download, FileText, FileSpreadsheet
+  Download, FileText, FileSpreadsheet, ScanLine
 } from "lucide-react";
 import type {
   Estimate, EstimateItem, DeviceAssembly, PanelCircuit,
@@ -183,42 +183,458 @@ export default function EstimateDetail() {
     },
   });
 
-  const handleExport = async (type: "material-list" | "client-estimate" | "cec-report") => {
+  const handleExportClientEstimate = async () => {
     try {
-      const res = await apiRequest("GET", `/api/estimates/${estimateId}/export/${type}`);
+      const res = await apiRequest("GET", `/api/estimates/${estimateId}/export/client-estimate`);
       const data = await res.json();
       const { jsPDF } = await import("jspdf");
       await import("jspdf-autotable");
       const doc = new jsPDF();
+      const pw = doc.internal.pageSize.getWidth();
+      const ph = doc.internal.pageSize.getHeight();
+
+      const settingsRes = await apiRequest("GET", "/api/settings");
+      const settingsArr = await settingsRes.json();
+      const sm: Record<string, string> = {};
+      (settingsArr || []).forEach((s: any) => { sm[s.key] = s.value; });
+
+      const companyName = sm.companyName || data.company?.name || "SparkyEstimate";
+      const companyPhone = sm.companyPhone || data.company?.phone || "";
+      const companyEmail = sm.companyEmail || data.company?.email || "";
+      const companyAddress = sm.companyAddress || "";
+      const gstRate = parseFloat(sm.gstRate || "5") / 100;
+      const gstLabel = sm.gstLabel || "GST 5%";
+
+      doc.setFillColor(80, 80, 80);
+      doc.rect(pw - 70, 10, 60, 24, "F");
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "bold");
+      doc.text("ESTIMATE", pw - 65, 18);
+      doc.text("ESTIMATE DATE", pw - 65, 23);
+      doc.text("TOTAL", pw - 65, 28);
+      doc.setFont("helvetica", "normal");
+      doc.text(`#${estimateId}`, pw - 15, 18, { align: "right" });
+      doc.text(new Date().toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }), pw - 15, 23, { align: "right" });
+      doc.setFont("helvetica", "bold");
+      doc.text(`$${data.summary?.grandTotal?.toFixed(2) || "0.00"}`, pw - 15, 28, { align: "right" });
+
+      doc.setTextColor(0, 0, 0);
       doc.setFontSize(16);
-      doc.text(data.title || `${type} Export`, 14, 20);
-      doc.setFontSize(10);
-      doc.text(`Estimate: ${estimate?.name || ""}`, 14, 30);
-      doc.text(`Date: ${new Date().toLocaleDateString("en-CA")}`, 14, 36);
+      doc.setFont("helvetica", "bold");
+      doc.text(companyName, 14, 20);
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      let cy = 30;
+      if (companyAddress) { doc.text(companyAddress, 14, cy); cy += 5; }
+      if (companyPhone) { doc.text(companyPhone, 14, cy); cy += 5; }
+      if (companyEmail) { doc.text(companyEmail, 14, cy); cy += 5; }
 
-      let yPos = 45;
-      if (data.items && data.items.length > 0) {
-        const headers = Object.keys(data.items[0]);
-        const rows = data.items.map((item: any) => headers.map(h => String(item[h] ?? "")));
+      const clientY = 50;
+      if (data.project) {
+        doc.setFillColor(240, 240, 240);
+        doc.rect(pw / 2, clientY - 5, pw / 2 - 14, 25, "F");
+        doc.setFontSize(8);
+        doc.setFont("helvetica", "bold");
+        doc.text("CONTACT US", pw / 2 + 4, clientY);
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(9);
+        if (data.project.clientName) doc.text(data.project.clientName, pw / 2 + 4, clientY + 6);
+        if (data.project.clientPhone) doc.text(data.project.clientPhone, pw / 2 + 4, clientY + 12);
+        if (data.project.clientEmail) doc.text(data.project.clientEmail, pw / 2 + 4, clientY + 18);
+
+        doc.setFontSize(9);
+        doc.text(data.project.clientName || "", 14, clientY + 6);
+        if (data.project.address) doc.text(data.project.address, 14, clientY + 12);
+      }
+
+      let startY = 85;
+      doc.setFontSize(12);
+      doc.setFont("helvetica", "bold");
+      doc.text("ESTIMATE", 14, startY);
+      startY += 5;
+
+      const serviceRows: any[] = [];
+      if (data.lineItems && data.lineItems.length > 0) {
+        const roomGroups: Record<string, typeof data.lineItems> = {};
+        for (const item of data.lineItems) {
+          const room = item.room || "General";
+          if (!roomGroups[room]) roomGroups[room] = [];
+          roomGroups[room].push(item);
+        }
+        for (const [room, roomItems] of Object.entries(roomGroups)) {
+          const roomTotal = (roomItems as any[]).reduce((s: number, i: any) => s + (i.total || 0), 0);
+          const descs = (roomItems as any[]).map((i: any) => `${i.quantity}x ${i.deviceType}`).join(", ");
+          serviceRows.push([
+            `Supply and install electrical for ${room}`,
+            `$${roomTotal.toFixed(2)}`
+          ]);
+          serviceRows.push([
+            { content: descs, styles: { fontSize: 7, textColor: [100, 100, 100], cellPadding: { left: 4, top: 1, bottom: 3, right: 2 } } },
+            ""
+          ]);
+        }
+      }
+      if (data.services && data.services.length > 0) {
+        for (const svc of data.services) {
+          serviceRows.push([svc.name, `$${svc.total?.toFixed(2) || "0.00"}`]);
+        }
+      }
+
+      if (serviceRows.length > 0) {
         (doc as any).autoTable({
-          head: [headers],
-          body: rows,
-          startY: yPos,
-          styles: { fontSize: 8 },
-          headStyles: { fillColor: [41, 98, 255] },
+          startY,
+          head: [
+            [
+              { content: "Services", styles: { fillColor: [255, 152, 0], textColor: [255, 255, 255], fontStyle: "bold" } },
+              { content: "Amount", styles: { fillColor: [255, 152, 0], textColor: [255, 255, 255], fontStyle: "bold", halign: "right" } }
+            ]
+          ],
+          body: serviceRows,
+          theme: "plain",
+          styles: { fontSize: 9, cellPadding: 3 },
+          columnStyles: { 0: { cellWidth: pw - 70 }, 1: { cellWidth: 42, halign: "right" } },
+          alternateRowStyles: {},
         });
       }
 
-      if (data.summary) {
-        const finalY = (doc as any).lastAutoTable?.finalY || yPos + 10;
-        doc.setFontSize(10);
-        Object.entries(data.summary).forEach(([key, val], i) => {
-          doc.text(`${key}: ${val}`, 14, finalY + 10 + i * 6);
+      let finalY = (doc as any).lastAutoTable?.finalY || startY + 20;
+      finalY += 5;
+
+      const servicesSubtotal = data.summary?.grandTotal ? (data.summary.grandTotal / (1 + gstRate)) : 0;
+      const taxAmount = data.summary?.grandTotal ? data.summary.grandTotal - servicesSubtotal : 0;
+
+      doc.setDrawColor(200, 200, 200);
+      doc.line(pw / 2, finalY, pw - 14, finalY);
+      finalY += 5;
+      const summaryX = pw / 2 + 5;
+      const valX = pw - 15;
+
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+
+      const summaryLines = [
+        { label: "Services subtotal:", value: `$${servicesSubtotal.toFixed(2)}` },
+      ];
+
+      doc.setFontSize(10);
+      finalY += 3;
+      doc.setFont("helvetica", "bold");
+      doc.text("Subtotal", summaryX, finalY);
+      doc.text(`$${servicesSubtotal.toFixed(2)}`, valX, finalY, { align: "right" });
+
+      finalY += 6;
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.text(`Tax (${gstLabel})`, summaryX, finalY);
+      doc.text(`$${taxAmount.toFixed(2)}`, valX, finalY, { align: "right" });
+
+      finalY += 8;
+      doc.setDrawColor(200, 200, 200);
+      doc.line(summaryX, finalY - 3, valX, finalY - 3);
+      doc.setFontSize(14);
+      doc.setFont("helvetica", "bold");
+      doc.text("Total", summaryX, finalY + 2);
+      doc.text(`$${data.summary?.grandTotal?.toFixed(2) || "0.00"}`, valX, finalY + 2, { align: "right" });
+
+      doc.setFontSize(7);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(128, 128, 128);
+      doc.text(`${companyName}`, 14, ph - 12);
+      doc.text(`${companyEmail || companyPhone}`, pw / 2, ph - 12, { align: "center" });
+      doc.text(`1 of 1`, pw - 14, ph - 12, { align: "right" });
+
+      doc.save(`Client-Estimate-${estimateId}.pdf`);
+      toast({ title: "Client Estimate PDF exported" });
+    } catch (err: any) {
+      toast({ title: "Export failed", description: err.message, variant: "destructive" });
+    }
+  };
+
+  const handleExportMaterialList = async () => {
+    try {
+      const res = await apiRequest("GET", `/api/estimates/${estimateId}/export/material-list`);
+      const data = await res.json();
+      const { jsPDF } = await import("jspdf");
+      await import("jspdf-autotable");
+      const doc = new jsPDF({ orientation: "landscape" });
+      const pw = doc.internal.pageSize.getWidth();
+
+      const projectName = data.project?.name || "Untitled Project";
+      doc.setFontSize(14);
+      doc.setFont("helvetica", "bold");
+      doc.text(projectName, 14, 15);
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "italic");
+      doc.text("Contractor Material List", 14, 21);
+
+      const deviceMap = new Map<string, { description: string; qty: number; boxType: string; coverPlate: string; wireType: string; wireFootage: number; }>();
+      const miscPartsMap = new Map<string, number>();
+      const wireMap = new Map<string, number>();
+      const assemblies = (await (await apiRequest("GET", "/api/device-assemblies")).json()) as any[];
+      const assemblyMap = new Map<string, any>();
+      for (const a of assemblies) assemblyMap.set(a.name, a);
+
+      for (const item of (data.items || [])) {
+        const key = item.deviceType;
+        const assembly = assemblyMap.get(key);
+        if (deviceMap.has(key)) {
+          const e = deviceMap.get(key)!;
+          e.qty += item.quantity;
+        } else {
+          deviceMap.set(key, {
+            description: assembly?.device || item.description || key,
+            qty: item.quantity,
+            boxType: assembly?.boxType || item.boxType || "N/A",
+            coverPlate: assembly?.coverPlate || item.coverPlate || "N/A",
+            wireType: item.wireType || "14/2 NM-B",
+            wireFootage: item.wireFootage || 15,
+          });
+        }
+        if (assembly?.miscParts) {
+          const parts = String(assembly.miscParts).split(",").map((s: string) => s.trim());
+          for (const p of parts) {
+            if (p) miscPartsMap.set(p, (miscPartsMap.get(p) || 0) + item.quantity);
+          }
+        }
+        const wt = item.wireType || "14/2 NM-B";
+        const totalFeet = item.quantity * (item.wireFootage || 15);
+        wireMap.set(wt, (wireMap.get(wt) || 0) + totalFeet);
+      }
+
+      const tableRows = Array.from(deviceMap.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([name, d]) => [
+          name, d.qty, d.description, d.boxType, d.coverPlate, d.wireType,
+          d.wireFootage, d.qty * d.wireFootage
+        ]);
+
+      (doc as any).autoTable({
+        startY: 26,
+        head: [[
+          { content: "Item", styles: { fillColor: [101, 67, 33] } },
+          { content: "Qty", styles: { fillColor: [101, 67, 33] } },
+          { content: "Device Description", styles: { fillColor: [101, 67, 33] } },
+          { content: "Box Type", styles: { fillColor: [101, 67, 33] } },
+          { content: "Cover Plate", styles: { fillColor: [101, 67, 33] } },
+          { content: "Wire Type", styles: { fillColor: [101, 67, 33] } },
+          { content: "Wire (ft/ea)", styles: { fillColor: [101, 67, 33] } },
+          { content: "Wire Total (ft)", styles: { fillColor: [101, 67, 33] } },
+        ]],
+        body: tableRows,
+        styles: { fontSize: 7, cellPadding: 2 },
+        headStyles: { textColor: [255, 255, 255], fontStyle: "bold", fontSize: 7 },
+        alternateRowStyles: { fillColor: [245, 245, 245] },
+      });
+
+      let miscY = (doc as any).lastAutoTable?.finalY + 10;
+
+      if (miscPartsMap.size > 0) {
+        doc.setFontSize(11);
+        doc.setFont("helvetica", "bold");
+        doc.text("MISC PARTS SUMMARY", 14, miscY);
+        miscY += 3;
+
+        const miscRows = Array.from(miscPartsMap.entries())
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([part, qty]) => [part, qty]);
+
+        (doc as any).autoTable({
+          startY: miscY,
+          head: [[
+            { content: "Part", styles: { fillColor: [101, 67, 33] } },
+            { content: "Qty Needed", styles: { fillColor: [101, 67, 33] } },
+          ]],
+          body: miscRows,
+          styles: { fontSize: 7, cellPadding: 2 },
+          headStyles: { textColor: [255, 255, 255], fontStyle: "bold", fontSize: 7 },
+          columnStyles: { 0: { cellWidth: 80 }, 1: { cellWidth: 30 } },
         });
       }
 
-      doc.save(`${type}-${estimateId}.pdf`);
-      toast({ title: "PDF exported successfully" });
+      doc.addPage("landscape");
+
+      doc.setFillColor(0, 128, 0);
+      doc.rect(14, 12, 120, 8, "F");
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(12);
+      doc.setFont("helvetica", "bold");
+      doc.text("Wire Purchase List", 18, 18);
+      doc.setTextColor(0, 0, 0);
+      doc.setFontSize(8);
+      doc.setFont("helvetica", "italic");
+      doc.text("(includes 15% waste factor)", 18, 25);
+
+      const wasteFactor = 1.15;
+      const wireRows = Array.from(wireMap.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([wt, totalFt]) => {
+          const withWaste = Math.ceil(totalFt * wasteFactor);
+          const metres = Math.ceil(withWaste * 0.3048);
+          const spools150 = Math.ceil(metres / 150);
+          const spools75 = Math.ceil(metres / 75);
+          return [wt, withWaste, metres, spools150, spools75];
+        });
+
+      (doc as any).autoTable({
+        startY: 30,
+        head: [[
+          { content: "Wire Type", styles: { fillColor: [255, 140, 0] } },
+          { content: "Total Feet", styles: { fillColor: [255, 140, 0] } },
+          { content: "Total Metres", styles: { fillColor: [255, 140, 0] } },
+          { content: "Spools (150m)", styles: { fillColor: [255, 140, 0] } },
+          { content: "Spools (75m)", styles: { fillColor: [255, 140, 0] } },
+        ]],
+        body: wireRows,
+        styles: { fontSize: 8, cellPadding: 3 },
+        headStyles: { textColor: [255, 255, 255], fontStyle: "bold", fontSize: 8 },
+      });
+
+      doc.save(`Material-List-${estimateId}.pdf`);
+      toast({ title: "Material List PDF exported" });
+    } catch (err: any) {
+      toast({ title: "Export failed", description: err.message, variant: "destructive" });
+    }
+  };
+
+  const handleExportCecReport = async () => {
+    try {
+      const res = await apiRequest("GET", `/api/estimates/${estimateId}/export/cec-report`);
+      const data = await res.json();
+      const { jsPDF } = await import("jspdf");
+      await import("jspdf-autotable");
+      const doc = new jsPDF();
+      const pw = doc.internal.pageSize.getWidth();
+
+      doc.setFontSize(22);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(44, 82, 130);
+      doc.text("CEC 2021 COMPLIANCE CHECK", pw / 2, 25, { align: "center" });
+
+      doc.setTextColor(0, 0, 0);
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "normal");
+      doc.text(data.project?.name || "Untitled Project", 14, 38);
+      doc.text(`Date: ${new Date().toLocaleDateString("en-CA", { month: "long", day: "numeric", year: "numeric" })}`, 14, 44);
+
+      let y = 55;
+      doc.setFontSize(14);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(44, 82, 130);
+      doc.text("Compliance Summary", 14, y);
+      doc.setDrawColor(44, 82, 130);
+      doc.line(14, y + 2, 90, y + 2);
+
+      y += 12;
+      doc.setTextColor(0, 0, 0);
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "normal");
+
+      const summary = data.summary || { total: 0, pass: 0, warn: 0, fail: 0, info: 0 };
+      const summaryItems = [
+        { label: "Total Checks", value: String(summary.total) },
+        { label: "Passes", value: String(summary.pass), color: [34, 139, 34] as [number, number, number] },
+        { label: "Warnings", value: String(summary.warn), color: [200, 150, 0] as [number, number, number] },
+        { label: "Failures", value: String(summary.fail), color: [200, 0, 0] as [number, number, number] },
+      ];
+
+      for (const item of summaryItems) {
+        doc.text(item.label, 30, y);
+        if (item.color) {
+          doc.setTextColor(...item.color);
+        }
+        doc.text(item.value, pw - 30, y, { align: "right" });
+        doc.setTextColor(0, 0, 0);
+        y += 7;
+      }
+
+      const score = summary.total > 0 ? Math.round((summary.pass / summary.total) * 100) : 0;
+      doc.setFont("helvetica", "bold");
+      doc.text("Compliance Score", 30, y);
+      doc.setTextColor(score >= 80 ? 34 : score >= 50 ? 200 : 200, score >= 80 ? 139 : score >= 50 ? 150 : 0, score >= 80 ? 34 : 0);
+      doc.setFontSize(12);
+      doc.text(`${score}%`, pw - 30, y, { align: "right" });
+
+      y += 15;
+      doc.setTextColor(0, 0, 0);
+
+      const infoRules = (data.rules || []).filter((r: any) => r.status === "INFO" || r.status === "WARN");
+      if (infoRules.length > 0) {
+        doc.setFontSize(14);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(44, 82, 130);
+        doc.text("Information Notes", 14, y);
+        doc.setDrawColor(44, 82, 130);
+        doc.line(14, y + 2, 80, y + 2);
+        y += 8;
+
+        doc.setTextColor(0, 0, 0);
+        for (const rule of infoRules) {
+          if (y > 260) { doc.addPage(); y = 20; }
+
+          doc.setFillColor(rule.status === "WARN" ? 255 : 230, rule.status === "WARN" ? 248 : 240, rule.status === "WARN" ? 220 : 250);
+          doc.rect(14, y - 4, pw - 28, 14, "F");
+
+          doc.setFontSize(8);
+          doc.setFont("helvetica", "bold");
+          doc.setTextColor(rule.status === "WARN" ? 180 : 44, rule.status === "WARN" ? 120 : 82, rule.status === "WARN" ? 0 : 130);
+          doc.text(rule.status, 18, y);
+          doc.setTextColor(0, 0, 0);
+          doc.setFont("helvetica", "normal");
+          doc.text(rule.rule, 38, y);
+          doc.text(rule.location, 100, y);
+          doc.setFontSize(7);
+          doc.text(rule.description, 38, y + 5);
+
+          doc.setFontSize(7);
+          doc.setFont("helvetica", "italic");
+          doc.setTextColor(100, 100, 100);
+          doc.text("Fix:", 18, y + 8);
+          const fix = rule.status === "WARN" ? `Verify ${rule.rule.split(" - ")[1] || "requirements"} during rough-in.`
+            : `Confirm ${rule.description.split(".")[0].toLowerCase()}.`;
+          doc.text(fix, 30, y + 8);
+          doc.setTextColor(0, 0, 0);
+
+          y += 18;
+        }
+      }
+
+      y += 5;
+      const passRules = (data.rules || []).filter((r: any) => r.status === "PASS");
+      if (passRules.length > 0) {
+        if (y > 240) { doc.addPage(); y = 20; }
+        doc.setFontSize(14);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(44, 82, 130);
+        doc.text("Passed Checks", 14, y);
+        doc.setDrawColor(44, 82, 130);
+        doc.line(14, y + 2, 70, y + 2);
+        y += 5;
+
+        const passRows = passRules.map((r: any) => [r.rule, r.location, r.description]);
+        (doc as any).autoTable({
+          startY: y,
+          head: [[
+            { content: "Rule", styles: { fillColor: [44, 82, 130] } },
+            { content: "Location", styles: { fillColor: [44, 82, 130] } },
+            { content: "Description", styles: { fillColor: [44, 82, 130] } },
+          ]],
+          body: passRows,
+          styles: { fontSize: 7, cellPadding: 3 },
+          headStyles: { textColor: [255, 255, 255], fontStyle: "bold", fontSize: 7 },
+          alternateRowStyles: { fillColor: [230, 245, 230] },
+        });
+      }
+
+      const ph = doc.internal.pageSize.getHeight();
+      doc.setFontSize(7);
+      doc.setFont("helvetica", "italic");
+      doc.setTextColor(128, 128, 128);
+      doc.text("Generated by SparkyEstimate - CEC 2021 Compliance Check", pw / 2, ph - 15, { align: "center" });
+      doc.text("This report is for reference only. A licensed electrician should verify all code compliance.", pw / 2, ph - 10, { align: "center" });
+
+      doc.save(`CEC-Report-${estimateId}.pdf`);
+      toast({ title: "CEC Report PDF exported" });
     } catch (err: any) {
       toast({ title: "Export failed", description: err.message, variant: "destructive" });
     }
@@ -311,9 +727,13 @@ export default function EstimateDetail() {
           </Button>
         </Link>
         <div className="flex-1 min-w-0">
-          <h1 className="text-2xl font-bold tracking-tight truncate" data-testid="text-estimate-name">
-            {estimate.name}
-          </h1>
+          <Input
+            className="text-2xl font-bold tracking-tight border-none shadow-none p-0 h-auto focus-visible:ring-0 bg-transparent"
+            defaultValue={estimate.name}
+            key={`name-${estimate.id}-${estimate.name}`}
+            onBlur={(e) => { if (e.target.value !== estimate.name) updateEstimateMutation.mutate({ name: e.target.value }); }}
+            data-testid="input-estimate-name"
+          />
           <p className="text-sm text-muted-foreground">
             Created {new Date(estimate.createdAt).toLocaleDateString("en-CA")}
           </p>
@@ -327,15 +747,15 @@ export default function EstimateDetail() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => handleExport("material-list")} data-testid="button-export-material">
+              <DropdownMenuItem onClick={() => handleExportMaterialList()} data-testid="button-export-material">
                 <FileText className="w-4 h-4 mr-2" />
                 Material List PDF
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleExport("client-estimate")} data-testid="button-export-client">
+              <DropdownMenuItem onClick={() => handleExportClientEstimate()} data-testid="button-export-client">
                 <FileText className="w-4 h-4 mr-2" />
                 Client Estimate PDF
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleExport("cec-report")} data-testid="button-export-cec">
+              <DropdownMenuItem onClick={() => handleExportCecReport()} data-testid="button-export-cec">
                 <FileText className="w-4 h-4 mr-2" />
                 CEC Report PDF
               </DropdownMenuItem>
@@ -473,6 +893,10 @@ export default function EstimateDetail() {
           <TabsTrigger value="services" data-testid="tab-services">
             <Wrench className="w-4 h-4 mr-1" />
             Services
+          </TabsTrigger>
+          <TabsTrigger value="ai-analysis" data-testid="tab-ai-analysis">
+            <ScanLine className="w-4 h-4 mr-1" />
+            AI Analysis
           </TabsTrigger>
         </TabsList>
 
@@ -1015,6 +1439,31 @@ export default function EstimateDetail() {
               </CardContent>
             </Card>
           )}
+        </TabsContent>
+
+        <TabsContent value="ai-analysis">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
+              <CardTitle className="text-base font-semibold">AI Drawing Analysis</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-col items-center justify-center py-12 text-center">
+                <div className="flex items-center justify-center w-12 h-12 rounded-md bg-primary/10 dark:bg-primary/20 mb-3">
+                  <ScanLine className="w-6 h-6 text-primary" />
+                </div>
+                <p className="text-sm font-medium">Analyze drawings with AI</p>
+                <p className="text-xs text-muted-foreground mt-1 mb-4">
+                  Upload electrical drawings or floor plans to auto-detect devices and generate line items
+                </p>
+                <Link href="/ai-analysis">
+                  <Button data-testid="button-go-ai-analysis">
+                    <ScanLine className="w-4 h-4 mr-2" />
+                    Open AI Analysis
+                  </Button>
+                </Link>
+              </div>
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
 

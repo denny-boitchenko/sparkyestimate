@@ -294,15 +294,16 @@ function MaterialsTab() {
     mutationFn: async (data: DeviceFormData) => {
       await apiRequest("POST", "/api/device-assemblies", {
         name: data.name,
-        category: data.category,
-        device: data.device,
-        boxType: data.boxType || null,
-        coverPlate: data.coverPlate || null,
-        miscParts: data.miscParts || null,
-        wireType: data.wireType || null,
-        wireFootage: parseFloat(data.wireFootage) || 0,
-        laborHours: parseFloat(data.laborHours) || 0,
+        category: "receptacles",
+        device: data.name,
+        boxType: null,
+        coverPlate: null,
+        miscParts: null,
+        wireType: null,
+        wireFootage: 15,
+        laborHours: 0.18,
         materialCost: parseFloat(data.materialCost) || 0,
+        supplier: data.miscParts || null,
       });
     },
     onSuccess: () => {
@@ -376,13 +377,8 @@ function MaterialsTab() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Category</TableHead>
                 <TableHead>Device</TableHead>
-                <TableHead>Material $</TableHead>
-                <TableHead>Labor Hrs</TableHead>
-                <TableHead>Wire Type</TableHead>
-                <TableHead>Wire Ft</TableHead>
+                <TableHead>Cost</TableHead>
                 <TableHead>Supplier</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -399,16 +395,6 @@ function MaterialsTab() {
                       data-testid={`input-device-name-${a.id}`}
                     />
                   </TableCell>
-                  <TableCell><Badge variant="outline" className="text-xs">{a.category}</Badge></TableCell>
-                  <TableCell>
-                    <Input
-                      key={`device-${a.id}-${a.device}`}
-                      defaultValue={a.device}
-                      onBlur={(e) => handleInlineBlur(a.id, "device", e.target.value, a.device)}
-                      className="min-w-[120px]"
-                      data-testid={`input-device-device-${a.id}`}
-                    />
-                  </TableCell>
                   <TableCell>
                     <Input
                       key={`materialCost-${a.id}-${a.materialCost}`}
@@ -418,37 +404,6 @@ function MaterialsTab() {
                       onBlur={(e) => handleInlineBlur(a.id, "materialCost", e.target.value, a.materialCost)}
                       className="w-24"
                       data-testid={`input-device-material-${a.id}`}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <Input
-                      key={`laborHours-${a.id}-${a.laborHours}`}
-                      type="number"
-                      step="0.01"
-                      defaultValue={a.laborHours}
-                      onBlur={(e) => handleInlineBlur(a.id, "laborHours", e.target.value, a.laborHours)}
-                      className="w-20"
-                      data-testid={`input-device-labor-${a.id}`}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <Input
-                      key={`wireType-${a.id}-${a.wireType}`}
-                      defaultValue={a.wireType || ""}
-                      onBlur={(e) => handleInlineBlur(a.id, "wireType", e.target.value, a.wireType)}
-                      className="min-w-[100px]"
-                      data-testid={`input-device-wire-${a.id}`}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <Input
-                      key={`wireFootage-${a.id}-${a.wireFootage}`}
-                      type="number"
-                      step="0.1"
-                      defaultValue={a.wireFootage}
-                      onBlur={(e) => handleInlineBlur(a.id, "wireFootage", e.target.value, a.wireFootage)}
-                      className="w-20"
-                      data-testid={`input-device-footage-${a.id}`}
                     />
                   </TableCell>
                   <TableCell>
@@ -473,7 +428,7 @@ function MaterialsTab() {
                 </TableRow>
               )) : (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
                     No device assemblies found
                   </TableCell>
                 </TableRow>
@@ -497,99 +452,24 @@ function MaterialsTab() {
                 data-testid="input-device-name"
               />
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <Label>Category</Label>
-                <Select
-                  value={deviceForm.category}
-                  onValueChange={(v) => setDeviceForm(p => ({ ...p, category: v }))}
-                >
-                  <SelectTrigger data-testid="select-device-category">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {DEVICE_CATEGORIES.map((cat) => (
-                      <SelectItem key={cat} value={cat}>{cat}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Device</Label>
-                <Input
-                  value={deviceForm.device}
-                  onChange={(e) => setDeviceForm(p => ({ ...p, device: e.target.value }))}
-                  data-testid="input-device-device"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <Label>Box Type</Label>
-                <Input
-                  value={deviceForm.boxType}
-                  onChange={(e) => setDeviceForm(p => ({ ...p, boxType: e.target.value }))}
-                  data-testid="input-device-box-type"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Cover Plate</Label>
-                <Input
-                  value={deviceForm.coverPlate}
-                  onChange={(e) => setDeviceForm(p => ({ ...p, coverPlate: e.target.value }))}
-                  data-testid="input-device-cover-plate"
-                />
-              </div>
+            <div className="space-y-2">
+              <Label>Cost</Label>
+              <Input
+                type="number"
+                step="0.01"
+                value={deviceForm.materialCost}
+                onChange={(e) => setDeviceForm(p => ({ ...p, materialCost: e.target.value }))}
+                data-testid="input-device-material-cost"
+              />
             </div>
             <div className="space-y-2">
-              <Label>Misc Parts</Label>
+              <Label>Supplier</Label>
               <Input
                 value={deviceForm.miscParts}
                 onChange={(e) => setDeviceForm(p => ({ ...p, miscParts: e.target.value }))}
-                data-testid="input-device-misc-parts"
+                placeholder="Supplier name"
+                data-testid="input-device-supplier"
               />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <Label>Wire Type</Label>
-                <Input
-                  value={deviceForm.wireType}
-                  onChange={(e) => setDeviceForm(p => ({ ...p, wireType: e.target.value }))}
-                  data-testid="input-device-wire-type"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Wire Footage</Label>
-                <Input
-                  type="number"
-                  step="0.1"
-                  value={deviceForm.wireFootage}
-                  onChange={(e) => setDeviceForm(p => ({ ...p, wireFootage: e.target.value }))}
-                  data-testid="input-device-wire-footage"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <Label>Labor Hours</Label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  value={deviceForm.laborHours}
-                  onChange={(e) => setDeviceForm(p => ({ ...p, laborHours: e.target.value }))}
-                  data-testid="input-device-labor-hours"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Material Cost</Label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  value={deviceForm.materialCost}
-                  onChange={(e) => setDeviceForm(p => ({ ...p, materialCost: e.target.value }))}
-                  data-testid="input-device-material-cost"
-                />
-              </div>
             </div>
           </div>
           <DialogFooter>
@@ -1439,6 +1319,118 @@ function SupplierImportTab() {
   );
 }
 
+function EstimateTemplateTab() {
+  const { toast } = useToast();
+  const { data: settings } = useQuery<Setting[]>({ queryKey: ["/api/settings"] });
+
+  const sm = new Map((settings || []).map(s => [s.key, s.value]));
+
+  const [templateForm, setTemplateForm] = useState({
+    companyAddress: "",
+    gstRate: "5",
+    gstLabel: "GST 5%",
+    estimateNotes: "",
+    estimateTerms: "",
+  });
+
+  useEffect(() => {
+    if (settings) {
+      setTemplateForm({
+        companyAddress: sm.get("companyAddress") || "",
+        gstRate: sm.get("gstRate") || "5",
+        gstLabel: sm.get("gstLabel") || "GST 5%",
+        estimateNotes: sm.get("estimateNotes") || "",
+        estimateTerms: sm.get("estimateTerms") || "",
+      });
+    }
+  }, [settings]);
+
+  const saveMutation = useMutation({
+    mutationFn: async (data: typeof templateForm) => {
+      await apiRequest("POST", "/api/settings", data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
+      toast({ title: "Template settings saved" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base font-semibold">Client Estimate Template</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label>Company Address</Label>
+            <Input
+              value={templateForm.companyAddress}
+              onChange={(e) => setTemplateForm(p => ({ ...p, companyAddress: e.target.value }))}
+              placeholder="123 Main St, City, Province"
+              data-testid="input-company-address"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Tax Rate (%)</Label>
+              <Input
+                type="number"
+                step="0.1"
+                value={templateForm.gstRate}
+                onChange={(e) => setTemplateForm(p => ({ ...p, gstRate: e.target.value }))}
+                data-testid="input-gst-rate"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Tax Label</Label>
+              <Input
+                value={templateForm.gstLabel}
+                onChange={(e) => setTemplateForm(p => ({ ...p, gstLabel: e.target.value }))}
+                placeholder="GST 5%"
+                data-testid="input-gst-label"
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label>Estimate Notes</Label>
+            <Textarea
+              value={templateForm.estimateNotes}
+              onChange={(e) => setTemplateForm(p => ({ ...p, estimateNotes: e.target.value }))}
+              placeholder="Notes to include on estimates (e.g., warranty info, payment terms)"
+              rows={3}
+              data-testid="input-estimate-notes"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Terms & Conditions</Label>
+            <Textarea
+              value={templateForm.estimateTerms}
+              onChange={(e) => setTemplateForm(p => ({ ...p, estimateTerms: e.target.value }))}
+              placeholder="Terms and conditions for estimates"
+              rows={3}
+              data-testid="input-estimate-terms"
+            />
+          </div>
+          <div className="flex justify-end">
+            <Button
+              onClick={() => saveMutation.mutate(templateForm)}
+              disabled={saveMutation.isPending}
+              data-testid="button-save-template"
+            >
+              <Save className="w-4 h-4 mr-2" />
+              {saveMutation.isPending ? "Saving..." : "Save Template Settings"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const { toast } = useToast();
   const [form, setForm] = useState<SettingsData>(defaultSettings);
@@ -1524,6 +1516,10 @@ export default function SettingsPage() {
             <Upload className="w-4 h-4 mr-2" />
             Supplier Import
           </TabsTrigger>
+          <TabsTrigger value="estimate-template" data-testid="tab-estimate-template">
+            <DollarSign className="w-4 h-4 mr-2" />
+            Estimate Template
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="general">
@@ -1553,6 +1549,10 @@ export default function SettingsPage() {
 
         <TabsContent value="supplier-import">
           <SupplierImportTab />
+        </TabsContent>
+
+        <TabsContent value="estimate-template">
+          <EstimateTemplateTab />
         </TabsContent>
       </Tabs>
     </div>

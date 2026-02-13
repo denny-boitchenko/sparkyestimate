@@ -540,6 +540,13 @@ export async function registerRoutes(
     res.json(analysis);
   });
 
+  app.delete("/api/ai-analyses/:id", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid analysis ID" });
+    await storage.deleteAiAnalysis(id);
+    res.status(204).send();
+  });
+
   const analyzeBodySchema = z.object({
     mode: z.enum(["electrical", "floor_plan"]),
     projectId: z.string().regex(/^\d+$/, "projectId must be a number"),
