@@ -107,7 +107,7 @@ async function renderPdfFullPages(file: File, pageNumbers: number[]): Promise<Ar
   for (const num of pageNumbers) {
     if (num < 1 || num > pdf.numPages) continue;
     const page = await pdf.getPage(num);
-    const viewport = page.getViewport({ scale: 2.0 });
+    const viewport = page.getViewport({ scale: 1.5 });
     const canvas = document.createElement("canvas");
     canvas.width = viewport.width;
     canvas.height = viewport.height;
@@ -115,7 +115,7 @@ async function renderPdfFullPages(file: File, pageNumbers: number[]): Promise<Ar
     await page.render({ canvasContext: ctx, viewport }).promise;
     pages.push({
       pageNumber: num,
-      dataUrl: canvas.toDataURL("image/png"),
+      dataUrl: canvas.toDataURL("image/jpeg", 0.85),
     });
   }
 

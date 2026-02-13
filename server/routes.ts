@@ -13,7 +13,7 @@ import {
 } from "@shared/schema";
 import { z } from "zod";
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024, fieldSize: 50 * 1024 * 1024 } });
 
 function parseId(raw: string): number | null {
   const n = parseInt(raw, 10);
