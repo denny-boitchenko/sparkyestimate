@@ -551,7 +551,154 @@ export async function registerRoutes(
   const analyzeBodySchema = z.object({
     mode: z.enum(["electrical", "floor_plan"]),
     projectId: z.string().regex(/^\d+$/, "projectId must be a number"),
+    pages: z.string().optional(),
+    pageImages: z.string().optional(),
   });
+
+  const ROOM_DETECTION_PROMPT = `You are an expert residential architect analyzing an architectural floor plan drawing.
+
+TASK: Identify EVERY room on this floor plan. For each room, determine:
+1. Room type (use standardized names below)
+2. Room name as labelled on the drawing
+3. Approximate area in square feet (estimate from the drawing scale or proportions)
+4. Whether the room has a sink (kitchen, bathroom, laundry, etc.)
+5. Whether the room has a bathtub or shower
+6. Number of usable walls (walls with enough space for receptacles)
+7. Floor level (main, upper, lower, basement)
+8. Confidence score (0.0 to 1.0)
+
+STANDARDIZED ROOM TYPES (use these exactly):
+- kitchen
+- bathroom (full bath with tub/shower + sink + toilet)
+- powder_room (half bath — sink + toilet, no tub/shower)
+- primary_bedroom
+- bedroom
+- living_room
+- family_room
+- dining_room
+- hallway
+- garage (attached)
+- laundry_room
+- basement_finished
+- basement_unfinished
+- closet_walkin
+- closet_standard
+- entry_foyer
+- utility_room (mechanical/furnace/water heater)
+- office_den
+- mudroom
+- pantry
+- stairway
+- open_to_below (double-height space, deck, patio)
+
+IMPORTANT INSTRUCTIONS:
+- Look for room labels/text on the drawing. Common abbreviations: WIC = walk-in closet, MECH = utility room, ENS = ensuite bathroom, PWD = powder room, BR = bedroom
+- Look for a ROOM SCHEDULE TABLE if one exists on this page — it lists room names, areas, and floor levels
+- Count ALL rooms including hallways, closets, and stairways
+- If a room label is visible on the drawing, use it for room_name
+- Estimate areas proportionally if no dimensions are shown
+- Mark has_sink=true for kitchens, bathrooms, powder rooms, laundry rooms
+- Mark has_bathtub_shower=true only for full bathrooms
+- For MASTER/PRIMARY bedrooms, use "primary_bedroom" type
+- For DEN/OFFICE rooms, use "office_den" type
+- For FAMILY ROOM/REC ROOM, use "family_room" type
+- BATH/ENSUITE/BATHROOM = "bathroom", POWDER = "powder_room"
+- SUITE in basement context = "basement_finished"
+- DECK/PATIO = "open_to_below"
+
+RESPOND WITH VALID JSON ONLY (no markdown, no explanation):
+{
+  "floor_level": "main",
+  "total_sqft": 1800,
+  "rooms": [
+    {
+      "room_type": "kitchen",
+      "room_name": "KITCHEN",
+      "approx_area_sqft": 180,
+      "has_sink": true,
+      "has_bathtub_shower": false,
+      "wall_count": 3,
+      "confidence": 0.90
+    }
+  ]
+}`;
+
+  const ELECTRICAL_ANALYSIS_PROMPT = `You are an expert electrical estimator analyzing a residential electrical floor plan drawing.
+This drawing follows Canadian Electrical Code (CEC) / NEC symbol conventions.
+
+TASK: Identify and count EVERY electrical symbol on this drawing page.
+
+For each symbol type found, provide:
+1. The symbol type (use the standardized names below)
+2. The exact count
+3. A confidence score (0.0 to 1.0) for your count accuracy
+4. Which room it's in
+
+STANDARDIZED SYMBOL NAMES (use these exactly):
+- duplex_receptacle (standard 15A/20A outlet)
+- gfci_receptacle (ground fault circuit interrupter outlet)
+- weather_resistant_receptacle
+- split_receptacle
+- dedicated_receptacle (for specific appliances)
+- single_pole_switch
+- three_way_switch
+- four_way_switch
+- dimmer_switch
+- recessed_light
+- surface_mount_light
+- pendant_light
+- track_light
+- wall_sconce
+- exterior_light
+- ceiling_fan
+- exhaust_fan
+- range_hood_fan
+- smoke_detector
+- co_detector
+- smoke_co_combo
+- data_outlet
+- tv_outlet
+- phone_outlet
+- doorbell
+- thermostat
+- panel_board
+- subpanel
+- junction_box
+- ev_charger_outlet
+- dryer_outlet
+- range_outlet
+- ac_disconnect
+- outdoor_receptacle
+- motion_sensor
+- occupancy_sensor
+- fluorescent_light
+- led_panel_light
+
+Also determine:
+- Is this page an electrical plan? (true/false)
+- What type of page is this? (electrical, architectural, mechanical, plumbing, cover, schedule, detail, other)
+
+RESPOND WITH VALID JSON ONLY (no markdown, no explanation):
+{
+  "is_electrical": true,
+  "page_type": "electrical",
+  "floor_level": "main",
+  "rooms": [
+    {
+      "name": "KITCHEN",
+      "floor": "Main Floor",
+      "devices": [
+        {"type": "duplex_receptacle", "count": 14, "confidence": 0.95, "notes": ""}
+      ]
+    }
+  ],
+  "observations": "Any relevant notes about the drawing"
+}
+
+If this is NOT an electrical page, return:
+{"is_electrical": false, "page_type": "architectural", "rooms": [], "observations": "This appears to be an architectural floor plan"}
+
+COUNT CAREFULLY. Double-check your counts. Mark confidence lower if symbols are unclear or overlapping.`;
 
   app.post("/api/ai-analyze", (req, res, next) => {
     upload.single("file")(req, res, (err) => {
@@ -573,96 +720,234 @@ export async function registerRoutes(
 
       const mode = bodyParsed.data.mode;
       const projectId = parseInt(bodyParsed.data.projectId, 10);
+      const pageImagesRaw = bodyParsed.data.pageImages;
 
       if (!process.env.GEMINI_API_KEY) return res.status(500).json({ message: "Gemini API key not configured" });
 
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-      const imageData = file.buffer.toString("base64");
-      const mimeType = file.mimetype || "image/png";
+      let pageImages: Array<{ pageNumber: number; dataUrl: string }> = [];
 
-      let prompt: string;
-      if (mode === "electrical") {
-        prompt = `Analyze this electrical drawing or floor plan. Identify all electrical symbols and devices present.
-For each device found, provide:
-- type: the device type (e.g., "Duplex Receptacle (15A)", "GFCI Receptacle (20A)", "Single-Pole Switch", "3-Way Switch", "Dimmer Switch", "Recessed Light (Pot Light)", "Surface Mount Light", "Ceiling Fan", "Smoke/CO Combo Detector", "Data Outlet", "TV / Coax Outlet", "Outdoor Receptacle (GFCI)", "Exhaust Fan (Bathroom)", "Range Hood Fan", "Range Receptacle (50A)", "Dryer Receptacle (30A)", "EV Charger Receptacle (50A)", "Panel Board / Load Center (200A)", "Fluorescent / LED Batten", "Exterior Light", "Thermostat")
-- count: how many of this type you see
-- confidence: your confidence level (0.0 to 1.0)
-- room: which room it appears to be in (if identifiable)
-- floor: which floor (e.g., "Main Floor", "Basement", "Upper Floor")
-- wireType: recommended wire type (e.g., "14/2 NM-B", "12/2 NM-B")
-- description: brief description
-
-Group results by room when possible.
-
-Return ONLY valid JSON in this exact format:
-{
-  "rooms": [
-    { "name": "KITCHEN", "type": "Kitchen", "floor": "Main Floor", "devices": [
-      { "type": "Duplex Receptacle (15A)", "count": 4, "confidence": 0.85, "wireType": "14/2 NM-B", "description": "Standard 15A duplex receptacles" }
-    ]}
-  ],
-  "allDevices": [
-    { "type": "Duplex Receptacle (15A)", "totalCount": 77, "wireType": "14/2 NM-B" }
-  ],
-  "notes": "Any additional observations about the drawing"
-}`;
-      } else {
-        prompt = `Analyze this architectural floor plan. Identify all rooms visible in the plan.
-For each room, determine the room type and apply CEC 2021 (Canadian Electrical Code) minimum requirements.
-
-Room types to look for: Kitchen, Bathroom, Bedroom, Living Room, Dining Room, Garage, Laundry, Hallway, Basement, Entry Foyer, Den, Office, Closet, Closet Walkin, Pantry, Mudroom, Utility Room, Workshop, Rec Room, Family Room, Sunroom, Porch, Deck
-
-For each room, list the minimum electrical devices required by CEC 2021.
-Group by floor when possible (Main Floor, Basement, Upper Floor).
-
-Return ONLY valid JSON in this exact format:
-{
-  "rooms": [
-    { "name": "KITCHEN", "type": "Kitchen", "floor": "Main Floor", "devices": [
-      { "type": "Split Receptacle (Kitchen)", "count": 2, "wireType": "14/3 NM-B", "description": "Split receptacles for countertop" },
-      { "type": "GFCI Receptacle (20A)", "count": 1, "wireType": "12/2 NM-B", "description": "GFCI above sink" }
-    ]}
-  ],
-  "allDevices": [
-    { "type": "Duplex Receptacle (15A)", "totalCount": 77, "wireType": "14/2 NM-B" }
-  ],
-  "notes": "Additional observations"
-}`;
+      if (pageImagesRaw) {
+        try {
+          pageImages = JSON.parse(pageImagesRaw);
+        } catch {
+          pageImages = [];
+        }
       }
 
-      const result = await ai.models.generateContent({
-        model: "gemini-2.0-flash",
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { text: prompt },
-              { inlineData: { mimeType, data: imageData } },
-            ],
-          },
-        ],
-      });
+      if (pageImages.length === 0) {
+        const imageData = file.buffer.toString("base64");
+        const mimeType = file.mimetype || "image/png";
+        pageImages = [{ pageNumber: 1, dataUrl: `data:${mimeType};base64,${imageData}` }];
+      }
 
-      const responseText = result.text || "";
-      let parsedResults: any;
-      try {
-        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          parsedResults = JSON.parse(jsonMatch[0]);
-        } else {
-          parsedResults = { rooms: [], allDevices: [], notes: responseText };
+      const prompt = mode === "electrical" ? ELECTRICAL_ANALYSIS_PROMPT : ROOM_DETECTION_PROMPT;
+
+      const allPageResults: any[] = [];
+      for (const page of pageImages) {
+        try {
+          const dataUrlParts = page.dataUrl.split(",");
+          const mimeMatch = dataUrlParts[0]?.match(/data:([^;]+);base64/);
+          const pageMime = mimeMatch ? mimeMatch[1] : "image/png";
+          const pageBase64 = dataUrlParts[1] || dataUrlParts[0];
+
+          const result = await ai.models.generateContent({
+            model: "gemini-2.0-flash",
+            contents: [
+              {
+                role: "user",
+                parts: [
+                  { text: prompt },
+                  { inlineData: { mimeType: pageMime, data: pageBase64 } },
+                ],
+              },
+            ],
+            config: {
+              temperature: 0.1,
+              maxOutputTokens: 8192,
+            },
+          });
+
+          const responseText = result.text || "";
+          let parsed: any = null;
+          try {
+            let jsonStr = responseText.trim();
+            if (jsonStr.startsWith("```")) {
+              jsonStr = jsonStr.split("\n").slice(1).join("\n");
+              if (jsonStr.endsWith("```")) jsonStr = jsonStr.slice(0, -3).trim();
+            }
+            const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+            if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+          } catch {}
+
+          if (parsed) {
+            parsed._pageNumber = page.pageNumber;
+            allPageResults.push(parsed);
+          }
+        } catch (pageErr: any) {
+          console.error(`Error analyzing page ${page.pageNumber}:`, pageErr.message);
         }
-      } catch {
-        parsedResults = { rooms: [], allDevices: [], notes: responseText };
+      }
+
+      let finalResults: any;
+
+      if (mode === "floor_plan") {
+        const cecDevices = await import("./cec-devices");
+        const allRooms: any[] = [];
+        let totalSqFt = 0;
+
+        for (const pageResult of allPageResults) {
+          const floorLevel = pageResult.floor_level || "";
+          totalSqFt += pageResult.total_sqft || 0;
+          for (const room of (pageResult.rooms || [])) {
+            const roomType = room.room_type || "office_den";
+            const areaSqFt = room.approx_area_sqft || 0;
+            const detectedRoom = {
+              room_type: roomType,
+              room_name: room.room_name || "Unknown",
+              floor_level: room.floor_level || floorLevel,
+              approx_area_sqft: areaSqFt,
+              has_sink: room.has_sink || false,
+              has_bathtub_shower: room.has_bathtub_shower || false,
+              wall_count: room.wall_count || 4,
+              confidence: room.confidence || 0.9,
+              location: room.location || [],
+            };
+            const devices = cecDevices.generateDevicesForRoom(detectedRoom);
+            const deviceList = Object.entries(devices).map(([type, count]) => ({
+              type: type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
+              count,
+              confidence: 0.95,
+              notes: `CEC 2021 minimum for ${roomType.replace(/_/g, " ")}`,
+            }));
+            allRooms.push({
+              name: detectedRoom.room_name,
+              type: roomType,
+              floor: detectedRoom.floor_level || "Main Floor",
+              area_sqft: areaSqFt,
+              page: pageResult._pageNumber,
+              devices: deviceList,
+            });
+          }
+        }
+
+        const deviceTotals: Record<string, { count: number; rooms: string[] }> = {};
+        for (const room of allRooms) {
+          for (const d of room.devices) {
+            if (!deviceTotals[d.type]) deviceTotals[d.type] = { count: 0, rooms: [] };
+            deviceTotals[d.type].count += d.count;
+            if (!deviceTotals[d.type].rooms.includes(room.name)) {
+              deviceTotals[d.type].rooms.push(room.name);
+            }
+          }
+        }
+
+        const wholeHouseExtras: Record<string, number> = {};
+        const bedrooms = allRooms.filter(r => r.type === "bedroom" || r.type === "primary_bedroom").length;
+        const livingAreas = allRooms.filter(r => ["living_room", "family_room", "primary_bedroom", "bedroom", "office_den", "basement_finished"].includes(r.type)).length;
+        const tvAreas = allRooms.filter(r => ["living_room", "family_room", "primary_bedroom", "basement_finished"].includes(r.type)).length;
+        wholeHouseExtras["Outdoor Receptacle"] = 1;
+        wholeHouseExtras["Exterior Light"] = 2;
+        wholeHouseExtras["Doorbell"] = 1;
+        wholeHouseExtras["Thermostat"] = 1;
+        wholeHouseExtras["Panel Board"] = 1;
+        wholeHouseExtras["Data Outlet"] = Math.max(livingAreas, 1);
+        wholeHouseExtras["Tv Outlet"] = Math.max(tvAreas, 1);
+
+        const hallways = allRooms.filter(r => r.type === "hallway").length;
+        const hasBasement = allRooms.some(r => r.type === "basement_finished" || r.type === "basement_unfinished");
+        const extraSmoke = Math.max(hallways, 1) + (hasBasement ? 1 : 0);
+        wholeHouseExtras["Smoke Co Combo"] = extraSmoke;
+
+        const wholeHouseRoom = {
+          name: "WHOLE HOUSE",
+          type: "whole_house",
+          floor: "All Floors",
+          area_sqft: totalSqFt,
+          page: 0,
+          devices: Object.entries(wholeHouseExtras).map(([type, count]) => ({
+            type,
+            count,
+            confidence: 0.95,
+            notes: "CEC 2021 whole-house minimum",
+          })),
+        };
+        allRooms.push(wholeHouseRoom);
+
+        for (const d of wholeHouseRoom.devices) {
+          if (!deviceTotals[d.type]) deviceTotals[d.type] = { count: 0, rooms: [] };
+          deviceTotals[d.type].count += d.count;
+          deviceTotals[d.type].rooms.push("Whole House");
+        }
+
+        const allDevices = Object.entries(deviceTotals).map(([type, data]) => ({
+          type,
+          count: data.count,
+          confidence: 0.95,
+          room: data.rooms.join(", "),
+        }));
+
+        const totalDevices = allDevices.reduce((s, d) => s + d.count, 0);
+
+        finalResults = {
+          rooms: allRooms,
+          allDevices,
+          totalDevices,
+          totalSqFt,
+          pageCount: pageImages.length,
+          pagesAnalyzed: allPageResults.map(p => p._pageNumber),
+          notes: `CEC 2021 minimum devices generated: ${totalDevices} total devices across ${allDevices.length} types.\n\nNote: These are CODE MINIMUMS. Most homes exceed these. Review and adjust counts on the next tab.`,
+        };
+      } else {
+        const allRooms: any[] = [];
+        for (const pageResult of allPageResults) {
+          for (const room of (pageResult.rooms || [])) {
+            allRooms.push({
+              ...room,
+              page: pageResult._pageNumber,
+              floor: room.floor || pageResult.floor_level || "Main Floor",
+            });
+          }
+        }
+
+        const deviceTotals: Record<string, { count: number; rooms: string[] }> = {};
+        for (const room of allRooms) {
+          for (const d of (room.devices || [])) {
+            const key = d.type;
+            if (!deviceTotals[key]) deviceTotals[key] = { count: 0, rooms: [] };
+            deviceTotals[key].count += d.count || 1;
+            if (room.name && !deviceTotals[key].rooms.includes(room.name)) {
+              deviceTotals[key].rooms.push(room.name);
+            }
+          }
+        }
+
+        const allDevices = Object.entries(deviceTotals).map(([type, data]) => ({
+          type,
+          count: data.count,
+          confidence: 0.9,
+          room: data.rooms.join(", "),
+        }));
+
+        const totalDevices = allDevices.reduce((s, d) => s + d.count, 0);
+
+        finalResults = {
+          rooms: allRooms,
+          allDevices,
+          totalDevices,
+          pageCount: pageImages.length,
+          pagesAnalyzed: allPageResults.map(p => p._pageNumber),
+          notes: allPageResults.map(p => p.observations || "").filter(Boolean).join("\n"),
+        };
       }
 
       const analysis = await storage.createAiAnalysis({
         projectId,
         fileName: file.originalname,
         analysisMode: mode,
-        results: parsedResults,
-        status: "review",
+        results: finalResults,
+        status: "completed",
       });
 
       res.json(analysis);

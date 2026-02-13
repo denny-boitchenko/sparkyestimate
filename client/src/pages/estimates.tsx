@@ -1,13 +1,21 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Calculator, ArrowRight, FileText, DollarSign } from "lucide-react";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel,
+  AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
+  AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger
+} from "@/components/ui/alert-dialog";
+import { Calculator, ArrowRight, FileText, Trash2 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Estimate, Project } from "@shared/schema";
 
 export default function Estimates() {
   const [, navigate] = useLocation();
+  const { toast } = useToast();
 
   const { data: estimates, isLoading } = useQuery<Estimate[]>({
     queryKey: ["/api/estimates"],
@@ -15,6 +23,20 @@ export default function Estimates() {
 
   const { data: projects } = useQuery<Project[]>({
     queryKey: ["/api/projects"],
+  });
+
+  const deleteEstimateMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("DELETE", `/api/estimates/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/estimates"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
+      toast({ title: "Estimate deleted" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
   });
 
   const getProjectName = (projectId: number) => {
@@ -81,10 +103,42 @@ export default function Estimates() {
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground flex-shrink-0">
-                    <span>OH: {estimate.overheadPct}%</span>
-                    <span>P: {estimate.profitPct}%</span>
-                    <ArrowRight className="w-4 h-4" />
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <span className="text-xs text-muted-foreground">OH: {estimate.overheadPct}%</span>
+                    <span className="text-xs text-muted-foreground">P: {estimate.profitPct}%</span>
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          onClick={(e) => e.stopPropagation()}
+                          data-testid={`button-delete-estimate-${estimate.id}`}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Delete Estimate</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            This will permanently delete "{estimate.name}" and all its line items. This action cannot be undone.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel data-testid="button-cancel-delete-estimate">Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteEstimateMutation.mutate(estimate.id);
+                            }}
+                            data-testid="button-confirm-delete-estimate"
+                          >
+                            Delete Estimate
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                    <ArrowRight className="w-4 h-4 text-muted-foreground" />
                   </div>
                 </div>
               </CardContent>

@@ -1,0 +1,49 @@
+Mode: FLOOR PLAN ONLY — CEC MINIMUM GENERATION
+
+Starting room detection...
+
+Page 4: basement floor — 19 rooms detected (~3475 sq ft)
+    BEDROOM 5 (bedroom) — ~150 sq ft, conf: 95%
+    ENTRY (entry_foyer) — ~53 sq ft, conf: 95%
+    WIC (closet_walkin) — ~27 sq ft, conf: 95%
+    BATH (bathroom) — ~69 sq ft, conf: 95%
+    BEDROOM 3 (bedroom) — ~120 sq ft, conf: 95%
+    BEDROOM 2 (bedroom) — ~173 sq ft, conf: 95%
+    WIC (closet_walkin) — ~27 sq ft, conf: 95%
+    FAMILY ROOM (family_room) — ~480 sq ft, conf: 95%
+    BEDROOM 6 (bedroom) — ~162 sq ft, conf: 95%
+    BEDROOM 7 (bedroom) — ~161 sq ft, conf: 95%
+    BATH (bathroom) — ~65 sq ft, conf: 95%
+    PANTRY (pantry) — ~33 sq ft, conf: 95%
+    SUITE (basement_finished) — ~455 sq ft, conf: 95%
+    BATH (bathroom) — ~46 sq ft, conf: 95%
+    BEDROOM 4 (bedroom) — ~155 sq ft, conf: 95%
+    LIVING (living_room) — ~407 sq ft, conf: 95%
+    MECH (utility_room) — ~55 sq ft, conf: 95%
+    PATIO (basement_finished) — ~787 sq ft, conf: 95%
+    BATH (bathroom) — ~50 sq ft, conf: 95%
+Page 5: main floor — 18 rooms detected (~3483 sq ft)
+    MASTER BEDROOM (primary_bedroom) — ~192 sq ft, conf: 95%
+    GARAGE (garage) — ~962 sq ft, conf: 95%
+    BATH (bathroom) — ~46 sq ft, conf: 95%
+    WIC (closet_walkin) — ~27 sq ft, conf: 95%
+    WIC (closet_walkin) — ~27 sq ft, conf: 95%
+    DEN (office_den) — ~135 sq ft, conf: 95%
+    BEDROOM 1 (bedroom) — ~173 sq ft, conf: 95%
+    ENSUITE (bathroom) — ~126 sq ft, conf: 95%
+    WIC (closet_walkin) — ~78 sq ft, conf: 95%
+    MUDROOM (mudroom) — ~75 sq ft, conf: 95%
+    PANTRY (pantry) — ~69 sq ft, conf: 95%
+    LIVING (living_room) — ~252 sq ft, conf: 95%
+    DINING (dining_room) — ~159 sq ft, conf: 95%
+    KITCHEN (kitchen) — ~206 sq ft, conf: 95%
+    ENTRY (entry_foyer) — ~110 sq ft, conf: 95%
+    LAUNDRY (laundry_room) — ~92 sq ft, conf: 95%
+    DECK (open_to_below) — ~734 sq ft, conf: 95%
+    POWDER (powder_room) — ~21 sq ft, conf: 95%
+
+Room detection complete: 37 rooms found (~6959 sq ft total).
+
+CEC 2021 minimum devices generated: 262 total devices across 19 types.
+
+Note: These are CODE MINIMUMS. Most homes exceed these. Review and adjust counts on the next tab.
