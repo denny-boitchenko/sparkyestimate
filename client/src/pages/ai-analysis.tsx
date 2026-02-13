@@ -1,8 +1,9 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
@@ -82,7 +83,7 @@ async function renderPdfThumbnails(file: File): Promise<PageThumb[]> {
     canvas.width = viewport.width;
     canvas.height = viewport.height;
     const ctx = canvas.getContext("2d")!;
-    await page.render({ canvasContext: ctx, viewport }).promise;
+    await (page.render({ canvasContext: ctx, viewport } as any).promise);
     thumbs.push({
       pageNumber: i,
       dataUrl: canvas.toDataURL("image/png"),
@@ -112,7 +113,7 @@ async function renderPdfFullPages(file: File, pageNumbers: number[]): Promise<Ar
     canvas.width = viewport.width;
     canvas.height = viewport.height;
     const ctx = canvas.getContext("2d")!;
-    await page.render({ canvasContext: ctx, viewport }).promise;
+    await (page.render({ canvasContext: ctx, viewport } as any).promise);
     pages.push({
       pageNumber: num,
       dataUrl: canvas.toDataURL("image/jpeg", 0.85),
@@ -135,6 +136,7 @@ export default function AiAnalysisPage() {
   const [pageThumbs, setPageThumbs] = useState<PageThumb[]>([]);
   const [loadingThumbs, setLoadingThumbs] = useState(false);
   const [isPdf, setIsPdf] = useState(false);
+  const [editedCounts, setEditedCounts] = useState<Record<string, number>>({});
 
   const { data: projects } = useQuery<Project[]>({
     queryKey: ["/api/projects"],
@@ -285,6 +287,7 @@ export default function AiAnalysisPage() {
   const openAnalysisReview = (analysis: AiAnalysis) => {
     setCurrentAnalysisId(analysis.id);
     setWizardStep("review");
+    setEditedCounts({});
   };
 
   const resetWizard = () => {
@@ -294,6 +297,17 @@ export default function AiAnalysisPage() {
     setPreviewUrl(null);
     setPageThumbs([]);
     setIsPdf(false);
+    setEditedCounts({});
+  };
+
+  const getDeviceCount = (roomIdx: number, devIdx: number, originalCount: number): number => {
+    const key = `${roomIdx}-${devIdx}`;
+    return editedCounts[key] !== undefined ? editedCounts[key] : originalCount;
+  };
+
+  const setDeviceCount = (roomIdx: number, devIdx: number, value: number) => {
+    const key = `${roomIdx}-${devIdx}`;
+    setEditedCounts(prev => ({ ...prev, [key]: Math.max(0, value) }));
   };
 
   const selectedPageCount = pageThumbs.filter(p => p.selected).length;
@@ -695,7 +709,7 @@ export default function AiAnalysisPage() {
                   <span className="text-xs text-muted-foreground">Rooms</span>
                 </div>
                 <p className="text-lg font-bold" data-testid="text-room-count">
-                  {analysisResults.rooms?.filter(r => r.name !== "WHOLE HOUSE")?.length || 0}
+                  {analysisResults.rooms?.filter(r => r.name !== "WHOLE HOUSE" && r.name !== "DWELLING EXTRAS")?.length || 0}
                 </p>
               </CardContent>
             </Card>
@@ -781,6 +795,9 @@ export default function AiAnalysisPage() {
                         <div className="flex items-center gap-2 mb-3 flex-wrap">
                           <DoorOpen className="w-4 h-4 text-primary" />
                           <span className="text-sm font-semibold">{room.name}</span>
+                          {room.type === "whole_house" && (
+                            <Badge variant="outline" className="text-xs">Outdoor, Low Voltage, Safety</Badge>
+                          )}
                           {room.type && room.type !== "whole_house" && (
                             <Badge variant="outline" className="text-xs">{room.type.replace(/_/g, " ")}</Badge>
                           )}
@@ -791,21 +808,22 @@ export default function AiAnalysisPage() {
                             <Badge variant="secondary" className="text-xs">{room.area_sqft} sq ft</Badge>
                           )}
                           <Badge variant="secondary" className="text-xs">
-                            {room.devices.reduce((s, d) => s + d.count, 0)} devices
+                            {room.devices.reduce((s, d, di) => s + getDeviceCount(roomIdx, di, d.count), 0)} devices
                           </Badge>
                         </div>
                         <Table>
                           <TableHeader>
                             <TableRow>
                               <TableHead>Device</TableHead>
-                              <TableHead className="text-right">Count</TableHead>
-                              <TableHead className="text-right">Confidence</TableHead>
-                              <TableHead>Notes</TableHead>
+                              <TableHead className="w-[100px] text-right">Count</TableHead>
+                              <TableHead>CEC Reference</TableHead>
                             </TableRow>
                           </TableHeader>
                           <TableBody>
                             {room.devices.map((device, devIdx) => {
                               const Icon = getDeviceIcon(device.type);
+                              const count = getDeviceCount(roomIdx, devIdx, device.count);
+                              const isEdited = editedCounts[`${roomIdx}-${devIdx}`] !== undefined;
                               return (
                                 <TableRow key={devIdx} data-testid={`room-device-${roomIdx}-${devIdx}`}>
                                   <TableCell>
@@ -814,13 +832,17 @@ export default function AiAnalysisPage() {
                                       <span className="text-sm">{device.type}</span>
                                     </div>
                                   </TableCell>
-                                  <TableCell className="text-right text-sm font-medium">{device.count}</TableCell>
                                   <TableCell className="text-right">
-                                    <span className={`text-sm font-medium ${getConfidenceColor(device.confidence)}`}>
-                                      {(device.confidence * 100).toFixed(0)}%
-                                    </span>
+                                    <Input
+                                      type="number"
+                                      min={0}
+                                      value={count}
+                                      onChange={(e) => setDeviceCount(roomIdx, devIdx, parseInt(e.target.value) || 0)}
+                                      className={`w-[70px] text-right text-sm ml-auto ${isEdited ? "border-primary" : ""}`}
+                                      data-testid={`input-count-${roomIdx}-${devIdx}`}
+                                    />
                                   </TableCell>
-                                  <TableCell className="text-xs text-muted-foreground">{device.notes || "-"}</TableCell>
+                                  <TableCell className="text-xs text-muted-foreground max-w-[300px]">{device.notes || "-"}</TableCell>
                                 </TableRow>
                               );
                             })}

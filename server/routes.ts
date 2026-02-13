@@ -796,6 +796,7 @@ COUNT CAREFULLY. Double-check your counts. Mark confidence lower if symbols are 
         const cecDevices = await import("./cec-devices");
         const allRooms: any[] = [];
         let totalSqFt = 0;
+        let panelBoardAdded = false;
 
         for (const pageResult of allPageResults) {
           const floorLevel = pageResult.floor_level || "";
@@ -814,13 +815,24 @@ COUNT CAREFULLY. Double-check your counts. Mark confidence lower if symbols are 
               confidence: room.confidence || 0.9,
               location: room.location || [],
             };
-            const devices = cecDevices.generateDevicesForRoom(detectedRoom);
-            const deviceList = Object.entries(devices).map(([type, count]) => ({
-              type: type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
-              count,
+            const deviceArr = cecDevices.generateDevicesForRoom(detectedRoom);
+            const deviceList = deviceArr.map(d => ({
+              type: d.type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
+              count: d.count,
               confidence: 0.95,
-              notes: `CEC 2021 minimum for ${roomType.replace(/_/g, " ")}`,
+              notes: d.note,
             }));
+
+            if ((roomType === "utility_room" || roomType === "garage") && !panelBoardAdded) {
+              deviceList.push({
+                type: "Panel Board",
+                count: 1,
+                confidence: 0.95,
+                notes: "CEC 26-400 — Main panel board (200A typical residential)",
+              });
+              panelBoardAdded = true;
+            }
+
             allRooms.push({
               name: detectedRoom.room_name,
               type: roomType,
@@ -832,10 +844,22 @@ COUNT CAREFULLY. Double-check your counts. Mark confidence lower if symbols are 
           }
         }
 
-        const deviceTotals: Record<string, { count: number; rooms: string[] }> = {};
+        if (!panelBoardAdded && allRooms.length > 0) {
+          const mechRoom = allRooms.find((r: any) => r.type === "utility_room");
+          const garageRoom = allRooms.find((r: any) => r.type === "garage");
+          const targetRoom = mechRoom || garageRoom || allRooms[0];
+          targetRoom.devices.push({
+            type: "Panel Board",
+            count: 1,
+            confidence: 0.95,
+            notes: "CEC 26-400 — Main panel board (200A typical residential)",
+          });
+        }
+
+        const deviceTotals: Record<string, { count: number; rooms: string[]; note: string }> = {};
         for (const room of allRooms) {
           for (const d of room.devices) {
-            if (!deviceTotals[d.type]) deviceTotals[d.type] = { count: 0, rooms: [] };
+            if (!deviceTotals[d.type]) deviceTotals[d.type] = { count: 0, rooms: [], note: d.notes || "" };
             deviceTotals[d.type].count += d.count;
             if (!deviceTotals[d.type].rooms.includes(room.name)) {
               deviceTotals[d.type].rooms.push(room.name);
@@ -843,42 +867,37 @@ COUNT CAREFULLY. Double-check your counts. Mark confidence lower if symbols are 
           }
         }
 
-        const wholeHouseExtras: Record<string, number> = {};
-        const bedrooms = allRooms.filter(r => r.type === "bedroom" || r.type === "primary_bedroom").length;
-        const livingAreas = allRooms.filter(r => ["living_room", "family_room", "primary_bedroom", "bedroom", "office_den", "basement_finished"].includes(r.type)).length;
-        const tvAreas = allRooms.filter(r => ["living_room", "family_room", "primary_bedroom", "basement_finished"].includes(r.type)).length;
-        wholeHouseExtras["Outdoor Receptacle"] = 1;
-        wholeHouseExtras["Exterior Light"] = 2;
-        wholeHouseExtras["Doorbell"] = 1;
-        wholeHouseExtras["Thermostat"] = 1;
-        wholeHouseExtras["Panel Board"] = 1;
-        wholeHouseExtras["Data Outlet"] = Math.max(livingAreas, 1);
-        wholeHouseExtras["Tv Outlet"] = Math.max(tvAreas, 1);
-
-        const hallways = allRooms.filter(r => r.type === "hallway").length;
-        const hasBasement = allRooms.some(r => r.type === "basement_finished" || r.type === "basement_unfinished");
-        const extraSmoke = Math.max(hallways, 1) + (hasBasement ? 1 : 0);
-        wholeHouseExtras["Smoke Co Combo"] = extraSmoke;
-
+        const detectedRoomsForWholeHouse = allRooms.map((r: any) => ({
+          room_type: r.type,
+          room_name: r.name,
+          floor_level: r.floor,
+          approx_area_sqft: r.area_sqft || 0,
+          has_sink: false,
+          has_bathtub_shower: false,
+          wall_count: 4,
+          confidence: 0.9,
+          location: [],
+        }));
+        const wholeHouseDeviceArr = cecDevices.generateWholeHouseDevices(detectedRoomsForWholeHouse);
         const wholeHouseRoom = {
-          name: "WHOLE HOUSE",
+          name: "DWELLING EXTRAS",
           type: "whole_house",
           floor: "All Floors",
           area_sqft: totalSqFt,
           page: 0,
-          devices: Object.entries(wholeHouseExtras).map(([type, count]) => ({
-            type,
-            count,
+          devices: wholeHouseDeviceArr.map(d => ({
+            type: d.type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
+            count: d.count,
             confidence: 0.95,
-            notes: "CEC 2021 whole-house minimum",
+            notes: d.note,
           })),
         };
         allRooms.push(wholeHouseRoom);
 
         for (const d of wholeHouseRoom.devices) {
-          if (!deviceTotals[d.type]) deviceTotals[d.type] = { count: 0, rooms: [] };
+          if (!deviceTotals[d.type]) deviceTotals[d.type] = { count: 0, rooms: [], note: d.notes || "" };
           deviceTotals[d.type].count += d.count;
-          deviceTotals[d.type].rooms.push("Whole House");
+          deviceTotals[d.type].rooms.push("Dwelling Extras");
         }
 
         const allDevices = Object.entries(deviceTotals).map(([type, data]) => ({
@@ -897,7 +916,7 @@ COUNT CAREFULLY. Double-check your counts. Mark confidence lower if symbols are 
           totalSqFt,
           pageCount: pageImages.length,
           pagesAnalyzed: allPageResults.map(p => p._pageNumber),
-          notes: `CEC 2021 minimum devices generated: ${totalDevices} total devices across ${allDevices.length} types.\n\nNote: These are CODE MINIMUMS. Most homes exceed these. Review and adjust counts on the next tab.`,
+          notes: `CEC 2021 minimum devices generated: ${totalDevices} total across ${allDevices.length} types.\n\nThese are CODE MINIMUMS per CEC 2021. Most homes exceed these counts. You can edit device counts directly in the review below.`,
         };
       } else {
         const allRooms: any[] = [];
