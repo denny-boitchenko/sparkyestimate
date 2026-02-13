@@ -188,7 +188,8 @@ export default function EstimateDetail() {
       const res = await apiRequest("GET", `/api/estimates/${estimateId}/export/client-estimate`);
       const data = await res.json();
       const { jsPDF } = await import("jspdf");
-      await import("jspdf-autotable");
+      const autoTableModule = await import("jspdf-autotable");
+      if (autoTableModule.applyPlugin) autoTableModule.applyPlugin(jsPDF);
       const doc = new jsPDF();
       const pw = doc.internal.pageSize.getWidth();
       const ph = doc.internal.pageSize.getHeight();
@@ -356,7 +357,8 @@ export default function EstimateDetail() {
       const res = await apiRequest("GET", `/api/estimates/${estimateId}/export/material-list`);
       const data = await res.json();
       const { jsPDF } = await import("jspdf");
-      await import("jspdf-autotable");
+      const autoTableModule2 = await import("jspdf-autotable");
+      if (autoTableModule2.applyPlugin) autoTableModule2.applyPlugin(jsPDF);
       const doc = new jsPDF({ orientation: "landscape" });
       const pw = doc.internal.pageSize.getWidth();
 
@@ -502,7 +504,8 @@ export default function EstimateDetail() {
       const res = await apiRequest("GET", `/api/estimates/${estimateId}/export/cec-report`);
       const data = await res.json();
       const { jsPDF } = await import("jspdf");
-      await import("jspdf-autotable");
+      const autoTableModule3 = await import("jspdf-autotable");
+      if (autoTableModule3.applyPlugin) autoTableModule3.applyPlugin(jsPDF);
       const doc = new jsPDF();
       const pw = doc.internal.pageSize.getWidth();
 
@@ -558,73 +561,59 @@ export default function EstimateDetail() {
       y += 15;
       doc.setTextColor(0, 0, 0);
 
-      const infoRules = (data.rules || []).filter((r: any) => r.status === "INFO" || r.status === "WARN");
-      if (infoRules.length > 0) {
-        doc.setFontSize(14);
-        doc.setFont("helvetica", "bold");
-        doc.setTextColor(44, 82, 130);
-        doc.text("Information Notes", 14, y);
-        doc.setDrawColor(44, 82, 130);
-        doc.line(14, y + 2, 80, y + 2);
-        y += 8;
+      const allRules = data.rules || [];
 
-        doc.setTextColor(0, 0, 0);
-        for (const rule of infoRules) {
-          if (y > 260) { doc.addPage(); y = 20; }
+      const failRules = allRules.filter((r: any) => r.status === "FAIL");
+      const warnRules = allRules.filter((r: any) => r.status === "WARN");
+      const infoRules = allRules.filter((r: any) => r.status === "INFO");
+      const passRules = allRules.filter((r: any) => r.status === "PASS");
 
-          doc.setFillColor(rule.status === "WARN" ? 255 : 230, rule.status === "WARN" ? 248 : 240, rule.status === "WARN" ? 220 : 250);
-          doc.rect(14, y - 4, pw - 28, 14, "F");
-
-          doc.setFontSize(8);
-          doc.setFont("helvetica", "bold");
-          doc.setTextColor(rule.status === "WARN" ? 180 : 44, rule.status === "WARN" ? 120 : 82, rule.status === "WARN" ? 0 : 130);
-          doc.text(rule.status, 18, y);
-          doc.setTextColor(0, 0, 0);
-          doc.setFont("helvetica", "normal");
-          doc.text(rule.rule, 38, y);
-          doc.text(rule.location, 100, y);
-          doc.setFontSize(7);
-          doc.text(rule.description, 38, y + 5);
-
-          doc.setFontSize(7);
-          doc.setFont("helvetica", "italic");
-          doc.setTextColor(100, 100, 100);
-          doc.text("Fix:", 18, y + 8);
-          const fix = rule.status === "WARN" ? `Verify ${rule.rule.split(" - ")[1] || "requirements"} during rough-in.`
-            : `Confirm ${rule.description.split(".")[0].toLowerCase()}.`;
-          doc.text(fix, 30, y + 8);
-          doc.setTextColor(0, 0, 0);
-
-          y += 18;
-        }
-      }
-
-      y += 5;
-      const passRules = (data.rules || []).filter((r: any) => r.status === "PASS");
-      if (passRules.length > 0) {
+      const renderSection = (title: string, rules: any[], headerColor: [number, number, number], rowAlt: [number, number, number]) => {
+        if (rules.length === 0) return;
         if (y > 240) { doc.addPage(); y = 20; }
-        doc.setFontSize(14);
+
+        doc.setFontSize(13);
         doc.setFont("helvetica", "bold");
-        doc.setTextColor(44, 82, 130);
-        doc.text("Passed Checks", 14, y);
-        doc.setDrawColor(44, 82, 130);
-        doc.line(14, y + 2, 70, y + 2);
+        doc.setTextColor(...headerColor);
+        doc.text(title, 14, y);
+        doc.setDrawColor(...headerColor);
+        doc.line(14, y + 2, 14 + doc.getTextWidth(title), y + 2);
         y += 5;
 
-        const passRows = passRules.map((r: any) => [r.rule, r.location, r.description]);
+        const rows = rules.map((r: any) => [
+          r.status,
+          r.rule || "",
+          r.description || "",
+          r.location || "",
+        ]);
+
         (doc as any).autoTable({
           startY: y,
           head: [[
-            { content: "Rule", styles: { fillColor: [44, 82, 130] } },
-            { content: "Location", styles: { fillColor: [44, 82, 130] } },
-            { content: "Description", styles: { fillColor: [44, 82, 130] } },
+            { content: "Status", styles: { fillColor: headerColor } },
+            { content: "Rule", styles: { fillColor: headerColor } },
+            { content: "Description", styles: { fillColor: headerColor } },
+            { content: "Location", styles: { fillColor: headerColor } },
           ]],
-          body: passRows,
+          body: rows,
           styles: { fontSize: 7, cellPadding: 3 },
-          headStyles: { textColor: [255, 255, 255], fontStyle: "bold", fontSize: 7 },
-          alternateRowStyles: { fillColor: [230, 245, 230] },
+          headStyles: { textColor: [255, 255, 255], fontStyle: "bold", fontSize: 8 },
+          alternateRowStyles: { fillColor: rowAlt },
+          columnStyles: {
+            0: { cellWidth: 18, fontStyle: "bold" },
+            1: { cellWidth: 45 },
+            2: { cellWidth: "auto" },
+            3: { cellWidth: 30 },
+          },
         });
-      }
+
+        y = (doc as any).lastAutoTable?.finalY + 10 || y + 20;
+      };
+
+      renderSection("Failures", failRules, [180, 30, 30], [255, 235, 235]);
+      renderSection("Warnings", warnRules, [180, 120, 0], [255, 248, 220]);
+      renderSection("Information Notes", infoRules, [44, 82, 130], [230, 240, 250]);
+      renderSection("Passed Checks", passRules, [34, 120, 34], [230, 245, 230]);
 
       const ph = doc.internal.pageSize.getHeight();
       doc.setFontSize(7);
