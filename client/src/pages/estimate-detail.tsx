@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useRoute, Link, useLocation } from "wouter";
+import { useRoute, Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue
 } from "@/components/ui/select";
@@ -16,18 +17,24 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow
 } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
   ArrowLeft, Plus, Trash2, DollarSign, Clock, Cable,
-  Save, Package
+  Package, Zap, ShieldCheck, Wrench, RefreshCw, Play
 } from "lucide-react";
-import type { Estimate, EstimateItem, DeviceAssembly } from "@shared/schema";
+import type {
+  Estimate, EstimateItem, DeviceAssembly, PanelCircuit,
+  EstimateService, ServiceBundle
+} from "@shared/schema";
 
 export default function EstimateDetail() {
   const [, params] = useRoute("/estimates/:id");
   const { toast } = useToast();
   const [addItemOpen, setAddItemOpen] = useState(false);
+  const [addCircuitOpen, setAddCircuitOpen] = useState(false);
+  const [addServiceOpen, setAddServiceOpen] = useState(false);
 
   const estimateId = params?.id ? parseInt(params.id) : 0;
 
@@ -44,6 +51,25 @@ export default function EstimateDetail() {
   const { data: assemblies } = useQuery<DeviceAssembly[]>({
     queryKey: ["/api/device-assemblies"],
   });
+
+  const { data: circuits } = useQuery<PanelCircuit[]>({
+    queryKey: ["/api/estimates", estimateId, "panel-circuits"],
+    enabled: estimateId > 0,
+  });
+
+  const { data: services } = useQuery<EstimateService[]>({
+    queryKey: ["/api/estimates", estimateId, "services"],
+    enabled: estimateId > 0,
+  });
+
+  const { data: serviceBundles } = useQuery<ServiceBundle[]>({
+    queryKey: ["/api/service-bundles"],
+  });
+
+  const [complianceResults, setComplianceResults] = useState<{
+    rules: Array<{ rule: string; location: string; status: string; description: string }>;
+    summary: { total: number; pass: number; warn: number; fail: number; info: number };
+  } | null>(null);
 
   const updateEstimateMutation = useMutation({
     mutationFn: async (data: Partial<Estimate>) => {
@@ -85,6 +111,84 @@ export default function EstimateDetail() {
     },
   });
 
+  const generatePanelMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", `/api/estimates/${estimateId}/generate-panel`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/estimates", estimateId, "panel-circuits"] });
+      toast({ title: "Panel schedule generated" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Generation failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const addCircuitMutation = useMutation({
+    mutationFn: async (data: any) => {
+      await apiRequest("POST", "/api/panel-circuits", { ...data, estimateId });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/estimates", estimateId, "panel-circuits"] });
+      toast({ title: "Circuit added" });
+      setAddCircuitOpen(false);
+    },
+  });
+
+  const updateCircuitMutation = useMutation({
+    mutationFn: async ({ id, ...data }: { id: number } & Partial<PanelCircuit>) => {
+      await apiRequest("PATCH", `/api/panel-circuits/${id}`, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/estimates", estimateId, "panel-circuits"] });
+    },
+  });
+
+  const deleteCircuitMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("DELETE", `/api/panel-circuits/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/estimates", estimateId, "panel-circuits"] });
+      toast({ title: "Circuit removed" });
+    },
+  });
+
+  const complianceCheckMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/estimates/${estimateId}/compliance-check`);
+      return await res.json();
+    },
+    onSuccess: (data) => {
+      setComplianceResults(data);
+      toast({ title: "Compliance check complete" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Compliance check failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const addServiceMutation = useMutation({
+    mutationFn: async (data: any) => {
+      await apiRequest("POST", "/api/estimate-services", { ...data, estimateId });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/estimates", estimateId, "services"] });
+      toast({ title: "Service added" });
+      setAddServiceOpen(false);
+    },
+  });
+
+  const deleteServiceMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("DELETE", `/api/estimate-services/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/estimates", estimateId, "services"] });
+      toast({ title: "Service removed" });
+    },
+  });
+
   if (isLoading) {
     return (
       <div className="p-6 space-y-6">
@@ -118,13 +222,23 @@ export default function EstimateDetail() {
   const totalLaborCost = totalLaborHours * estimate.laborRate;
   const totalWireFootage = (items || []).reduce((sum, item) => sum + item.quantity * item.wireFootage, 0);
 
-  const materialWithMarkup = totalMaterialCost * (1 + estimate.materialMarkupPct / 100);
-  const laborWithMarkup = totalLaborCost * (1 + estimate.laborMarkupPct / 100);
+  const serviceMaterialCost = (services || []).reduce((sum, s) => sum + s.materialCost, 0);
+  const serviceLaborHours = (services || []).reduce((sum, s) => sum + s.laborHours, 0);
+  const serviceLaborCost = serviceLaborHours * estimate.laborRate;
+
+  const combinedMaterialCost = totalMaterialCost + serviceMaterialCost;
+  const combinedLaborCost = totalLaborCost + serviceLaborCost;
+
+  const materialWithMarkup = combinedMaterialCost * (1 + estimate.materialMarkupPct / 100);
+  const laborWithMarkup = combinedLaborCost * (1 + estimate.laborMarkupPct / 100);
   const subtotal = materialWithMarkup + laborWithMarkup;
   const overhead = subtotal * (estimate.overheadPct / 100);
   const subtotalWithOverhead = subtotal + overhead;
   const profit = subtotalWithOverhead * (estimate.profitPct / 100);
   const grandTotal = subtotalWithOverhead + profit;
+
+  const totalCircuitAmps = (circuits || []).reduce((sum, c) => sum + c.amps * c.poles, 0);
+  const recommendedPanelSize = totalCircuitAmps <= 100 ? 100 : totalCircuitAmps <= 200 ? 200 : 400;
 
   return (
     <div className="p-6 space-y-6">
@@ -165,7 +279,7 @@ export default function EstimateDetail() {
             <p className="text-lg font-bold" data-testid="text-total-labor">
               ${laborWithMarkup.toFixed(2)}
             </p>
-            <p className="text-xs text-muted-foreground">{totalLaborHours.toFixed(1)} hrs</p>
+            <p className="text-xs text-muted-foreground">{(totalLaborHours + serviceLaborHours).toFixed(1)} hrs</p>
           </CardContent>
         </Card>
         <Card>
@@ -252,139 +366,492 @@ export default function EstimateDetail() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
-          <CardTitle className="text-base font-semibold">
-            Line Items ({items?.length || 0})
-          </CardTitle>
-          <Button size="sm" onClick={() => setAddItemOpen(true)} data-testid="button-add-item">
-            <Plus className="w-4 h-4 mr-1" />
-            Add Item
-          </Button>
-        </CardHeader>
-        <CardContent>
-          {!items || items.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <div className="flex items-center justify-center w-12 h-12 rounded-md bg-muted mb-3">
-                <Package className="w-6 h-6 text-muted-foreground" />
-              </div>
-              <p className="text-sm font-medium">No line items</p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Add items from the device assembly library or create custom items
-              </p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Device</TableHead>
-                    <TableHead>Room</TableHead>
-                    <TableHead className="text-right">Qty</TableHead>
-                    <TableHead className="text-right">Material $</TableHead>
-                    <TableHead className="text-right">Labor (hrs)</TableHead>
-                    <TableHead>Wire</TableHead>
-                    <TableHead className="text-right">Wire (ft)</TableHead>
-                    <TableHead className="text-right">Markup %</TableHead>
-                    <TableHead className="text-right">Total</TableHead>
-                    <TableHead></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {items.map((item) => {
-                    const itemMaterial = item.quantity * item.materialCost;
-                    const itemMarkup = itemMaterial * (item.markupPct / 100);
-                    const itemLabor = item.quantity * item.laborHours * estimate.laborRate;
-                    const itemTotal = itemMaterial + itemMarkup + itemLabor;
-                    return (
-                      <TableRow key={item.id} data-testid={`row-item-${item.id}`}>
-                        <TableCell>
-                          <div>
-                            <p className="text-sm font-medium">{item.deviceType}</p>
-                            <p className="text-xs text-muted-foreground truncate max-w-[200px]">{item.description}</p>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-sm">{item.room || "-"}</TableCell>
-                        <TableCell className="text-right">
-                          <Input
-                            type="number"
-                            className="w-16 text-right"
-                            value={item.quantity}
-                            onChange={(e) => updateItemMutation.mutate({ id: item.id, quantity: parseInt(e.target.value) || 1 })}
-                            min={1}
-                          />
-                        </TableCell>
-                        <TableCell className="text-right text-sm">${item.materialCost.toFixed(2)}</TableCell>
-                        <TableCell className="text-right text-sm">{item.laborHours.toFixed(2)}</TableCell>
-                        <TableCell className="text-xs">{item.wireType || "-"}</TableCell>
-                        <TableCell className="text-right text-sm">{item.wireFootage.toFixed(0)}</TableCell>
-                        <TableCell className="text-right text-sm">{item.markupPct}%</TableCell>
-                        <TableCell className="text-right text-sm font-medium">${itemTotal.toFixed(2)}</TableCell>
-                        <TableCell>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            onClick={() => deleteItemMutation.mutate(item.id)}
-                            data-testid={`button-delete-item-${item.id}`}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      <Tabs defaultValue="line-items">
+        <TabsList data-testid="tabs-estimate">
+          <TabsTrigger value="line-items" data-testid="tab-line-items">
+            <Package className="w-4 h-4 mr-1" />
+            Line Items
+          </TabsTrigger>
+          <TabsTrigger value="panel-schedule" data-testid="tab-panel-schedule">
+            <Zap className="w-4 h-4 mr-1" />
+            Panel Schedule
+          </TabsTrigger>
+          <TabsTrigger value="cec-compliance" data-testid="tab-cec-compliance">
+            <ShieldCheck className="w-4 h-4 mr-1" />
+            CEC Compliance
+          </TabsTrigger>
+          <TabsTrigger value="services" data-testid="tab-services">
+            <Wrench className="w-4 h-4 mr-1" />
+            Services
+          </TabsTrigger>
+        </TabsList>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base font-semibold">Estimate Summary</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-2 max-w-sm ml-auto">
-            <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Materials</span>
-              <span>${totalMaterialCost.toFixed(2)}</span>
-            </div>
-            {estimate.materialMarkupPct > 0 && (
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Material Markup ({estimate.materialMarkupPct}%)</span>
-                <span>${(totalMaterialCost * estimate.materialMarkupPct / 100).toFixed(2)}</span>
+        <TabsContent value="line-items">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
+              <CardTitle className="text-base font-semibold">
+                Line Items ({items?.length || 0})
+              </CardTitle>
+              <Button size="sm" onClick={() => setAddItemOpen(true)} data-testid="button-add-item">
+                <Plus className="w-4 h-4 mr-1" />
+                Add Item
+              </Button>
+            </CardHeader>
+            <CardContent>
+              {!items || items.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-center">
+                  <div className="flex items-center justify-center w-12 h-12 rounded-md bg-muted mb-3">
+                    <Package className="w-6 h-6 text-muted-foreground" />
+                  </div>
+                  <p className="text-sm font-medium">No line items</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Add items from the device assembly library or create custom items
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Device</TableHead>
+                        <TableHead>Room</TableHead>
+                        <TableHead className="text-right">Qty</TableHead>
+                        <TableHead className="text-right">Material $</TableHead>
+                        <TableHead className="text-right">Labor (hrs)</TableHead>
+                        <TableHead>Wire Type</TableHead>
+                        <TableHead className="text-right">Wire (ft)</TableHead>
+                        <TableHead>Box Type</TableHead>
+                        <TableHead>Cover Plate</TableHead>
+                        <TableHead className="text-right">Markup %</TableHead>
+                        <TableHead className="text-right">Total</TableHead>
+                        <TableHead></TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {items.map((item) => {
+                        const itemMaterial = item.quantity * item.materialCost;
+                        const itemMarkup = itemMaterial * (item.markupPct / 100);
+                        const itemLabor = item.quantity * item.laborHours * estimate.laborRate;
+                        const itemTotal = itemMaterial + itemMarkup + itemLabor;
+                        return (
+                          <TableRow key={item.id} data-testid={`row-item-${item.id}`}>
+                            <TableCell>
+                              <div>
+                                <p className="text-sm font-medium">{item.deviceType}</p>
+                                <p className="text-xs text-muted-foreground truncate max-w-[200px]">{item.description}</p>
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-sm">{item.room || "-"}</TableCell>
+                            <TableCell className="text-right">
+                              <Input
+                                type="number"
+                                className="w-16 text-right"
+                                value={item.quantity}
+                                onChange={(e) => updateItemMutation.mutate({ id: item.id, quantity: parseInt(e.target.value) || 1 })}
+                                min={1}
+                                data-testid={`input-qty-${item.id}`}
+                              />
+                            </TableCell>
+                            <TableCell className="text-right text-sm">${item.materialCost.toFixed(2)}</TableCell>
+                            <TableCell className="text-right text-sm">{item.laborHours.toFixed(2)}</TableCell>
+                            <TableCell className="text-xs">{item.wireType || "-"}</TableCell>
+                            <TableCell className="text-right text-sm">{item.wireFootage.toFixed(0)}</TableCell>
+                            <TableCell className="text-xs">{item.boxType || "-"}</TableCell>
+                            <TableCell className="text-xs">{item.coverPlate || "-"}</TableCell>
+                            <TableCell className="text-right text-sm">{item.markupPct}%</TableCell>
+                            <TableCell className="text-right text-sm font-medium">${itemTotal.toFixed(2)}</TableCell>
+                            <TableCell>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => deleteItemMutation.mutate(item.id)}
+                                data-testid={`button-delete-item-${item.id}`}
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="mt-4">
+            <CardHeader>
+              <CardTitle className="text-base font-semibold">Estimate Summary</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2 max-w-sm ml-auto">
+                <div className="flex justify-between gap-4 text-sm">
+                  <span className="text-muted-foreground">Materials</span>
+                  <span>${totalMaterialCost.toFixed(2)}</span>
+                </div>
+                {estimate.materialMarkupPct > 0 && (
+                  <div className="flex justify-between gap-4 text-sm">
+                    <span className="text-muted-foreground">Material Markup ({estimate.materialMarkupPct}%)</span>
+                    <span>${(totalMaterialCost * estimate.materialMarkupPct / 100).toFixed(2)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between gap-4 text-sm">
+                  <span className="text-muted-foreground">Labor ({totalLaborHours.toFixed(1)} hrs @ ${estimate.laborRate}/hr)</span>
+                  <span>${totalLaborCost.toFixed(2)}</span>
+                </div>
+                {estimate.laborMarkupPct > 0 && (
+                  <div className="flex justify-between gap-4 text-sm">
+                    <span className="text-muted-foreground">Labor Markup ({estimate.laborMarkupPct}%)</span>
+                    <span>${(totalLaborCost * estimate.laborMarkupPct / 100).toFixed(2)}</span>
+                  </div>
+                )}
+                {serviceMaterialCost > 0 && (
+                  <div className="flex justify-between gap-4 text-sm">
+                    <span className="text-muted-foreground">Service Materials</span>
+                    <span>${serviceMaterialCost.toFixed(2)}</span>
+                  </div>
+                )}
+                {serviceLaborHours > 0 && (
+                  <div className="flex justify-between gap-4 text-sm">
+                    <span className="text-muted-foreground">Service Labor ({serviceLaborHours.toFixed(1)} hrs)</span>
+                    <span>${serviceLaborCost.toFixed(2)}</span>
+                  </div>
+                )}
+                <div className="border-t pt-2 flex justify-between gap-4 text-sm font-medium">
+                  <span>Subtotal</span>
+                  <span>${subtotal.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between gap-4 text-sm">
+                  <span className="text-muted-foreground">Overhead ({estimate.overheadPct}%)</span>
+                  <span>${overhead.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between gap-4 text-sm">
+                  <span className="text-muted-foreground">Profit ({estimate.profitPct}%)</span>
+                  <span>${profit.toFixed(2)}</span>
+                </div>
+                <div className="border-t pt-2 flex justify-between gap-4 text-lg font-bold">
+                  <span>Grand Total</span>
+                  <span className="text-chart-3">${grandTotal.toFixed(2)}</span>
+                </div>
               </div>
-            )}
-            <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Labor ({totalLaborHours.toFixed(1)} hrs @ ${estimate.laborRate}/hr)</span>
-              <span>${totalLaborCost.toFixed(2)}</span>
-            </div>
-            {estimate.laborMarkupPct > 0 && (
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Labor Markup ({estimate.laborMarkupPct}%)</span>
-                <span>${(totalLaborCost * estimate.laborMarkupPct / 100).toFixed(2)}</span>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="panel-schedule">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
+              <CardTitle className="text-base font-semibold">
+                Panel Schedule ({circuits?.length || 0} circuits)
+              </CardTitle>
+              <div className="flex gap-2 flex-wrap">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => generatePanelMutation.mutate()}
+                  disabled={generatePanelMutation.isPending}
+                  data-testid="button-generate-panel"
+                >
+                  <RefreshCw className="w-4 h-4 mr-1" />
+                  {generatePanelMutation.isPending ? "Generating..." : "Generate from Line Items"}
+                </Button>
+                <Button size="sm" onClick={() => setAddCircuitOpen(true)} data-testid="button-add-circuit">
+                  <Plus className="w-4 h-4 mr-1" />
+                  Add Circuit
+                </Button>
               </div>
-            )}
-            <div className="border-t pt-2 flex justify-between text-sm font-medium">
-              <span>Subtotal</span>
-              <span>${subtotal.toFixed(2)}</span>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Overhead ({estimate.overheadPct}%)</span>
-              <span>${overhead.toFixed(2)}</span>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Profit ({estimate.profitPct}%)</span>
-              <span>${profit.toFixed(2)}</span>
-            </div>
-            <div className="border-t pt-2 flex justify-between text-lg font-bold">
-              <span>Grand Total</span>
-              <span className="text-chart-3">${grandTotal.toFixed(2)}</span>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+            </CardHeader>
+            <CardContent>
+              {!circuits || circuits.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-center">
+                  <div className="flex items-center justify-center w-12 h-12 rounded-md bg-muted mb-3">
+                    <Zap className="w-6 h-6 text-muted-foreground" />
+                  </div>
+                  <p className="text-sm font-medium">No circuits</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Generate circuits from line items or add them manually
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="text-right">Circuit #</TableHead>
+                        <TableHead className="text-right">Amps</TableHead>
+                        <TableHead className="text-right">Poles</TableHead>
+                        <TableHead>Description</TableHead>
+                        <TableHead>Wire Type</TableHead>
+                        <TableHead>GFCI</TableHead>
+                        <TableHead>AFCI</TableHead>
+                        <TableHead></TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {circuits.map((circuit) => (
+                        <TableRow key={circuit.id} data-testid={`row-circuit-${circuit.id}`}>
+                          <TableCell className="text-right text-sm font-medium">{circuit.circuitNumber}</TableCell>
+                          <TableCell className="text-right">
+                            <Input
+                              type="number"
+                              className="w-16 text-right"
+                              value={circuit.amps}
+                              onChange={(e) => updateCircuitMutation.mutate({ id: circuit.id, amps: parseInt(e.target.value) || 15 })}
+                              data-testid={`input-circuit-amps-${circuit.id}`}
+                            />
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Input
+                              type="number"
+                              className="w-14 text-right"
+                              value={circuit.poles}
+                              onChange={(e) => updateCircuitMutation.mutate({ id: circuit.id, poles: parseInt(e.target.value) || 1 })}
+                              min={1}
+                              max={3}
+                              data-testid={`input-circuit-poles-${circuit.id}`}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Input
+                              className="min-w-[200px]"
+                              value={circuit.description}
+                              onChange={(e) => updateCircuitMutation.mutate({ id: circuit.id, description: e.target.value })}
+                              data-testid={`input-circuit-desc-${circuit.id}`}
+                            />
+                          </TableCell>
+                          <TableCell className="text-xs">{circuit.wireType || "-"}</TableCell>
+                          <TableCell>
+                            <Badge
+                              variant={circuit.isGfci ? "default" : "secondary"}
+                              className="text-xs"
+                              data-testid={`badge-gfci-${circuit.id}`}
+                            >
+                              {circuit.isGfci ? "Yes" : "No"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge
+                              variant={circuit.isAfci ? "default" : "secondary"}
+                              className="text-xs"
+                              data-testid={`badge-afci-${circuit.id}`}
+                            >
+                              {circuit.isAfci ? "Yes" : "No"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => deleteCircuitMutation.mutate(circuit.id)}
+                              data-testid={`button-delete-circuit-${circuit.id}`}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {circuits && circuits.length > 0 && (
+            <Card className="mt-4">
+              <CardHeader>
+                <CardTitle className="text-base font-semibold">Panel Summary</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <p className="text-xs text-muted-foreground">Total Circuits</p>
+                    <p className="text-lg font-bold" data-testid="text-total-circuits">{circuits.length}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Total Amps</p>
+                    <p className="text-lg font-bold" data-testid="text-total-amps">{totalCircuitAmps}A</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Recommended Panel</p>
+                    <p className="text-lg font-bold" data-testid="text-panel-size">{recommendedPanelSize}A</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+
+        <TabsContent value="cec-compliance">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
+              <CardTitle className="text-base font-semibold">CEC Compliance Check</CardTitle>
+              <Button
+                size="sm"
+                onClick={() => complianceCheckMutation.mutate()}
+                disabled={complianceCheckMutation.isPending}
+                data-testid="button-run-compliance"
+              >
+                <Play className="w-4 h-4 mr-1" />
+                {complianceCheckMutation.isPending ? "Running..." : "Run Compliance Check"}
+              </Button>
+            </CardHeader>
+            <CardContent>
+              {!complianceResults ? (
+                <div className="flex flex-col items-center justify-center py-12 text-center">
+                  <div className="flex items-center justify-center w-12 h-12 rounded-md bg-muted mb-3">
+                    <ShieldCheck className="w-6 h-6 text-muted-foreground" />
+                  </div>
+                  <p className="text-sm font-medium">No compliance check run</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Run a compliance check to verify CEC 2021 requirements
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                    <div className="text-center p-3 rounded-md bg-muted">
+                      <p className="text-xs text-muted-foreground">Total Rules</p>
+                      <p className="text-lg font-bold" data-testid="text-compliance-total">{complianceResults.summary.total}</p>
+                    </div>
+                    <div className="text-center p-3 rounded-md bg-muted">
+                      <p className="text-xs text-muted-foreground">Passes</p>
+                      <p className="text-lg font-bold" data-testid="text-compliance-pass">{complianceResults.summary.pass}</p>
+                    </div>
+                    <div className="text-center p-3 rounded-md bg-muted">
+                      <p className="text-xs text-muted-foreground">Warnings</p>
+                      <p className="text-lg font-bold" data-testid="text-compliance-warn">{complianceResults.summary.warn}</p>
+                    </div>
+                    <div className="text-center p-3 rounded-md bg-muted">
+                      <p className="text-xs text-muted-foreground">Failures</p>
+                      <p className="text-lg font-bold" data-testid="text-compliance-fail">{complianceResults.summary.fail}</p>
+                    </div>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Rule</TableHead>
+                          <TableHead>Location</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Description</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {complianceResults.rules.map((rule, idx) => (
+                          <TableRow key={idx} data-testid={`row-compliance-${idx}`}>
+                            <TableCell className="text-sm font-medium">{rule.rule}</TableCell>
+                            <TableCell className="text-sm">{rule.location}</TableCell>
+                            <TableCell>
+                              <Badge
+                                variant={
+                                  rule.status === "PASS" ? "default" :
+                                  rule.status === "WARN" ? "secondary" :
+                                  rule.status === "FAIL" ? "destructive" :
+                                  "outline"
+                                }
+                                className="text-xs"
+                                data-testid={`badge-compliance-status-${idx}`}
+                              >
+                                {rule.status}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground">{rule.description}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="services">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
+              <CardTitle className="text-base font-semibold">
+                Services ({services?.length || 0})
+              </CardTitle>
+              <Button size="sm" onClick={() => setAddServiceOpen(true)} data-testid="button-add-service">
+                <Plus className="w-4 h-4 mr-1" />
+                Add Service
+              </Button>
+            </CardHeader>
+            <CardContent>
+              {!services || services.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-center">
+                  <div className="flex items-center justify-center w-12 h-12 rounded-md bg-muted mb-3">
+                    <Wrench className="w-6 h-6 text-muted-foreground" />
+                  </div>
+                  <p className="text-sm font-medium">No services added</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Add service bundles to include additional work in this estimate
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Name</TableHead>
+                        <TableHead className="text-right">Material $</TableHead>
+                        <TableHead className="text-right">Labor Hrs</TableHead>
+                        <TableHead></TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {services.map((service) => (
+                        <TableRow key={service.id} data-testid={`row-service-${service.id}`}>
+                          <TableCell className="text-sm font-medium">{service.name}</TableCell>
+                          <TableCell className="text-right text-sm">${service.materialCost.toFixed(2)}</TableCell>
+                          <TableCell className="text-right text-sm">{service.laborHours.toFixed(2)}</TableCell>
+                          <TableCell>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => deleteServiceMutation.mutate(service.id)}
+                              data-testid={`button-delete-service-${service.id}`}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {services && services.length > 0 && (
+            <Card className="mt-4">
+              <CardHeader>
+                <CardTitle className="text-base font-semibold">Service Totals</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2 max-w-sm ml-auto">
+                  <div className="flex justify-between gap-4 text-sm">
+                    <span className="text-muted-foreground">Total Material Cost</span>
+                    <span data-testid="text-service-material-total">${serviceMaterialCost.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between gap-4 text-sm">
+                    <span className="text-muted-foreground">Total Labor Hours</span>
+                    <span data-testid="text-service-labor-total">{serviceLaborHours.toFixed(2)} hrs</span>
+                  </div>
+                  <div className="border-t pt-2 flex justify-between gap-4 text-sm font-medium">
+                    <span>Total Service Cost</span>
+                    <span data-testid="text-service-total">${(serviceMaterialCost + serviceLaborCost).toFixed(2)}</span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+      </Tabs>
 
       <AddItemDialog
         open={addItemOpen}
@@ -392,6 +859,22 @@ export default function EstimateDetail() {
         assemblies={assemblies || []}
         onAdd={(data) => addItemMutation.mutate(data)}
         isPending={addItemMutation.isPending}
+      />
+
+      <AddCircuitDialog
+        open={addCircuitOpen}
+        onOpenChange={setAddCircuitOpen}
+        onAdd={(data) => addCircuitMutation.mutate(data)}
+        isPending={addCircuitMutation.isPending}
+        existingCount={circuits?.length || 0}
+      />
+
+      <AddServiceDialog
+        open={addServiceOpen}
+        onOpenChange={setAddServiceOpen}
+        bundles={serviceBundles || []}
+        onAdd={(data) => addServiceMutation.mutate(data)}
+        isPending={addServiceMutation.isPending}
       />
     </div>
   );
@@ -581,6 +1064,186 @@ function AddItemDialog({ open, onOpenChange, assemblies, onAdd, isPending }: {
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
             <Button type="submit" disabled={isPending} data-testid="button-submit-item">
               {isPending ? "Adding..." : "Add Item"}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AddCircuitDialog({ open, onOpenChange, onAdd, isPending, existingCount }: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onAdd: (data: any) => void;
+  isPending: boolean;
+  existingCount: number;
+}) {
+  const [form, setForm] = useState({
+    circuitNumber: existingCount + 1,
+    amps: 15,
+    poles: 1,
+    description: "",
+    wireType: "14/2 NM-B",
+    isGfci: false,
+    isAfci: false,
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onAdd(form);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Add Circuit</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="grid grid-cols-3 gap-3">
+            <div className="space-y-2">
+              <Label>Circuit #</Label>
+              <Input
+                type="number"
+                min={1}
+                value={form.circuitNumber}
+                onChange={(e) => setForm(p => ({ ...p, circuitNumber: parseInt(e.target.value) || 1 }))}
+                data-testid="input-circuit-number"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Amps</Label>
+              <Input
+                type="number"
+                value={form.amps}
+                onChange={(e) => setForm(p => ({ ...p, amps: parseInt(e.target.value) || 15 }))}
+                data-testid="input-new-circuit-amps"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Poles</Label>
+              <Input
+                type="number"
+                min={1}
+                max={3}
+                value={form.poles}
+                onChange={(e) => setForm(p => ({ ...p, poles: parseInt(e.target.value) || 1 }))}
+                data-testid="input-new-circuit-poles"
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label>Description</Label>
+            <Input
+              placeholder="e.g., Kitchen Receptacles"
+              value={form.description}
+              onChange={(e) => setForm(p => ({ ...p, description: e.target.value }))}
+              required
+              data-testid="input-new-circuit-desc"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Wire Type</Label>
+            <Input
+              value={form.wireType}
+              onChange={(e) => setForm(p => ({ ...p, wireType: e.target.value }))}
+              data-testid="input-new-circuit-wire"
+            />
+          </div>
+          <div className="flex gap-6">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="isGfci"
+                checked={form.isGfci}
+                onCheckedChange={(checked) => setForm(p => ({ ...p, isGfci: !!checked }))}
+                data-testid="checkbox-gfci"
+              />
+              <Label htmlFor="isGfci">GFCI</Label>
+            </div>
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="isAfci"
+                checked={form.isAfci}
+                onCheckedChange={(checked) => setForm(p => ({ ...p, isAfci: !!checked }))}
+                data-testid="checkbox-afci"
+              />
+              <Label htmlFor="isAfci">AFCI</Label>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+            <Button type="submit" disabled={isPending} data-testid="button-submit-circuit">
+              {isPending ? "Adding..." : "Add Circuit"}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AddServiceDialog({ open, onOpenChange, bundles, onAdd, isPending }: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  bundles: ServiceBundle[];
+  onAdd: (data: any) => void;
+  isPending: boolean;
+}) {
+  const [selectedBundle, setSelectedBundle] = useState("");
+
+  const bundle = bundles.find(b => b.id.toString() === selectedBundle);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (bundle) {
+      onAdd({
+        serviceBundleId: bundle.id,
+        name: bundle.name,
+        materialCost: bundle.materialCost,
+        laborHours: bundle.laborHours,
+      });
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Add Service</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label>Service Bundle</Label>
+            <Select value={selectedBundle} onValueChange={setSelectedBundle}>
+              <SelectTrigger data-testid="select-service-bundle">
+                <SelectValue placeholder="Select a service..." />
+              </SelectTrigger>
+              <SelectContent>
+                {bundles.map(b => (
+                  <SelectItem key={b.id} value={b.id.toString()}>
+                    {b.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {bundle && (
+            <div className="rounded-md bg-muted p-3 space-y-1">
+              <div className="flex justify-between gap-4 text-sm">
+                <span className="text-muted-foreground">Material Cost</span>
+                <span className="font-medium">${bundle.materialCost.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between gap-4 text-sm">
+                <span className="text-muted-foreground">Labor Hours</span>
+                <span className="font-medium">{bundle.laborHours.toFixed(2)} hrs</span>
+              </div>
+            </div>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+            <Button type="submit" disabled={isPending || !bundle} data-testid="button-submit-service">
+              {isPending ? "Adding..." : "Add Service"}
             </Button>
           </div>
         </form>

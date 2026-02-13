@@ -17,8 +17,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow
+} from "@/components/ui/table";
+import {
   Plus, Search, FolderOpen, Zap, MapPin, Phone, Mail,
-  Building2, MoreHorizontal, Calendar
+  Building2, MoreHorizontal, Calendar, LayoutGrid, List
 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger
@@ -184,6 +187,7 @@ function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onOpenChan
 export default function Projects() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [, navigate] = useLocation();
   const { toast } = useToast();
@@ -268,6 +272,26 @@ export default function Projects() {
             <SelectItem value="lost">Lost</SelectItem>
           </SelectContent>
         </Select>
+        <div className="flex gap-1">
+          <Button
+            size="icon"
+            variant={viewMode === "grid" ? "default" : "ghost"}
+            onClick={() => setViewMode("grid")}
+            className={viewMode === "grid" ? "toggle-elevate toggle-elevated" : ""}
+            data-testid="button-view-grid"
+          >
+            <LayoutGrid className="w-4 h-4" />
+          </Button>
+          <Button
+            size="icon"
+            variant={viewMode === "list" ? "default" : "ghost"}
+            onClick={() => setViewMode("list")}
+            className={viewMode === "list" ? "toggle-elevate toggle-elevated" : ""}
+            data-testid="button-view-list"
+          >
+            <List className="w-4 h-4" />
+          </Button>
+        </div>
       </div>
 
       {filtered.length === 0 ? (
@@ -290,7 +314,7 @@ export default function Projects() {
             )}
           </CardContent>
         </Card>
-      ) : (
+      ) : viewMode === "grid" ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((project) => (
             <Card
@@ -363,6 +387,90 @@ export default function Projects() {
             </Card>
           ))}
         </div>
+      ) : (
+        <Card>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Project</TableHead>
+                    <TableHead>Client</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Address</TableHead>
+                    <TableHead>Created</TableHead>
+                    <TableHead></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filtered.map((project) => (
+                    <TableRow
+                      key={project.id}
+                      className="cursor-pointer"
+                      data-testid={`row-project-${project.id}`}
+                    >
+                      <TableCell onClick={() => navigate(`/projects/${project.id}`)}>
+                        <div className="flex items-center gap-2">
+                          <Zap className="w-4 h-4 text-primary flex-shrink-0" />
+                          <span className="text-sm font-medium">{project.name}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell onClick={() => navigate(`/projects/${project.id}`)}>
+                        <span className="text-sm">{project.clientName}</span>
+                      </TableCell>
+                      <TableCell>
+                        <StatusBadge status={project.status} />
+                      </TableCell>
+                      <TableCell>
+                        <DwellingBadge type={project.dwellingType} />
+                      </TableCell>
+                      <TableCell onClick={() => navigate(`/projects/${project.id}`)}>
+                        <span className="text-sm text-muted-foreground truncate max-w-[200px] block">
+                          {project.address || "-"}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <span className="text-sm text-muted-foreground">
+                          {new Date(project.createdAt).toLocaleDateString("en-CA")}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button size="icon" variant="ghost" data-testid={`button-list-menu-${project.id}`}>
+                              <MoreHorizontal className="w-4 h-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => navigate(`/projects/${project.id}`)}>
+                              View Details
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => updateStatusMutation.mutate({ id: project.id, status: "in_progress" })}>
+                              Mark In Progress
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => updateStatusMutation.mutate({ id: project.id, status: "bid_sent" })}>
+                              Mark Bid Sent
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => updateStatusMutation.mutate({ id: project.id, status: "won" })}>
+                              Mark Won
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => deleteMutation.mutate(project.id)}
+                              className="text-destructive"
+                            >
+                              Delete
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       <CreateProjectDialog open={dialogOpen} onOpenChange={setDialogOpen} />
