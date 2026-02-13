@@ -26,8 +26,9 @@ import {
 import {
   ArrowLeft, Plus, Trash2, DollarSign, Clock, Cable,
   Package, Zap, ShieldCheck, Wrench, RefreshCw, Play,
-  Download, FileText, FileSpreadsheet, ScanLine
+  Download, FileText, FileSpreadsheet, ScanLine, FileOutput
 } from "lucide-react";
+import { useLocation } from "wouter";
 import type {
   Estimate, EstimateItem, DeviceAssembly, PanelCircuit,
   EstimateService, ServiceBundle
@@ -35,6 +36,7 @@ import type {
 
 export default function EstimateDetail() {
   const [, params] = useRoute("/estimates/:id");
+  const [, navigate] = useLocation();
   const { toast } = useToast();
   const [addItemOpen, setAddItemOpen] = useState(false);
   const [addCircuitOpen, setAddCircuitOpen] = useState(false);
@@ -169,6 +171,21 @@ export default function EstimateDetail() {
     },
     onError: (err: Error) => {
       toast({ title: "Compliance check failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const convertToInvoiceMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/estimates/${estimateId}/convert-to-invoice`);
+      return await res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      toast({ title: "Invoice created", description: `Invoice ${data.invoiceNumber} generated` });
+      navigate(`/invoices/${data.id}`);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Conversion failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -870,6 +887,16 @@ export default function EstimateDetail() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => convertToInvoiceMutation.mutate()}
+            disabled={convertToInvoiceMutation.isPending}
+            data-testid="button-convert-to-invoice"
+          >
+            <FileOutput className="w-4 h-4 mr-2" />
+            {convertToInvoiceMutation.isPending ? "Converting..." : "Convert to Invoice"}
+          </Button>
         </div>
       </div>
 

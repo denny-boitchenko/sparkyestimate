@@ -1,9 +1,10 @@
 # SparkyEstimate - Electrical Estimating App
 
 ## Overview
-Professional electrical estimating web application for Canadian residential contractors. Features AI-powered drawing analysis using Gemini API, CEC 2021 compliance, and a clean modern design with electric blue and amber branding.
+Professional electrical estimating web application for Canadian residential contractors. Features AI-powered drawing analysis using Gemini API, CEC 2021 compliance, customer database, invoice workflow, per-employee labor rates, company logo on PDFs, and a clean modern design with electric blue and amber branding.
 
 ## Recent Changes
+- 2026-02-13: Added Customer Database (CRUD, search/filter), Invoice Workflow (list/detail with status filters, estimate-to-invoice conversion), Employees page (labor rate management), Company Logo upload in settings (renders on all PDFs), Convert to Invoice button on estimate detail
 - 2026-02-13: Professional PDF exports - Client Estimate (company header, grouped services, subtotal/GST/total), Material List (device table, misc parts, wire purchase list with waste factor), CEC Report (compliance score, info notes with fixes, passed checks)
 - 2026-02-13: Simplified Materials tab to Device/Cost/Supplier only, editable estimate names inline, AI Analysis tab in estimate detail
 - 2026-02-13: Delete individual AI analysis history entries, Estimate Template editor in Settings
@@ -21,12 +22,12 @@ Professional electrical estimating web application for Canadian residential cont
 - **Theme**: Electric blue (217 91% 40%) primary, amber (37 92% 50%) accent
 
 ### Key Files
-- `shared/schema.ts` - Data models (projects, estimates, estimate_items, device_assemblies, ai_analyses, settings, wire_types, service_bundles, panel_circuits, estimate_services, compliance_documents, supplier_imports)
+- `shared/schema.ts` - Data models (projects, estimates, estimate_items, device_assemblies, ai_analyses, settings, wire_types, service_bundles, panel_circuits, estimate_services, compliance_documents, supplier_imports, customers, employees, invoices, invoice_items)
 - `server/routes.ts` - All API endpoints with Zod validation
 - `server/storage.ts` - Database CRUD operations (IStorage interface + DatabaseStorage)
 - `server/seed.ts` - Seeds device assemblies, wire types, service bundles, and sample projects
 - `client/src/App.tsx` - Router with sidebar layout
-- `client/src/pages/` - Dashboard, Projects, Estimates, EstimateDetail, AI Analysis, Settings
+- `client/src/pages/` - Dashboard, Projects, Estimates, EstimateDetail, AI Analysis, Settings, Customers, Employees, Invoices, InvoiceDetail
 - `client/src/components/app-sidebar.tsx` - Navigation sidebar
 
 ### Pages
@@ -34,14 +35,19 @@ Professional electrical estimating web application for Canadian residential cont
 - `/projects` - Project list with Client View (grouped by client) and Project View toggle, colored status badges
 - `/projects/:id` - Project detail with estimates
 - `/estimates` - All estimates list
-- `/estimates/:id` - Estimate detail with 6 tabs: Line Items, Panel Schedule, CEC Compliance, Services, AI Analysis
+- `/estimates/:id` - Estimate detail with 6 tabs: Line Items, Panel Schedule, CEC Compliance, Services, AI Analysis. Convert to Invoice button.
+- `/invoices` - Invoice list with status filters (All/Draft/Sent/Paid/Overdue), summary cards, quick actions
+- `/invoices/:id` - Invoice detail with line items, status management, PDF/Excel exports
+- `/customers` - Customer database with CRUD, search/filter
+- `/employees` - Employee/labor rate management with add/edit/delete, rate stats
 - `/ai-analysis` - AI drawing upload and analysis with delete entries
-- `/settings` - 7 tabs: General, Materials, Wire Types, Services, CEC, Supplier Import, Estimate Template
+- `/settings` - 7 tabs: General (with company logo upload), Materials, Wire Types, Services, CEC, Supplier Import, Estimate Template
 
 ### PDF Export Types
-- **Client Estimate PDF**: Company header, estimate info box, services grouped by room, subtotal/GST/total, footer
+- **Client Estimate PDF**: Company header + logo, estimate info box, services grouped by room, subtotal/GST/total, footer
 - **Material List PDF**: Landscape, device table with box/cover/wire columns, misc parts summary, wire purchase list page (with 15% waste factor, spool calculations)
 - **CEC Report PDF**: Compliance score summary, information notes with fix suggestions, passed checks table, disclaimer footer
+- **Invoice PDF**: Company header + logo, invoice info box, customer details, services table, subtotal/tax/total, notes/terms
 
 ### API Routes
 - `GET/POST /api/projects` - Projects CRUD
@@ -65,6 +71,17 @@ Professional electrical estimating web application for Canadian residential cont
 - `POST /api/estimate-services` - Add service to estimate
 - `DELETE /api/estimate-services/:id`
 - `POST /api/estimates/:id/compliance-check` - Run CEC compliance check
+- `POST /api/estimates/:id/convert-to-invoice` - Convert estimate to invoice
+- `GET/POST /api/customers` - Customer CRUD
+- `GET/PATCH/DELETE /api/customers/:id`
+- `GET/POST /api/employees` - Employee CRUD
+- `GET/PATCH/DELETE /api/employees/:id`
+- `GET/POST /api/invoices` - Invoice CRUD
+- `GET/PATCH/DELETE /api/invoices/:id`
+- `GET /api/invoices/:id/items` - Invoice line items
+- `POST /api/invoice-items` - Create invoice item
+- `PATCH/DELETE /api/invoice-items/:id`
+- `GET /api/invoices/:id/export` - Invoice export data
 - `GET /api/ai-analyses` - Analysis history
 - `POST /api/ai-analyze` - Upload and analyze drawing (multipart, 100MB limit)
 - `DELETE /api/ai-analyses/:id` - Delete analysis entry
@@ -77,6 +94,8 @@ Professional electrical estimating web application for Canadian residential cont
 - `GET /api/estimates/:id/export/cec-report` - CEC report data
 - `GET /api/estimates/:id/export/excel` - Excel download
 - `GET/POST /api/settings` - App settings
+- `POST /api/settings/logo` - Upload company logo
+- `DELETE /api/settings/logo` - Remove company logo
 - `GET/POST /api/compliance-documents` - CEC document management
 
 ## User Preferences

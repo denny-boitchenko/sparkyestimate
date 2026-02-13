@@ -90,6 +90,130 @@ const defaultServiceForm: ServiceFormData = {
   laborHours: "0",
 };
 
+function CompanyLogoSection() {
+  const { toast } = useToast();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [logoPreview, setLogoPreview] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+
+  const { data: settings } = useQuery<Setting[]>({
+    queryKey: ["/api/settings"],
+  });
+
+  useEffect(() => {
+    if (settings) {
+      const logoSetting = settings.find((s: Setting) => s.key === "companyLogoData");
+      if (logoSetting?.value) {
+        setLogoPreview(logoSetting.value);
+      }
+    }
+  }, [settings]);
+
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      toast({ title: "File too large", description: "Logo must be under 2MB", variant: "destructive" });
+      return;
+    }
+    setIsUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("logo", file);
+      const res = await fetch("/api/settings/logo", { method: "POST", body: formData });
+      if (!res.ok) throw new Error("Upload failed");
+      const reader = new FileReader();
+      reader.onload = () => {
+        setLogoPreview(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
+      toast({ title: "Logo uploaded" });
+    } catch (err: any) {
+      toast({ title: "Upload failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleRemoveLogo = async () => {
+    try {
+      await fetch("/api/settings/logo", { method: "DELETE" });
+      setLogoPreview(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
+      toast({ title: "Logo removed" });
+    } catch {
+      toast({ title: "Remove failed", variant: "destructive" });
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base font-semibold flex items-center gap-2">
+          <Upload className="w-4 h-4 text-primary" />
+          Company Logo
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">
+          Upload your company logo to appear on all PDF exports (estimates, invoices, material lists)
+        </p>
+        {logoPreview ? (
+          <div className="space-y-3">
+            <div className="border rounded-md p-4 flex items-center justify-center bg-muted/30">
+              <img
+                src={logoPreview}
+                alt="Company logo"
+                className="max-h-24 max-w-full object-contain"
+                data-testid="img-company-logo"
+              />
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => fileInputRef.current?.click()}
+                data-testid="button-change-logo"
+              >
+                Change Logo
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleRemoveLogo}
+                data-testid="button-remove-logo"
+              >
+                <Trash2 className="w-4 h-4 mr-1" />
+                Remove
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div
+            className="border-2 border-dashed rounded-md p-8 flex flex-col items-center justify-center cursor-pointer hover-elevate"
+            onClick={() => fileInputRef.current?.click()}
+            data-testid="button-upload-logo"
+          >
+            <Upload className="w-8 h-8 text-muted-foreground mb-2" />
+            <p className="text-sm font-medium">Click to upload logo</p>
+            <p className="text-xs text-muted-foreground mt-1">PNG, JPG up to 2MB</p>
+          </div>
+        )}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/jpg"
+          className="hidden"
+          onChange={handleLogoUpload}
+          data-testid="input-logo-file"
+        />
+        {isUploading && <p className="text-sm text-muted-foreground">Uploading...</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
 function GeneralTab({ form, setForm, onSave, isSaving }: {
   form: SettingsData;
   setForm: (fn: (prev: SettingsData) => SettingsData) => void;
@@ -236,6 +360,8 @@ function GeneralTab({ form, setForm, onSave, isSaving }: {
               </div>
             </CardContent>
           </Card>
+
+          <CompanyLogoSection />
 
           <Card>
             <CardHeader>

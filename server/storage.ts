@@ -1,10 +1,15 @@
 import {
-  projects, estimates, estimateItems, deviceAssemblies, aiAnalyses, settings,
+  customers, employees, projects, estimates, estimateItems, invoices, invoiceItems,
+  deviceAssemblies, aiAnalyses, settings,
   wireTypes, serviceBundles, panelCircuits, estimateServices, complianceDocuments,
   supplierImports,
+  type Customer, type InsertCustomer,
+  type Employee, type InsertEmployee,
   type Project, type InsertProject,
   type Estimate, type InsertEstimate,
   type EstimateItem, type InsertEstimateItem,
+  type Invoice, type InsertInvoice,
+  type InvoiceItem, type InsertInvoiceItem,
   type DeviceAssembly, type InsertDeviceAssembly,
   type AiAnalysis, type InsertAiAnalysis,
   type Setting, type InsertSetting,
@@ -19,6 +24,18 @@ import { db } from "./db";
 import { eq, desc } from "drizzle-orm";
 
 export interface IStorage {
+  getCustomers(): Promise<Customer[]>;
+  getCustomer(id: number): Promise<Customer | undefined>;
+  createCustomer(data: InsertCustomer): Promise<Customer>;
+  updateCustomer(id: number, data: Partial<InsertCustomer>): Promise<Customer | undefined>;
+  deleteCustomer(id: number): Promise<void>;
+
+  getEmployees(): Promise<Employee[]>;
+  getEmployee(id: number): Promise<Employee | undefined>;
+  createEmployee(data: InsertEmployee): Promise<Employee>;
+  updateEmployee(id: number, data: Partial<InsertEmployee>): Promise<Employee | undefined>;
+  deleteEmployee(id: number): Promise<void>;
+
   getProjects(): Promise<Project[]>;
   getProject(id: number): Promise<Project | undefined>;
   createProject(data: InsertProject): Promise<Project>;
@@ -36,6 +53,19 @@ export interface IStorage {
   createEstimateItem(data: InsertEstimateItem): Promise<EstimateItem>;
   updateEstimateItem(id: number, data: Partial<InsertEstimateItem>): Promise<EstimateItem | undefined>;
   deleteEstimateItem(id: number): Promise<void>;
+
+  getInvoices(): Promise<Invoice[]>;
+  getInvoice(id: number): Promise<Invoice | undefined>;
+  getInvoicesByProject(projectId: number): Promise<Invoice[]>;
+  createInvoice(data: InsertInvoice): Promise<Invoice>;
+  updateInvoice(id: number, data: Partial<InsertInvoice>): Promise<Invoice | undefined>;
+  deleteInvoice(id: number): Promise<void>;
+
+  getInvoiceItems(invoiceId: number): Promise<InvoiceItem[]>;
+  createInvoiceItem(data: InsertInvoiceItem): Promise<InvoiceItem>;
+  updateInvoiceItem(id: number, data: Partial<InsertInvoiceItem>): Promise<InvoiceItem | undefined>;
+  deleteInvoiceItem(id: number): Promise<void>;
+  deleteAllInvoiceItems(invoiceId: number): Promise<void>;
 
   getDeviceAssemblies(): Promise<DeviceAssembly[]>;
   createDeviceAssembly(data: InsertDeviceAssembly): Promise<DeviceAssembly>;
@@ -87,6 +117,52 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
+  async getCustomers(): Promise<Customer[]> {
+    return db.select().from(customers).orderBy(desc(customers.createdAt));
+  }
+
+  async getCustomer(id: number): Promise<Customer | undefined> {
+    const [customer] = await db.select().from(customers).where(eq(customers.id, id));
+    return customer;
+  }
+
+  async createCustomer(data: InsertCustomer): Promise<Customer> {
+    const [customer] = await db.insert(customers).values(data).returning();
+    return customer;
+  }
+
+  async updateCustomer(id: number, data: Partial<InsertCustomer>): Promise<Customer | undefined> {
+    const [customer] = await db.update(customers).set(data).where(eq(customers.id, id)).returning();
+    return customer;
+  }
+
+  async deleteCustomer(id: number): Promise<void> {
+    await db.delete(customers).where(eq(customers.id, id));
+  }
+
+  async getEmployees(): Promise<Employee[]> {
+    return db.select().from(employees).orderBy(desc(employees.createdAt));
+  }
+
+  async getEmployee(id: number): Promise<Employee | undefined> {
+    const [employee] = await db.select().from(employees).where(eq(employees.id, id));
+    return employee;
+  }
+
+  async createEmployee(data: InsertEmployee): Promise<Employee> {
+    const [employee] = await db.insert(employees).values(data).returning();
+    return employee;
+  }
+
+  async updateEmployee(id: number, data: Partial<InsertEmployee>): Promise<Employee | undefined> {
+    const [employee] = await db.update(employees).set(data).where(eq(employees.id, id)).returning();
+    return employee;
+  }
+
+  async deleteEmployee(id: number): Promise<void> {
+    await db.delete(employees).where(eq(employees.id, id));
+  }
+
   async getProjects(): Promise<Project[]> {
     return db.select().from(projects).orderBy(desc(projects.createdAt));
   }
@@ -153,6 +229,55 @@ export class DatabaseStorage implements IStorage {
 
   async deleteEstimateItem(id: number): Promise<void> {
     await db.delete(estimateItems).where(eq(estimateItems.id, id));
+  }
+
+  async getInvoices(): Promise<Invoice[]> {
+    return db.select().from(invoices).orderBy(desc(invoices.createdAt));
+  }
+
+  async getInvoice(id: number): Promise<Invoice | undefined> {
+    const [invoice] = await db.select().from(invoices).where(eq(invoices.id, id));
+    return invoice;
+  }
+
+  async getInvoicesByProject(projectId: number): Promise<Invoice[]> {
+    return db.select().from(invoices).where(eq(invoices.projectId, projectId)).orderBy(desc(invoices.createdAt));
+  }
+
+  async createInvoice(data: InsertInvoice): Promise<Invoice> {
+    const [invoice] = await db.insert(invoices).values(data).returning();
+    return invoice;
+  }
+
+  async updateInvoice(id: number, data: Partial<InsertInvoice>): Promise<Invoice | undefined> {
+    const [invoice] = await db.update(invoices).set(data).where(eq(invoices.id, id)).returning();
+    return invoice;
+  }
+
+  async deleteInvoice(id: number): Promise<void> {
+    await db.delete(invoices).where(eq(invoices.id, id));
+  }
+
+  async getInvoiceItems(invoiceId: number): Promise<InvoiceItem[]> {
+    return db.select().from(invoiceItems).where(eq(invoiceItems.invoiceId, invoiceId));
+  }
+
+  async createInvoiceItem(data: InsertInvoiceItem): Promise<InvoiceItem> {
+    const [item] = await db.insert(invoiceItems).values(data).returning();
+    return item;
+  }
+
+  async updateInvoiceItem(id: number, data: Partial<InsertInvoiceItem>): Promise<InvoiceItem | undefined> {
+    const [item] = await db.update(invoiceItems).set(data).where(eq(invoiceItems.id, id)).returning();
+    return item;
+  }
+
+  async deleteInvoiceItem(id: number): Promise<void> {
+    await db.delete(invoiceItems).where(eq(invoiceItems.id, id));
+  }
+
+  async deleteAllInvoiceItems(invoiceId: number): Promise<void> {
+    await db.delete(invoiceItems).where(eq(invoiceItems.invoiceId, invoiceId));
   }
 
   async getDeviceAssemblies(): Promise<DeviceAssembly[]> {
