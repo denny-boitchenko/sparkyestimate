@@ -4,6 +4,7 @@
 Professional electrical estimating web application for Canadian residential contractors. Features AI-powered drawing analysis using Gemini API, CEC 2021 compliance, customer database, invoice workflow, per-employee labor rates, company logo on PDFs, and a clean modern design with electric blue and amber branding.
 
 ## Recent Changes
+- 2026-02-13: Invoice fixes - Fixed 500 error on status updates (date string conversion), fixed PDF export (jspdf-autotable import), added Edit Invoice dialog (number/status/dates/tax/notes/terms), source estimate link badge, delete invoice with confirmation, customer-to-project linking
 - 2026-02-13: Added Customer Database (CRUD, search/filter), Invoice Workflow (list/detail with status filters, estimate-to-invoice conversion), Employees page (labor rate management), Company Logo upload in settings (renders on all PDFs), Convert to Invoice button on estimate detail
 - 2026-02-13: Professional PDF exports - Client Estimate (company header, grouped services, subtotal/GST/total), Material List (device table, misc parts, wire purchase list with waste factor), CEC Report (compliance score, info notes with fixes, passed checks)
 - 2026-02-13: Simplified Materials tab to Device/Cost/Supplier only, editable estimate names inline, AI Analysis tab in estimate detail

@@ -1216,7 +1216,17 @@ Return ONLY valid JSON:
   app.patch("/api/invoices/:id", async (req, res) => {
     const id = parseId(req.params.id);
     if (!id) return res.status(400).json({ message: "Invalid invoice ID" });
-    const invoice = await storage.updateInvoice(id, req.body);
+    const data = { ...req.body };
+    if (data.invoiceDate !== undefined) {
+      data.invoiceDate = data.invoiceDate && typeof data.invoiceDate === "string" ? new Date(data.invoiceDate) : data.invoiceDate || null;
+    }
+    if (data.dueDate !== undefined) {
+      data.dueDate = data.dueDate && typeof data.dueDate === "string" ? new Date(data.dueDate) : data.dueDate || null;
+    }
+    if (data.paymentDate !== undefined) {
+      data.paymentDate = data.paymentDate && typeof data.paymentDate === "string" ? new Date(data.paymentDate) : data.paymentDate || null;
+    }
+    const invoice = await storage.updateInvoice(id, data);
     if (!invoice) return res.status(404).json({ message: "Invoice not found" });
     res.json(invoice);
   });

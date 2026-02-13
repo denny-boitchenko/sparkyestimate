@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useRoute, Link } from "wouter";
+import { useRoute, Link, useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -13,14 +13,21 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle
 } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger
+} from "@/components/ui/alert-dialog";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue
+} from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
   ArrowLeft, Plus, Trash2, Send, DollarSign, Download,
-  FileText, FileSpreadsheet, Calendar, User
+  FileText, FileSpreadsheet, Calendar, User, Pencil, ExternalLink
 } from "lucide-react";
-import type { Invoice, InvoiceItem, Project, Customer } from "@shared/schema";
+import type { Invoice, InvoiceItem, Project, Customer, Estimate } from "@shared/schema";
 
 function InvoiceStatusBadge({ status }: { status: string }) {
   switch (status) {
@@ -52,7 +59,8 @@ async function exportInvoicePdf(invoiceId: number) {
 
   const { default: jsPDF } = await import("jspdf");
   const autoTableModule = await import("jspdf-autotable");
-  (autoTableModule as any).default.applyPlugin(jsPDF);
+  if ((autoTableModule as any).applyPlugin) (autoTableModule as any).applyPlugin(jsPDF);
+  else if ((autoTableModule as any).default?.applyPlugin) (autoTableModule as any).default.applyPlugin(jsPDF);
 
   const doc = new jsPDF();
   const pw = doc.internal.pageSize.getWidth();
@@ -369,8 +377,20 @@ async function exportLabourExcel(invoiceId: number) {
 
 export default function InvoiceDetail() {
   const [, params] = useRoute("/invoices/:id");
+  const [, navigate] = useLocation();
   const { toast } = useToast();
   const [addItemOpen, setAddItemOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editForm, setEditForm] = useState<{
+    invoiceNumber: string;
+    status: string;
+    invoiceDate: string;
+    dueDate: string;
+    taxRate: number;
+    taxLabel: string;
+    notes: string;
+    terms: string;
+  }>({ invoiceNumber: "", status: "draft", invoiceDate: "", dueDate: "", taxRate: 5, taxLabel: "GST 5%", notes: "", terms: "" });
   const [newItem, setNewItem] = useState({ description: "", room: "", quantity: 1, unitPrice: 0 });
 
   const invoiceId = params?.id ? parseInt(params.id) : 0;
@@ -393,6 +413,11 @@ export default function InvoiceDetail() {
   const { data: customer } = useQuery<Customer>({
     queryKey: ["/api/customers", invoice?.customerId],
     enabled: !!invoice?.customerId,
+  });
+
+  const { data: sourceEstimate } = useQuery<Estimate>({
+    queryKey: ["/api/estimates", invoice?.estimateId],
+    enabled: !!invoice?.estimateId,
   });
 
   const updateInvoiceMutation = useMutation({
@@ -445,6 +470,64 @@ export default function InvoiceDetail() {
       toast({ title: "Item removed" });
     },
   });
+
+  const deleteInvoiceMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("DELETE", `/api/invoices/${invoiceId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      toast({ title: "Invoice deleted" });
+      navigate("/invoices");
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const openEditDialog = () => {
+    if (!invoice) return;
+    const toDateStr = (d: Date | string | null) => {
+      if (!d) return "";
+      const dt = new Date(d);
+      return dt.toISOString().split("T")[0];
+    };
+    setEditForm({
+      invoiceNumber: invoice.invoiceNumber,
+      status: invoice.status,
+      invoiceDate: toDateStr(invoice.invoiceDate),
+      dueDate: toDateStr(invoice.dueDate),
+      taxRate: invoice.taxRate,
+      taxLabel: invoice.taxLabel,
+      notes: invoice.notes || "",
+      terms: invoice.terms || "",
+    });
+    setEditOpen(true);
+  };
+
+  const handleSaveEdit = () => {
+    const subtotal = invoice?.subtotal || 0;
+    const taxAmount = subtotal * (editForm.taxRate / 100);
+    const total = subtotal + taxAmount;
+    const payload: any = {
+      invoiceNumber: editForm.invoiceNumber,
+      status: editForm.status,
+      invoiceDate: editForm.invoiceDate || undefined,
+      dueDate: editForm.dueDate || null,
+      taxRate: editForm.taxRate,
+      taxLabel: editForm.taxLabel,
+      taxAmount,
+      total,
+      notes: editForm.notes || null,
+      terms: editForm.terms || null,
+    };
+    if (editForm.status === "paid" && !invoice?.paymentDate) {
+      payload.paymentDate = new Date().toISOString();
+    }
+    updateInvoiceMutation.mutate(payload, {
+      onSuccess: () => setEditOpen(false),
+    });
+  };
 
   const handleAddItem = () => {
     const total = newItem.quantity * newItem.unitPrice;
@@ -541,11 +624,30 @@ export default function InvoiceDetail() {
             </h1>
             <InvoiceStatusBadge status={invoice.status} />
           </div>
-          <p className="text-sm text-muted-foreground mt-1" data-testid="text-project-name">
-            {project?.name || "Project"}
-          </p>
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
+            <p className="text-sm text-muted-foreground" data-testid="text-project-name">
+              {project?.name || "Project"}
+            </p>
+            {invoice.estimateId && sourceEstimate && (
+              <Link href={`/estimates/${invoice.estimateId}`}>
+                <Badge variant="outline" className="cursor-pointer gap-1" data-testid="link-source-estimate">
+                  <ExternalLink className="w-3 h-3" />
+                  Source Estimate: {sourceEstimate.name || `#${invoice.estimateId}`}
+                </Badge>
+              </Link>
+            )}
+          </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={openEditDialog}
+            data-testid="button-edit-invoice"
+          >
+            <Pencil className="w-4 h-4 mr-1" />
+            Edit
+          </Button>
           {invoice.status === "draft" && (
             <Button
               variant="outline"
@@ -597,6 +699,37 @@ export default function InvoiceDetail() {
             <FileSpreadsheet className="w-4 h-4 mr-1" />
             Labour Excel
           </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-destructive"
+                data-testid="button-delete-invoice"
+              >
+                <Trash2 className="w-4 h-4 mr-1" />
+                Delete
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete Invoice?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will permanently delete invoice {invoice.invoiceNumber} and all its line items. This action cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel data-testid="button-cancel-delete">Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => deleteInvoiceMutation.mutate()}
+                  className="bg-destructive text-destructive-foreground"
+                  data-testid="button-confirm-delete"
+                >
+                  Delete Invoice
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </div>
 
@@ -892,6 +1025,112 @@ export default function InvoiceDetail() {
               data-testid="button-submit-item"
             >
               {addItemMutation.isPending ? "Adding..." : "Add Item"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit Invoice</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Invoice Number</Label>
+              <Input
+                value={editForm.invoiceNumber}
+                onChange={(e) => setEditForm({ ...editForm, invoiceNumber: e.target.value })}
+                data-testid="input-edit-invoice-number"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Status</Label>
+              <Select
+                value={editForm.status}
+                onValueChange={(v) => setEditForm({ ...editForm, status: v })}
+              >
+                <SelectTrigger data-testid="select-edit-status">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="draft">Draft</SelectItem>
+                  <SelectItem value="sent">Sent</SelectItem>
+                  <SelectItem value="paid">Paid</SelectItem>
+                  <SelectItem value="overdue">Overdue</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Invoice Date</Label>
+                <Input
+                  type="date"
+                  value={editForm.invoiceDate}
+                  onChange={(e) => setEditForm({ ...editForm, invoiceDate: e.target.value })}
+                  data-testid="input-edit-invoice-date"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Due Date</Label>
+                <Input
+                  type="date"
+                  value={editForm.dueDate}
+                  onChange={(e) => setEditForm({ ...editForm, dueDate: e.target.value })}
+                  data-testid="input-edit-due-date"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Tax Rate (%)</Label>
+                <Input
+                  type="number"
+                  step="0.1"
+                  value={editForm.taxRate}
+                  onChange={(e) => setEditForm({ ...editForm, taxRate: parseFloat(e.target.value) || 0 })}
+                  data-testid="input-edit-tax-rate"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Tax Label</Label>
+                <Input
+                  value={editForm.taxLabel}
+                  onChange={(e) => setEditForm({ ...editForm, taxLabel: e.target.value })}
+                  placeholder="e.g. GST 5%"
+                  data-testid="input-edit-tax-label"
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Notes</Label>
+              <Textarea
+                value={editForm.notes}
+                onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })}
+                placeholder="Invoice notes..."
+                className="resize-none text-sm"
+                rows={3}
+                data-testid="textarea-edit-notes"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Terms & Conditions</Label>
+              <Textarea
+                value={editForm.terms}
+                onChange={(e) => setEditForm({ ...editForm, terms: e.target.value })}
+                placeholder="Terms and conditions..."
+                className="resize-none text-sm"
+                rows={3}
+                data-testid="textarea-edit-terms"
+              />
+            </div>
+            <Button
+              className="w-full"
+              onClick={handleSaveEdit}
+              disabled={updateInvoiceMutation.isPending}
+              data-testid="button-save-edit"
+            >
+              {updateInvoiceMutation.isPending ? "Saving..." : "Save Changes"}
             </Button>
           </div>
         </DialogContent>
