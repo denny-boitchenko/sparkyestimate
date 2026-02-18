@@ -6,20 +6,10 @@ import { rm, readFile } from "fs/promises";
 // which helps cold start times
 const allowlist = [
   "@google/genai",
-  "connect-pg-simple",
   "date-fns",
   "drizzle-orm",
   "drizzle-zod",
-  "express",
-  "express-session",
   "googleapis",
-  "memorystore",
-  "multer",
-  "passport",
-  "passport-local",
-  "pg",
-  "ws",
-  "xlsx",
   "zod",
   "zod-validation-error",
 ];
@@ -47,7 +37,7 @@ async function buildAll() {
     define: {
       "process.env.NODE_ENV": '"production"',
     },
-    minify: true,
+    minify: false,
     external: externals,
     logLevel: "info",
   });
