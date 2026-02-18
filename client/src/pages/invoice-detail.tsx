@@ -25,7 +25,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
   ArrowLeft, Plus, Trash2, Send, DollarSign, Download,
-  FileText, FileSpreadsheet, Calendar, User, Pencil, ExternalLink
+  FileText, FileSpreadsheet, Calendar, User, Pencil, ExternalLink, Loader2
 } from "lucide-react";
 import type { Invoice, InvoiceItem, Project, Customer, Estimate } from "@shared/schema";
 
@@ -73,7 +73,7 @@ async function exportInvoicePdf(invoiceId: number) {
   const sm: Record<string, string> = {};
   (settingsArr || []).forEach((s: any) => { sm[s.key] = s.value; });
 
-  const companyName = sm.companyName || data.company?.name || "SparkyEstimate";
+  const companyName = sm.companyName || data.company?.name || "";
   const companyPhone = sm.companyPhone || data.company?.phone || "";
   const companyEmail = sm.companyEmail || data.company?.email || "";
   const companyAddress = sm.companyAddress || "";
@@ -133,21 +133,23 @@ async function exportInvoicePdf(invoiceId: number) {
   doc.setDrawColor(200, 200, 200);
   doc.rect(infoBoxX, 15, infoBoxW, infoBoxH + 7, "S");
 
+  let cy = 32;
   if (logoData) {
     try {
-      doc.addImage(logoData, "PNG", margin, 15, 30, 15);
+      // Render logo at natural aspect ratio, max 50mm wide x 20mm tall
+      doc.addImage(logoData, "PNG", margin, 12, 50, 20);
+      cy = 36;
     } catch (_) {}
+  } else if (companyName) {
+    doc.setTextColor(30, 30, 30);
+    doc.setFontSize(18);
+    doc.setFont("helvetica", "bold");
+    doc.text(companyName, margin, 24);
   }
-
-  doc.setTextColor(30, 30, 30);
-  doc.setFontSize(18);
-  doc.setFont("helvetica", "bold");
-  doc.text(companyName, margin, 24);
 
   doc.setFontSize(9);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(80, 80, 80);
-  let cy = 32;
   if (companyAddress) { doc.text(companyAddress, margin, cy); cy += 5; }
   if (companyPhone) { doc.text(companyPhone, margin, cy); cy += 5; }
   if (companyEmail) { doc.text(companyEmail, margin, cy); cy += 5; }
@@ -182,16 +184,13 @@ async function exportInvoicePdf(invoiceId: number) {
   doc.text("INVOICE", margin, startY + 4);
   startY += 10;
 
-  const amber = [230, 148, 20];
+  const headerColor = [100, 100, 100]; // Grey
   const itemRows: any[] = [];
 
   if (data.items && data.items.length > 0) {
     for (const item of data.items) {
       itemRows.push([
         { content: item.description, styles: { fontStyle: "normal", fontSize: 9 } },
-        { content: item.room || "", styles: { fontSize: 9 } },
-        { content: String(item.quantity), styles: { halign: "right" as const, fontSize: 9 } },
-        { content: `$${Number(item.unitPrice).toFixed(2)}`, styles: { halign: "right" as const, fontSize: 9 } },
         { content: `$${Number(item.total).toFixed(2)}`, styles: { halign: "right" as const, fontSize: 9 } },
       ]);
     }
@@ -200,23 +199,17 @@ async function exportInvoicePdf(invoiceId: number) {
   if (itemRows.length > 0) {
     (doc as any).autoTable({
       startY,
-      margin: { left: margin, right: margin },
+      margin: { left: margin, right: margin, bottom: 25 },
       head: [[
-        { content: "Description", styles: { fillColor: amber, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 8.5 } },
-        { content: "Room", styles: { fillColor: amber, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 8.5 } },
-        { content: "Qty", styles: { fillColor: amber, textColor: [255, 255, 255], fontStyle: "bold", halign: "right", fontSize: 8.5 } },
-        { content: "Unit Price", styles: { fillColor: amber, textColor: [255, 255, 255], fontStyle: "bold", halign: "right", fontSize: 8.5 } },
-        { content: "Amount", styles: { fillColor: amber, textColor: [255, 255, 255], fontStyle: "bold", halign: "right", fontSize: 8.5 } },
+        { content: "Description", styles: { fillColor: headerColor, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 8.5 } },
+        { content: "Amount", styles: { fillColor: headerColor, textColor: [255, 255, 255], fontStyle: "bold", halign: "right", fontSize: 8.5 } },
       ]],
       body: itemRows,
       theme: "plain",
-      styles: { fontSize: 9, cellPadding: { left: 4, top: 3, bottom: 3, right: 4 }, overflow: "linebreak" },
+      styles: { fontSize: 9, cellPadding: { left: 4, top: 4, bottom: 4, right: 4 }, overflow: "linebreak" },
       columnStyles: {
-        0: { cellWidth: contentW - 100 },
-        1: { cellWidth: 30 },
-        2: { cellWidth: 20, halign: "right" },
-        3: { cellWidth: 25, halign: "right" },
-        4: { cellWidth: 25, halign: "right" },
+        0: { cellWidth: contentW - 45 },
+        1: { cellWidth: 45, halign: "right" },
       },
       didDrawCell: (hookData: any) => {
         if (hookData.section === "body" && hookData.row.index > 0) {
@@ -301,16 +294,21 @@ async function exportInvoicePdf(invoiceId: number) {
     doc.text(termLines, margin, finalY);
   }
 
-  doc.setDrawColor(220, 220, 220);
-  doc.line(margin, ph - 18, pw - margin, ph - 18);
-  doc.setFontSize(7);
-  doc.setFont("helvetica", "normal");
-  doc.setTextColor(150, 150, 150);
-  const footerParts = [companyName];
-  if (companyPhone) footerParts.push(companyPhone);
-  doc.text(footerParts.join(" | "), margin, ph - 12);
-  if (companyEmail) doc.text(companyEmail, pw / 2, ph - 12, { align: "center" });
-  doc.text("1 of 1", pw - margin, ph - 12, { align: "right" });
+  // Draw footer on all pages
+  const totalPages = doc.getNumberOfPages();
+  for (let i = 1; i <= totalPages; i++) {
+    doc.setPage(i);
+    doc.setDrawColor(220, 220, 220);
+    doc.line(margin, ph - 18, pw - margin, ph - 18);
+    doc.setFontSize(7);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(150, 150, 150);
+    const footerParts = [companyName];
+    if (companyPhone) footerParts.push(companyPhone);
+    doc.text(footerParts.join(" | "), margin, ph - 12);
+    if (companyEmail) doc.text(companyEmail, pw / 2, ph - 12, { align: "center" });
+    doc.text(`Page ${i} of ${totalPages}`, pw - margin, ph - 12, { align: "right" });
+  }
 
   doc.save(`Invoice-${data.invoice?.invoiceNumber || invoiceId}.pdf`);
 }
@@ -392,6 +390,8 @@ export default function InvoiceDetail() {
     terms: string;
   }>({ invoiceNumber: "", status: "draft", invoiceDate: "", dueDate: "", taxRate: 5, taxLabel: "GST 5%", notes: "", terms: "" });
   const [newItem, setNewItem] = useState({ description: "", room: "", quantity: 1, unitPrice: 0 });
+  const [deleteItemTarget, setDeleteItemTarget] = useState<{ id: number; description: string } | null>(null);
+  const [exporting, setExporting] = useState<string | null>(null);
 
   const invoiceId = params?.id ? parseInt(params.id) : 0;
 
@@ -542,29 +542,38 @@ export default function InvoiceDetail() {
   };
 
   const handleExportPdf = async () => {
+    setExporting("pdf");
     try {
       await exportInvoicePdf(invoiceId);
       toast({ title: "Invoice PDF exported" });
     } catch (err: any) {
       toast({ title: "Export failed", description: err.message, variant: "destructive" });
+    } finally {
+      setExporting(null);
     }
   };
 
   const handleExportMaterialExcel = async () => {
+    setExporting("material");
     try {
       await exportMaterialExcel(invoiceId);
       toast({ title: "Material Excel exported" });
     } catch (err: any) {
       toast({ title: "Export failed", description: err.message, variant: "destructive" });
+    } finally {
+      setExporting(null);
     }
   };
 
   const handleExportLabourExcel = async () => {
+    setExporting("labour");
     try {
       await exportLabourExcel(invoiceId);
       toast({ title: "Labour Excel exported" });
     } catch (err: any) {
       toast({ title: "Export failed", description: err.message, variant: "destructive" });
+    } finally {
+      setExporting(null);
     }
   };
 
@@ -676,28 +685,31 @@ export default function InvoiceDetail() {
             variant="outline"
             size="sm"
             onClick={handleExportPdf}
+            disabled={!!exporting}
             data-testid="button-download-pdf"
           >
-            <Download className="w-4 h-4 mr-1" />
-            Download PDF
+            {exporting === "pdf" ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Download className="w-4 h-4 mr-1" />}
+            {exporting === "pdf" ? "Exporting..." : "Download PDF"}
           </Button>
           <Button
             variant="outline"
             size="sm"
             onClick={handleExportMaterialExcel}
+            disabled={!!exporting}
             data-testid="button-download-material-excel"
           >
-            <FileSpreadsheet className="w-4 h-4 mr-1" />
-            Material Excel
+            {exporting === "material" ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <FileSpreadsheet className="w-4 h-4 mr-1" />}
+            {exporting === "material" ? "Exporting..." : "Material Excel"}
           </Button>
           <Button
             variant="outline"
             size="sm"
             onClick={handleExportLabourExcel}
+            disabled={!!exporting}
             data-testid="button-download-labour-excel"
           >
-            <FileSpreadsheet className="w-4 h-4 mr-1" />
-            Labour Excel
+            {exporting === "labour" ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <FileSpreadsheet className="w-4 h-4 mr-1" />}
+            {exporting === "labour" ? "Exporting..." : "Labour Excel"}
           </Button>
           <AlertDialog>
             <AlertDialogTrigger asChild>
@@ -885,7 +897,7 @@ export default function InvoiceDetail() {
                         <Button
                           size="icon"
                           variant="ghost"
-                          onClick={() => deleteItemMutation.mutate(item.id)}
+                          onClick={() => setDeleteItemTarget({ id: item.id, description: item.description })}
                           data-testid={`button-delete-item-${item.id}`}
                         >
                           <Trash2 className="w-4 h-4" />
@@ -1029,6 +1041,30 @@ export default function InvoiceDetail() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!deleteItemTarget} onOpenChange={(open) => !open && setDeleteItemTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Line Item?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will remove "{deleteItemTarget?.description}" from the invoice. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-delete-item">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (deleteItemTarget) deleteItemMutation.mutate(deleteItemTarget.id);
+                setDeleteItemTarget(null);
+              }}
+              className="bg-destructive text-destructive-foreground"
+              data-testid="button-confirm-delete-item"
+            >
+              Delete Item
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="max-w-lg">

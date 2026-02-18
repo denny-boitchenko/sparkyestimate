@@ -1,4 +1,4 @@
-import { Switch, Route } from "wouter";
+import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -18,6 +18,8 @@ import SettingsPage from "@/pages/settings-page";
 import Invoices from "@/pages/invoices";
 import InvoiceDetail from "@/pages/invoice-detail";
 import Employees from "@/pages/employees";
+import Photos from "@/pages/photos";
+import EmployeePortal from "@/pages/employee-portal";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -32,6 +34,7 @@ function Router() {
       <Route path="/invoices/:id" component={InvoiceDetail} />
       <Route path="/customers" component={Customers} />
       <Route path="/employees" component={Employees} />
+      <Route path="/photos" component={Photos} />
       <Route path="/ai-analysis" component={AiAnalysisPage} />
       <Route path="/settings" component={SettingsPage} />
       <Route component={NotFound} />
@@ -45,6 +48,22 @@ const sidebarStyle = {
 };
 
 function App() {
+  const [location] = useLocation();
+
+  // Employee portal runs outside the main layout (no sidebar)
+  if (location === "/employee") {
+    return (
+      <ThemeProvider>
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+            <EmployeePortal />
+            <Toaster />
+          </TooltipProvider>
+        </QueryClientProvider>
+      </ThemeProvider>
+    );
+  }
+
   return (
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>

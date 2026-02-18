@@ -1,0 +1,26 @@
+databases:
+  - name: sparkyestimate-db
+    plan: free
+    databaseName: sparkyestimate
+    postgresMajorVersion: 16
+
+services:
+  - type: web
+    name: sparkyestimate
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sparkyestimate-db
+          property: connectionString
+      - key: GOOGLE_GENERATIVE_AI_API_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false

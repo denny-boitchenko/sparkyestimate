@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, Link, useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,9 +19,12 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
   ArrowLeft, Edit, Zap, MapPin, Phone, Mail, Building2,
-  Calculator, Plus, Trash2, Calendar, FileText
+  Calculator, Plus, Trash2, Calendar, FileText, Camera, Upload,
+  FolderOpen, FileImage, FolderPlus, FolderX
 } from "lucide-react";
-import type { Project, Estimate, Customer } from "@shared/schema";
+import type { Project, Estimate, Customer, ProjectPhoto } from "@shared/schema";
+
+type PhotoWithUrl = ProjectPhoto & { downloadUrl: string | null; uploadedBy?: string };
 
 function StatusBadge({ status }: { status: string }) {
   const config: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
@@ -35,6 +38,16 @@ function StatusBadge({ status }: { status: string }) {
   return <Badge variant={c.variant}>{c.label}</Badge>;
 }
 
+function phaseLabel(phase: string): string {
+  const labels: Record<string, string> = {
+    service: "Service",
+    roughin: "Rough-in",
+    finish: "Finish",
+    misc: "Misc / Receipts",
+  };
+  return labels[phase] || phase;
+}
+
 export default function ProjectDetail() {
   const [, params] = useRoute("/projects/:id");
   const [, navigate] = useLocation();
@@ -42,6 +55,9 @@ export default function ProjectDetail() {
   const [editing, setEditing] = useState(false);
   const [createEstimateOpen, setCreateEstimateOpen] = useState(false);
   const [estimateName, setEstimateName] = useState("");
+  const [activePhase, setActivePhase] = useState("service");
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const projectId = params?.id ? parseInt(params.id) : 0;
 
@@ -63,6 +79,111 @@ export default function ProjectDetail() {
   const { data: allCustomers } = useQuery<Customer[]>({
     queryKey: ["/api/customers"],
   });
+
+  const { data: photos } = useQuery<PhotoWithUrl[]>({
+    queryKey: ["/api/projects", projectId, "photos"],
+    enabled: projectId > 0,
+  });
+
+  const { data: storageStatus } = useQuery<{ configured: boolean; provider: string | null }>({
+    queryKey: ["/api/r2-status"],
+  });
+
+  const { data: folderStatus } = useQuery<{ exists: boolean; provider: string | null }>({
+    queryKey: ["/api/projects", projectId, "photo-folder"],
+    enabled: projectId > 0 && !!storageStatus?.configured,
+  });
+
+  const createFolderMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", `/api/projects/${projectId}/photo-folder`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "photo-folder"] });
+      toast({ title: "Photo folder created in Google Drive" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Failed to create folder", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deleteFolderMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("DELETE", `/api/projects/${projectId}/photo-folder`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "photo-folder"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "photos"] });
+      toast({ title: "Photo folder deleted from Google Drive" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Failed to delete folder", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deletePhotoMutation = useMutation({
+    mutationFn: async (photoId: number) => {
+      await apiRequest("DELETE", `/api/projects/${projectId}/photos/${photoId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "photos"] });
+      toast({ title: "Photo deleted" });
+    },
+  });
+
+  const handlePhotoUpload = async (file: File) => {
+    if (!project) return;
+    setUploading(true);
+    try {
+      if (storageStatus?.provider === "google_drive") {
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("phase", activePhase);
+        const res = await fetch(`/api/projects/${projectId}/photos/upload-gdrive`, {
+          method: "POST",
+          body: formData,
+          credentials: "include",
+        });
+        if (!res.ok) throw new Error((await res.json()).message || "Upload failed");
+      } else {
+        const res = await apiRequest("POST", `/api/projects/${projectId}/photos/upload-url`, {
+          filename: file.name,
+          contentType: file.type,
+          phase: activePhase,
+          employeeId: null,
+          gpsLat: null,
+          gpsLng: null,
+        });
+        const { uploadUrl } = await res.json();
+        await fetch(uploadUrl, {
+          method: "PUT",
+          body: file,
+          headers: { "Content-Type": file.type },
+        });
+      }
+      toast({ title: "File uploaded", description: `${file.name} uploaded to ${phaseLabel(activePhase)}` });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "photos"] });
+    } catch (err: any) {
+      toast({ title: "Upload failed", description: err.message, variant: "destructive" });
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files) {
+      for (let i = 0; i < files.length; i++) {
+        handlePhotoUpload(files[i]);
+      }
+    }
+    e.target.value = "";
+  };
+
+  const phasePhotos = (phase: string) =>
+    (photos || []).filter(p => p.inspectionPhase === phase);
+
+  const totalPhotos = (photos || []).length;
 
   const [editForm, setEditForm] = useState<Partial<Project>>({});
 
@@ -173,6 +294,9 @@ export default function ProjectDetail() {
           <TabsTrigger value="details" data-testid="tab-details">Details</TabsTrigger>
           <TabsTrigger value="estimates" data-testid="tab-estimates">
             Estimates ({estimates?.length || 0})
+          </TabsTrigger>
+          <TabsTrigger value="photos" data-testid="tab-photos">
+            Photos ({totalPhotos})
           </TabsTrigger>
         </TabsList>
 
@@ -309,6 +433,150 @@ export default function ProjectDetail() {
               ))}
             </div>
           )}
+        </TabsContent>
+
+        <TabsContent value="photos" className="space-y-4 mt-4">
+          {!storageStatus?.configured && (
+            <Card className="border-amber-200 bg-amber-50 dark:bg-amber-950/20">
+              <CardContent className="pt-4">
+                <p className="text-sm text-amber-700 dark:text-amber-400">
+                  Photo storage is not configured. Go to Settings &gt; Photos to connect Google Drive or set up Cloudflare R2.
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Google Drive Folder */}
+          {storageStatus?.configured && storageStatus.provider === "google_drive" && (
+            <Card>
+              <CardContent className="pt-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex items-center justify-center w-9 h-9 rounded-md bg-primary/10 shrink-0">
+                      <FolderOpen className="w-4 h-4 text-primary" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">Google Drive</p>
+                      {folderStatus?.exists ? (
+                        <p className="text-xs text-muted-foreground truncate">
+                          SparkyEstimate Photos / {project.name}
+                        </p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">No folder linked</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {folderStatus?.exists ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-destructive border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
+                        onClick={() => {
+                          if (confirm(`Delete the Google Drive folder for "${project.name}" and all photos inside it?`)) {
+                            deleteFolderMutation.mutate();
+                          }
+                        }}
+                        disabled={deleteFolderMutation.isPending}
+                      >
+                        <FolderX className="w-4 h-4 mr-1.5" />
+                        {deleteFolderMutation.isPending ? "Deleting..." : "Delete Folder"}
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => createFolderMutation.mutate()}
+                        disabled={createFolderMutation.isPending}
+                      >
+                        <FolderPlus className="w-4 h-4 mr-1.5" />
+                        {createFolderMutation.isPending ? "Creating..." : "Create Folder"}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Phase tabs inside Photos */}
+          <Tabs value={activePhase} onValueChange={setActivePhase}>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <TabsList className="grid grid-cols-4 max-w-md">
+                <TabsTrigger value="service">Service ({phasePhotos("service").length})</TabsTrigger>
+                <TabsTrigger value="roughin">Rough-in ({phasePhotos("roughin").length})</TabsTrigger>
+                <TabsTrigger value="finish">Finish ({phasePhotos("finish").length})</TabsTrigger>
+                <TabsTrigger value="misc">Misc ({phasePhotos("misc").length})</TabsTrigger>
+              </TabsList>
+              <Button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading || !storageStatus?.configured}
+                size="sm"
+              >
+                {uploading ? (
+                  <>
+                    <Upload className="w-4 h-4 mr-2 animate-spin" />
+                    Uploading...
+                  </>
+                ) : (
+                  <>
+                    <Camera className="w-4 h-4 mr-2" />
+                    Upload to {phaseLabel(activePhase)}
+                  </>
+                )}
+              </Button>
+            </div>
+
+            {["service", "roughin", "finish", "misc"].map(phase => (
+              <TabsContent key={phase} value={phase}>
+                {phasePhotos(phase).length > 0 ? (
+                  <div className="border rounded-lg divide-y">
+                    {phasePhotos(phase).map(photo => (
+                      <div key={photo.id} className="flex items-center gap-3 px-4 py-3 hover:bg-muted/50">
+                        <FileImage className="w-4 h-4 text-muted-foreground shrink-0" />
+                        <span className="text-sm font-medium truncate flex-1 min-w-0">
+                          {photo.originalFilename}
+                        </span>
+                        <span className="text-xs text-muted-foreground shrink-0">
+                          {new Date(photo.createdAt).toLocaleDateString()}
+                        </span>
+                        {photo.uploadedBy && (
+                          <Badge variant="outline" className="text-[10px] h-5 px-1.5 shrink-0">
+                            {photo.uploadedBy}
+                          </Badge>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="w-7 h-7 shrink-0"
+                          onClick={() => deletePhotoMutation.mutate(photo.id)}
+                        >
+                          <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-12 text-muted-foreground">
+                    <Camera className="w-12 h-12 mx-auto mb-2 opacity-30" />
+                    <p>No files yet for {phaseLabel(phase)}</p>
+                    <p className="text-sm mt-1">
+                      Upload photos, PDFs, or documents to this phase
+                    </p>
+                  </div>
+                )}
+              </TabsContent>
+            ))}
+          </Tabs>
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*,.pdf,application/pdf"
+            multiple
+            className="hidden"
+            onChange={handleFileChange}
+          />
         </TabsContent>
       </Tabs>
 

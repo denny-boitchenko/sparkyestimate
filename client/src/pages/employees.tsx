@@ -10,6 +10,9 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue
+} from "@/components/ui/select";
+import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -36,10 +39,23 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Plus, Pencil, Trash2, HardHat, DollarSign } from "lucide-react";
+import { Plus, Pencil, Trash2, HardHat, DollarSign, Search, ArrowUpDown } from "lucide-react";
+
+const ROLES = [
+  { value: "electrician", label: "Electrician" },
+  { value: "journeyman", label: "Journeyman" },
+  { value: "foreman", label: "Foreman" },
+  { value: "apprentice_1", label: "Apprentice (1st Year)" },
+  { value: "apprentice_2", label: "Apprentice (2nd Year)" },
+  { value: "apprentice_3", label: "Apprentice (3rd Year)" },
+  { value: "apprentice_4", label: "Apprentice (4th Year)" },
+  { value: "helper", label: "Helper/Labourer" },
+];
 
 export default function Employees() {
   const { toast } = useToast();
+  const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState<"name_asc" | "name_desc" | "rate_high" | "rate_low">("name_asc");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [formData, setFormData] = useState({
@@ -63,6 +79,9 @@ export default function Employees() {
       toast({ title: "Employee added" });
       resetForm();
     },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
   });
 
   const updateMutation = useMutation({
@@ -75,6 +94,9 @@ export default function Employees() {
       toast({ title: "Employee updated" });
       resetForm();
     },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
   });
 
   const deleteMutation = useMutation({
@@ -84,6 +106,9 @@ export default function Employees() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/employees"] });
       toast({ title: "Employee deleted" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
     },
   });
 
@@ -124,6 +149,24 @@ export default function Employees() {
     ? activeEmployees.reduce((sum, e) => sum + e.hourlyRate, 0) / activeEmployees.length
     : 0;
 
+  const getRoleLabel = (role: string) => ROLES.find(r => r.value === role)?.label || role;
+
+  const filtered = (employees || []).filter((e) => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return [e.name, getRoleLabel(e.role)].some(f => f?.toLowerCase().includes(q));
+  });
+
+  const sorted = [...filtered].sort((a, b) => {
+    switch (sortBy) {
+      case "name_asc": return a.name.localeCompare(b.name);
+      case "name_desc": return b.name.localeCompare(a.name);
+      case "rate_high": return b.hourlyRate - a.hourlyRate;
+      case "rate_low": return a.hourlyRate - b.hourlyRate;
+      default: return 0;
+    }
+  });
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -161,12 +204,19 @@ export default function Employees() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="emp-role">Role</Label>
-                <Input
-                  id="emp-role"
+                <Select
                   value={formData.role}
-                  onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-                  data-testid="input-employee-role"
-                />
+                  onValueChange={(v) => setFormData({ ...formData, role: v })}
+                >
+                  <SelectTrigger data-testid="select-employee-role">
+                    <SelectValue placeholder="Select role" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ROLES.map((r) => (
+                      <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="emp-rate">Hourly Rate ($)</Label>
@@ -199,6 +249,33 @@ export default function Employees() {
           </DialogContent>
         </Dialog>
       </div>
+
+      {employees && employees.length > 0 && (
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="relative flex-1 min-w-[200px] max-w-sm">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search employees..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-9"
+              data-testid="input-search-employees"
+            />
+          </div>
+          <Select value={sortBy} onValueChange={(v) => setSortBy(v as typeof sortBy)}>
+            <SelectTrigger className="w-44" data-testid="select-sort-employees">
+              <ArrowUpDown className="w-3 h-3 mr-1.5" />
+              <SelectValue placeholder="Sort by" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="name_asc">Name (A-Z)</SelectItem>
+              <SelectItem value="name_desc">Name (Z-A)</SelectItem>
+              <SelectItem value="rate_high">Rate (High-Low)</SelectItem>
+              <SelectItem value="rate_low">Rate (Low-High)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-3">
         <Card>
@@ -255,12 +332,18 @@ export default function Employees() {
               ))}
             </div>
           ) : !employees?.length ? (
+            /* empty state — no employees at all */
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <HardHat className="h-12 w-12 text-muted-foreground/50 mb-4" />
               <h3 className="text-lg font-medium">No employees yet</h3>
               <p className="text-sm text-muted-foreground mt-1">
                 Add your first employee to start tracking labor rates
               </p>
+            </div>
+          ) : sorted.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <p className="text-sm font-medium">No matching employees</p>
+              <p className="text-xs text-muted-foreground mt-1">Try adjusting your search</p>
             </div>
           ) : (
             <Table>
@@ -274,13 +357,13 @@ export default function Employees() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {employees.map((emp) => (
+                {sorted.map((emp) => (
                   <TableRow key={emp.id} data-testid={`row-employee-${emp.id}`}>
                     <TableCell className="font-medium" data-testid={`text-employee-name-${emp.id}`}>
                       {emp.name}
                     </TableCell>
-                    <TableCell className="text-muted-foreground capitalize">
-                      {emp.role}
+                    <TableCell className="text-muted-foreground">
+                      {ROLES.find(r => r.value === emp.role)?.label || emp.role}
                     </TableCell>
                     <TableCell className="text-right font-mono" data-testid={`text-employee-rate-${emp.id}`}>
                       ${emp.hourlyRate.toFixed(2)}/hr
@@ -321,6 +404,7 @@ export default function Employees() {
                               <AlertDialogCancel>Cancel</AlertDialogCancel>
                               <AlertDialogAction
                                 onClick={() => deleteMutation.mutate(emp.id)}
+                                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                                 data-testid={`button-confirm-delete-employee-${emp.id}`}
                               >
                                 Delete

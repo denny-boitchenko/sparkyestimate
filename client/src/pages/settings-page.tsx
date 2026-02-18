@@ -15,11 +15,12 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
   DollarSign, Percent, Wrench, Save, CheckCircle2, Shield,
-  Plus, Pencil, Trash2, Cable, Package, Settings, Upload
+  Plus, Pencil, Trash2, Cable, Package, Settings, Upload, Briefcase,
+  ChevronDown, ChevronRight, Search, ListTree
 } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
-import type { Setting, DeviceAssembly, WireType, ServiceBundle, ComplianceDocument, SupplierImport } from "@shared/schema";
-import { DEVICE_CATEGORIES } from "@shared/schema";
+import React, { useState, useEffect, useRef, useMemo } from "react";
+import type { Setting, DeviceAssembly, WireType, ServiceBundle, ComplianceDocument, SupplierImport, JobType, PartsCatalogEntry, AssemblyPart, PermitFeeSchedule } from "@shared/schema";
+import { DEVICE_CATEGORIES, PART_CATEGORIES } from "@shared/schema";
 
 interface SettingsData {
   laborRate: string;
@@ -407,10 +408,206 @@ function GeneralTab({ form, setForm, onSave, isSaving }: {
   );
 }
 
+interface AssemblyPartWithCatalog extends AssemblyPart {
+  part?: PartsCatalogEntry;
+}
+
+function AssemblyExpandedRow({ assembly }: { assembly: DeviceAssembly }) {
+  const { toast } = useToast();
+  const [addPartOpen, setAddPartOpen] = useState(false);
+  const [partSearch, setPartSearch] = useState("");
+  const [selectedPartId, setSelectedPartId] = useState<number | null>(null);
+  const [selectedPartQty, setSelectedPartQty] = useState("1");
+
+  const { data: assemblyParts, isLoading: partsLoading } = useQuery<AssemblyPartWithCatalog[]>({
+    queryKey: [`/api/device-assemblies/${assembly.id}/parts`],
+  });
+
+  const { data: catalogParts } = useQuery<PartsCatalogEntry[]>({
+    queryKey: ["/api/parts-catalog"],
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: async (parts: { partId: number; quantity: number }[]) => {
+      await apiRequest("PUT", `/api/device-assemblies/${assembly.id}/parts`, { parts });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/device-assemblies/${assembly.id}/parts`] });
+      toast({ title: "Assembly parts updated" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const handleAddPart = () => {
+    if (!selectedPartId || !assemblyParts) return;
+    const existing = assemblyParts.map(ap => ({ partId: ap.partId, quantity: ap.quantity }));
+    const alreadyIdx = existing.findIndex(e => e.partId === selectedPartId);
+    let updated;
+    if (alreadyIdx >= 0) {
+      updated = [...existing];
+      updated[alreadyIdx] = { ...updated[alreadyIdx], quantity: updated[alreadyIdx].quantity + (parseFloat(selectedPartQty) || 1) };
+    } else {
+      updated = [...existing, { partId: selectedPartId, quantity: parseFloat(selectedPartQty) || 1 }];
+    }
+    saveMutation.mutate(updated);
+    setAddPartOpen(false);
+    setSelectedPartId(null);
+    setSelectedPartQty("1");
+    setPartSearch("");
+  };
+
+  const handleRemovePart = (partId: number) => {
+    if (!assemblyParts) return;
+    const updated = assemblyParts
+      .filter(ap => ap.partId !== partId)
+      .map(ap => ({ partId: ap.partId, quantity: ap.quantity }));
+    saveMutation.mutate(updated);
+  };
+
+  const materialTotal = useMemo(() => {
+    if (!assemblyParts) return 0;
+    return assemblyParts.reduce((sum, ap) => {
+      const cost = ap.part?.unitCost ?? 0;
+      return sum + cost * ap.quantity;
+    }, 0);
+  }, [assemblyParts]);
+
+  const filteredCatalog = useMemo(() => {
+    if (!catalogParts) return [];
+    if (!partSearch.trim()) return catalogParts;
+    const q = partSearch.toLowerCase();
+    return catalogParts.filter(p =>
+      p.name.toLowerCase().includes(q) ||
+      (p.partNumber && p.partNumber.toLowerCase().includes(q)) ||
+      p.category.toLowerCase().includes(q)
+    );
+  }, [catalogParts, partSearch]);
+
+  return (
+    <div className="px-6 py-3 bg-muted/30 border-t">
+      {partsLoading ? (
+        <Skeleton className="h-16" />
+      ) : (
+        <>
+          {assemblyParts && assemblyParts.length > 0 ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="text-xs">Part Name</TableHead>
+                  <TableHead className="text-xs w-16">Qty</TableHead>
+                  <TableHead className="text-xs w-24">Unit Cost</TableHead>
+                  <TableHead className="text-xs w-24">Line Total</TableHead>
+                  <TableHead className="text-xs w-12"></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {assemblyParts.map((ap) => (
+                  <TableRow key={ap.id} className="text-sm">
+                    <TableCell className="py-1.5">{ap.part?.name ?? `Part #${ap.partId}`}</TableCell>
+                    <TableCell className="py-1.5">{ap.quantity}</TableCell>
+                    <TableCell className="py-1.5">${(ap.part?.unitCost ?? 0).toFixed(2)}</TableCell>
+                    <TableCell className="py-1.5 font-medium">${((ap.part?.unitCost ?? 0) * ap.quantity).toFixed(2)}</TableCell>
+                    <TableCell className="py-1.5">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-6 w-6"
+                        onClick={() => handleRemovePart(ap.partId)}
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : (
+            <p className="text-sm text-muted-foreground py-2">No parts added to this assembly yet.</p>
+          )}
+
+          <div className="flex items-center justify-between mt-3 pt-3 border-t">
+            <span className="text-sm font-medium">
+              Material Cost: ${materialTotal.toFixed(2)} (from {assemblyParts?.length ?? 0} parts)
+            </span>
+            <Button size="sm" variant="outline" onClick={() => setAddPartOpen(true)} data-testid={`button-add-assembly-part-${assembly.id}`}>
+              <Plus className="w-3 h-3 mr-1" />
+              Add Part
+            </Button>
+          </div>
+
+          <Dialog open={addPartOpen} onOpenChange={setAddPartOpen}>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Add Part to {assembly.name}</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Search Parts</Label>
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-2.5 w-4 h-4 text-muted-foreground" />
+                    <Input
+                      className="pl-8"
+                      placeholder="Search by name, part #, or category..."
+                      value={partSearch}
+                      onChange={(e) => setPartSearch(e.target.value)}
+                      data-testid="input-search-catalog-part"
+                    />
+                  </div>
+                </div>
+                <div className="max-h-48 overflow-y-auto border rounded-md">
+                  {filteredCatalog.length > 0 ? filteredCatalog.map((cp) => (
+                    <div
+                      key={cp.id}
+                      className={`flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-accent text-sm ${selectedPartId === cp.id ? "bg-accent" : ""}`}
+                      onClick={() => setSelectedPartId(cp.id)}
+                    >
+                      <div>
+                        <span className="font-medium">{cp.name}</span>
+                        {cp.partNumber && <span className="text-muted-foreground ml-2">#{cp.partNumber}</span>}
+                      </div>
+                      <span className="text-muted-foreground">${cp.unitCost.toFixed(2)}</span>
+                    </div>
+                  )) : (
+                    <p className="text-sm text-muted-foreground text-center py-4">No parts found</p>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label>Quantity</Label>
+                  <Input
+                    type="number"
+                    step="1"
+                    min="1"
+                    value={selectedPartQty}
+                    onChange={(e) => setSelectedPartQty(e.target.value)}
+                    data-testid="input-assembly-part-qty"
+                  />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setAddPartOpen(false)}>Cancel</Button>
+                <Button
+                  onClick={handleAddPart}
+                  disabled={!selectedPartId || saveMutation.isPending}
+                  data-testid="button-submit-assembly-part"
+                >
+                  {saveMutation.isPending ? "Adding..." : "Add Part"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </>
+      )}
+    </div>
+  );
+}
+
 function MaterialsTab() {
   const { toast } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [deviceForm, setDeviceForm] = useState<DeviceFormData>(defaultDeviceForm);
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
 
   const { data: assemblies, isLoading } = useQuery<DeviceAssembly[]>({
     queryKey: ["/api/device-assemblies"],
@@ -486,6 +683,18 @@ function MaterialsTab() {
     updateMutation.mutate({ id, data: payload });
   };
 
+  const toggleExpand = (id: number) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
   if (isLoading) {
     return <div className="space-y-4"><Skeleton className="h-64" /></div>;
   }
@@ -503,6 +712,7 @@ function MaterialsTab() {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-10"></TableHead>
                 <TableHead>Device</TableHead>
                 <TableHead>Cost</TableHead>
                 <TableHead>Supplier</TableHead>
@@ -511,50 +721,74 @@ function MaterialsTab() {
             </TableHeader>
             <TableBody>
               {assemblies && assemblies.length > 0 ? assemblies.map((a) => (
-                <TableRow key={a.id} data-testid={`row-device-${a.id}`}>
-                  <TableCell>
-                    <Input
-                      key={`name-${a.id}-${a.name}`}
-                      defaultValue={a.name}
-                      onBlur={(e) => handleInlineBlur(a.id, "name", e.target.value, a.name)}
-                      className="min-w-[120px]"
-                      data-testid={`input-device-name-${a.id}`}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <Input
-                      key={`materialCost-${a.id}-${a.materialCost}`}
-                      type="number"
-                      step="0.01"
-                      defaultValue={a.materialCost}
-                      onBlur={(e) => handleInlineBlur(a.id, "materialCost", e.target.value, a.materialCost)}
-                      className="w-24"
-                      data-testid={`input-device-material-${a.id}`}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <Input
-                      key={`supplier-${a.id}-${a.supplier}`}
-                      defaultValue={a.supplier || ""}
-                      onBlur={(e) => handleInlineBlur(a.id, "supplier", e.target.value, a.supplier)}
-                      className="min-w-[100px]"
-                      data-testid={`input-device-supplier-${a.id}`}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      onClick={() => deleteMutation.mutate(a.id)}
-                      data-testid={`button-delete-device-${a.id}`}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
-                  </TableCell>
-                </TableRow>
+                <React.Fragment key={a.id}>
+                  <TableRow data-testid={`row-device-${a.id}`}>
+                    <TableCell className="w-10 px-2">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7"
+                        onClick={() => toggleExpand(a.id)}
+                        data-testid={`button-expand-device-${a.id}`}
+                      >
+                        {expandedIds.has(a.id) ? (
+                          <ChevronDown className="w-4 h-4" />
+                        ) : (
+                          <ChevronRight className="w-4 h-4" />
+                        )}
+                      </Button>
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        key={`name-${a.id}-${a.name}`}
+                        defaultValue={a.name}
+                        onBlur={(e) => handleInlineBlur(a.id, "name", e.target.value, a.name)}
+                        className="min-w-[120px]"
+                        data-testid={`input-device-name-${a.id}`}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        key={`materialCost-${a.id}-${a.materialCost}`}
+                        type="number"
+                        step="0.01"
+                        defaultValue={a.materialCost}
+                        onBlur={(e) => handleInlineBlur(a.id, "materialCost", e.target.value, a.materialCost)}
+                        className="w-24"
+                        data-testid={`input-device-material-${a.id}`}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        key={`supplier-${a.id}-${a.supplier}`}
+                        defaultValue={a.supplier || ""}
+                        onBlur={(e) => handleInlineBlur(a.id, "supplier", e.target.value, a.supplier)}
+                        className="min-w-[100px]"
+                        data-testid={`input-device-supplier-${a.id}`}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => deleteMutation.mutate(a.id)}
+                        data-testid={`button-delete-device-${a.id}`}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                  {expandedIds.has(a.id) && (
+                    <TableRow>
+                      <TableCell colSpan={5} className="p-0">
+                        <AssemblyExpandedRow assembly={a} />
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </React.Fragment>
               )) : (
                 <TableRow>
-                  <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
                     No device assemblies found
                   </TableCell>
                 </TableRow>
@@ -799,6 +1033,233 @@ function WireTypesTab() {
               onClick={() => createMutation.mutate(wireForm)}
               disabled={createMutation.isPending}
               data-testid="button-submit-wire-type"
+            >
+              {createMutation.isPending ? "Creating..." : "Create"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+interface JobTypeFormData {
+  value: string;
+  label: string;
+  multiplier: string;
+}
+
+function JobTypesTab() {
+  const { toast } = useToast();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [form, setForm] = useState<JobTypeFormData>({ value: "", label: "", multiplier: "1.0" });
+
+  const { data: jobTypesData, isLoading } = useQuery<JobType[]>({
+    queryKey: ["/api/job-types"],
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async (data: JobTypeFormData) => {
+      await apiRequest("POST", "/api/job-types", {
+        value: data.value,
+        label: data.label,
+        multiplier: parseFloat(data.multiplier) || 1.0,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/job-types"] });
+      toast({ title: "Job type created" });
+      setDialogOpen(false);
+      setForm({ value: "", label: "", multiplier: "1.0" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: number; data: Record<string, unknown> }) => {
+      await apiRequest("PATCH", `/api/job-types/${id}`, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/job-types"] });
+      toast({ title: "Job type updated" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("DELETE", `/api/job-types/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/job-types"] });
+      toast({ title: "Job type deleted" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const handleInlineBlur = (id: number, field: string, newValue: string, originalValue: string | number | null | undefined) => {
+    const orig = originalValue == null ? "" : String(originalValue);
+    if (newValue === orig) return;
+    const payload: Record<string, unknown> = {};
+    if (field === "multiplier") {
+      payload[field] = parseFloat(newValue) || 1.0;
+    } else {
+      payload[field] = newValue || null;
+    }
+    updateMutation.mutate({ id, data: payload });
+  };
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardContent className="p-6">
+          <Skeleton className="h-8 w-48 mb-4" />
+          <div className="space-y-3">
+            {[1, 2, 3].map((i) => <Skeleton key={i} className="h-12" />)}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-lg">Job Types & Labour Multipliers</CardTitle>
+              <p className="text-sm text-muted-foreground mt-1">
+                NECA Manual of Labour Units — multipliers adjust labour hours by project complexity
+              </p>
+            </div>
+            <Button size="sm" onClick={() => setDialogOpen(true)} data-testid="button-add-job-type">
+              <Plus className="w-4 h-4 mr-2" />
+              Add Job Type
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Value (ID)</TableHead>
+                  <TableHead>Display Label</TableHead>
+                  <TableHead>Multiplier</TableHead>
+                  <TableHead>NECA Column</TableHead>
+                  <TableHead></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {jobTypesData && jobTypesData.length > 0 ? jobTypesData.map((jt) => (
+                  <TableRow key={jt.id} data-testid={`row-job-type-${jt.id}`}>
+                    <TableCell>
+                      <code className="text-xs bg-muted px-2 py-1 rounded">{jt.value}</code>
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        key={`label-${jt.id}-${jt.label}`}
+                        defaultValue={jt.label}
+                        onBlur={(e) => handleInlineBlur(jt.id, "label", e.target.value, jt.label)}
+                        className="min-w-[160px]"
+                        data-testid={`input-job-type-label-${jt.id}`}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        key={`mult-${jt.id}-${jt.multiplier}`}
+                        type="number"
+                        step="0.05"
+                        min="0.5"
+                        max="3.0"
+                        defaultValue={jt.multiplier}
+                        onBlur={(e) => handleInlineBlur(jt.id, "multiplier", e.target.value, jt.multiplier)}
+                        className="w-24"
+                        data-testid={`input-job-type-multiplier-${jt.id}`}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className="text-xs">
+                        {(jt.multiplier ?? 1) <= 1.2 ? "Normal" : (jt.multiplier ?? 1) <= 1.5 ? "Difficult" : "Very Difficult"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => deleteMutation.mutate(jt.id)}
+                        data-testid={`button-delete-job-type-${jt.id}`}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                )) : (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                      No job types found. Add one to get started.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Add Job Type</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Value (unique ID)</Label>
+              <Input
+                placeholder="e.g. fire_alarm"
+                value={form.value}
+                onChange={(e) => setForm(p => ({ ...p, value: e.target.value.toLowerCase().replace(/\s+/g, "_") }))}
+                data-testid="input-new-job-type-value"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Display Label</Label>
+              <Input
+                placeholder="e.g. Fire Alarm System"
+                value={form.label}
+                onChange={(e) => setForm(p => ({ ...p, label: e.target.value }))}
+                data-testid="input-new-job-type-label"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Labour Multiplier</Label>
+              <Input
+                type="number"
+                step="0.05"
+                min="0.5"
+                max="3.0"
+                value={form.multiplier}
+                onChange={(e) => setForm(p => ({ ...p, multiplier: e.target.value }))}
+                data-testid="input-new-job-type-multiplier"
+              />
+              <p className="text-xs text-muted-foreground">
+                1.0 = Normal, 1.25 = Difficult (+25%), 1.50 = Very Difficult (+50%)
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => createMutation.mutate(form)}
+              disabled={createMutation.isPending || !form.value || !form.label}
+              data-testid="button-submit-job-type"
             >
               {createMutation.isPending ? "Creating..." : "Create"}
             </Button>
@@ -1387,9 +1848,13 @@ function SupplierImportTab() {
                       />
                     </TableCell>
                     <TableCell data-testid={`text-preview-type-${idx}`}>
-                      <Badge variant={item.itemType === "wire" ? "secondary" : "default"} className="text-xs">
-                        {item.itemType === "wire" ? "Wire" : "Material"}
-                      </Badge>
+                      {item.itemType === "wire" ? (
+                        <Badge variant="secondary" className="text-xs bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">Wire</Badge>
+                      ) : item.itemType === "part" ? (
+                        <Badge variant="secondary" className="text-xs bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200">Part</Badge>
+                      ) : (
+                        <Badge variant="default" className="text-xs bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">Material</Badge>
+                      )}
                     </TableCell>
                     <TableCell className="font-medium" data-testid={`text-preview-name-${idx}`}>{item.name}</TableCell>
                     <TableCell data-testid={`text-preview-category-${idx}`}>
@@ -1603,6 +2068,699 @@ function EstimateTemplateTab() {
   );
 }
 
+const PART_CATEGORY_COLORS: Record<string, string> = {
+  box: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
+  cover_plate: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
+  device: "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200",
+  connector: "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
+  wire_nut: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
+  mounting: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200",
+  misc: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200",
+  breaker: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
+  panel_component: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200",
+};
+
+function partCategoryLabel(cat: string) {
+  return cat.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+
+interface PartFormData {
+  name: string;
+  category: string;
+  unitCost: string;
+  supplier: string;
+  partNumber: string;
+}
+
+const defaultPartForm: PartFormData = {
+  name: "",
+  category: "box",
+  unitCost: "0",
+  supplier: "",
+  partNumber: "",
+};
+
+function PartsCatalogTab() {
+  const { toast } = useToast();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [partForm, setPartForm] = useState<PartFormData>(defaultPartForm);
+  const [categoryFilter, setCategoryFilter] = useState<string>("all");
+
+  const { data: parts, isLoading } = useQuery<PartsCatalogEntry[]>({
+    queryKey: ["/api/parts-catalog"],
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async (data: PartFormData) => {
+      await apiRequest("POST", "/api/parts-catalog", {
+        name: data.name,
+        category: data.category,
+        unitCost: parseFloat(data.unitCost) || 0,
+        supplier: data.supplier || null,
+        partNumber: data.partNumber || null,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/parts-catalog"] });
+      toast({ title: "Part created" });
+      setDialogOpen(false);
+      setPartForm(defaultPartForm);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: number; data: Record<string, unknown> }) => {
+      await apiRequest("PATCH", `/api/parts-catalog/${id}`, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/parts-catalog"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("DELETE", `/api/parts-catalog/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/parts-catalog"] });
+      toast({ title: "Part deleted" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const handleInlineBlur = (id: number, field: string, newValue: string, originalValue: string | number | null | undefined) => {
+    const orig = originalValue == null ? "" : String(originalValue);
+    if (newValue === orig) return;
+    const numericFields = ["unitCost"];
+    const payload: Record<string, unknown> = {};
+    if (numericFields.includes(field)) {
+      payload[field] = parseFloat(newValue) || 0;
+    } else {
+      payload[field] = newValue || null;
+    }
+    updateMutation.mutate({ id, data: payload });
+  };
+
+  const filteredParts = useMemo(() => {
+    if (!parts) return [];
+    if (categoryFilter === "all") return parts;
+    return parts.filter(p => p.category === categoryFilter);
+  }, [parts, categoryFilter]);
+
+  if (isLoading) {
+    return <div className="space-y-4"><Skeleton className="h-64" /></div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-2">
+          <Label className="text-sm whitespace-nowrap">Category:</Label>
+          <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+            <SelectTrigger className="w-[180px]" data-testid="select-part-category-filter">
+              <SelectValue placeholder="All Categories" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Categories</SelectItem>
+              {PART_CATEGORIES.map(cat => (
+                <SelectItem key={cat} value={cat}>{partCategoryLabel(cat)}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <Button onClick={() => { setPartForm(defaultPartForm); setDialogOpen(true); }} data-testid="button-add-part">
+          <Plus className="w-4 h-4 mr-2" />
+          Add Part
+        </Button>
+      </div>
+
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Category</TableHead>
+                <TableHead>Unit Cost</TableHead>
+                <TableHead>Supplier</TableHead>
+                <TableHead>Part #</TableHead>
+                <TableHead>Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filteredParts.length > 0 ? filteredParts.map((p) => (
+                <TableRow key={p.id} data-testid={`row-part-${p.id}`}>
+                  <TableCell>
+                    <Input
+                      key={`name-${p.id}-${p.name}`}
+                      defaultValue={p.name}
+                      onBlur={(e) => handleInlineBlur(p.id, "name", e.target.value, p.name)}
+                      className="min-w-[140px]"
+                      data-testid={`input-part-name-${p.id}`}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Badge className={`text-xs ${PART_CATEGORY_COLORS[p.category] || "bg-gray-100 text-gray-800"}`}>
+                      {partCategoryLabel(p.category)}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <Input
+                      key={`unitCost-${p.id}-${p.unitCost}`}
+                      type="number"
+                      step="0.01"
+                      defaultValue={p.unitCost}
+                      onBlur={(e) => handleInlineBlur(p.id, "unitCost", e.target.value, p.unitCost)}
+                      className="w-24"
+                      data-testid={`input-part-cost-${p.id}`}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Input
+                      key={`supplier-${p.id}-${p.supplier}`}
+                      defaultValue={p.supplier || ""}
+                      onBlur={(e) => handleInlineBlur(p.id, "supplier", e.target.value, p.supplier)}
+                      className="min-w-[100px]"
+                      data-testid={`input-part-supplier-${p.id}`}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Input
+                      key={`partNumber-${p.id}-${p.partNumber}`}
+                      defaultValue={p.partNumber || ""}
+                      onBlur={(e) => handleInlineBlur(p.id, "partNumber", e.target.value, p.partNumber)}
+                      className="min-w-[80px]"
+                      data-testid={`input-part-number-${p.id}`}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => deleteMutation.mutate(p.id)}
+                      data-testid={`button-delete-part-${p.id}`}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              )) : (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                    No parts found{categoryFilter !== "all" ? ` in "${partCategoryLabel(categoryFilter)}"` : ""}
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Add Part</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Name</Label>
+              <Input
+                value={partForm.name}
+                onChange={(e) => setPartForm(p => ({ ...p, name: e.target.value }))}
+                placeholder="e.g. 2104-LLE Single Gang Box"
+                data-testid="input-new-part-name"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Category</Label>
+              <Select value={partForm.category} onValueChange={(v) => setPartForm(p => ({ ...p, category: v }))}>
+                <SelectTrigger data-testid="select-new-part-category">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PART_CATEGORIES.map(cat => (
+                    <SelectItem key={cat} value={cat}>{partCategoryLabel(cat)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Unit Cost ($)</Label>
+              <Input
+                type="number"
+                step="0.01"
+                value={partForm.unitCost}
+                onChange={(e) => setPartForm(p => ({ ...p, unitCost: e.target.value }))}
+                data-testid="input-new-part-cost"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label>Supplier</Label>
+                <Input
+                  value={partForm.supplier}
+                  onChange={(e) => setPartForm(p => ({ ...p, supplier: e.target.value }))}
+                  placeholder="e.g. Nedco"
+                  data-testid="input-new-part-supplier"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Part #</Label>
+                <Input
+                  value={partForm.partNumber}
+                  onChange={(e) => setPartForm(p => ({ ...p, partNumber: e.target.value }))}
+                  placeholder="e.g. 2104-LLE"
+                  data-testid="input-new-part-number"
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDialogOpen(false)}
+              data-testid="button-cancel-part"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => createMutation.mutate(partForm)}
+              disabled={createMutation.isPending || !partForm.name}
+              data-testid="button-submit-part"
+            >
+              {createMutation.isPending ? "Creating..." : "Create"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function PhotosSettingsTab() {
+  const { toast } = useToast();
+  const { data: settings } = useQuery<Setting[]>({
+    queryKey: ["/api/settings"],
+  });
+  const { data: storageStatus } = useQuery<{
+    configured: boolean; r2: boolean; googleDrive: boolean;
+    googleDriveOAuthAvailable: boolean; googleDriveEmail: string | null;
+    provider: string | null;
+  }>({
+    queryKey: ["/api/r2-status"],
+  });
+
+  const disconnectMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/google-drive/disconnect");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/r2-status"] });
+      toast({ title: "Google Drive disconnected" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const sm = useMemo(() => {
+    const map: Record<string, string> = {};
+    (settings || []).forEach(s => { map[s.key] = s.value; });
+    return map;
+  }, [settings]);
+
+  const [storageProvider, setStorageProvider] = useState(sm.photoStorageProvider || "r2");
+  const [r2AccountId, setR2AccountId] = useState(sm.r2AccountId || "");
+  const [r2AccessKeyId, setR2AccessKeyId] = useState(sm.r2AccessKeyId || "");
+  const [r2SecretKey, setR2SecretKey] = useState(sm.r2SecretKey || "");
+  const [r2BucketName, setR2BucketName] = useState(sm.r2BucketName || "sparkyestimate-photos");
+
+  useEffect(() => {
+    if (settings) {
+      const map = new Map(settings.map(s => [s.key, s.value]));
+      setStorageProvider(map.get("photoStorageProvider") || "r2");
+      setR2AccountId(map.get("r2AccountId") || "");
+      setR2AccessKeyId(map.get("r2AccessKeyId") || "");
+      setR2SecretKey(map.get("r2SecretKey") || "");
+      setR2BucketName(map.get("r2BucketName") || "sparkyestimate-photos");
+    }
+  }, [settings]);
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/settings", {
+        photoStorageProvider: storageProvider,
+        r2AccountId,
+        r2AccessKeyId,
+        r2SecretKey,
+        r2BucketName,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/r2-status"] });
+      toast({ title: "Photo settings saved" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base font-semibold flex items-center gap-2">
+            <Upload className="w-4 h-4 text-primary" />
+            Photo Storage Configuration
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label>Storage Provider</Label>
+            <Select value={storageProvider} onValueChange={setStorageProvider}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="r2">Cloudflare R2</SelectItem>
+                <SelectItem value="google_drive">Google Drive</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Choose where to store inspection photos. Cloudflare R2 recommended (free tier: 10 GB, zero egress fees).
+            </p>
+          </div>
+
+          {storageProvider === "r2" && (
+            <div className="space-y-4 pt-2 border-t">
+              <div className="flex items-center gap-2 mb-2">
+                <Badge variant={storageStatus?.r2 ? "default" : "secondary"}>
+                  {storageStatus?.r2 ? "Connected" : "Not configured"}
+                </Badge>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="r2AccountId">Account ID</Label>
+                <Input
+                  id="r2AccountId"
+                  placeholder="Cloudflare R2 Account ID"
+                  value={r2AccountId}
+                  onChange={(e) => setR2AccountId(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="r2AccessKeyId">Access Key ID</Label>
+                <Input
+                  id="r2AccessKeyId"
+                  placeholder="R2 Access Key ID"
+                  value={r2AccessKeyId}
+                  onChange={(e) => setR2AccessKeyId(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="r2SecretKey">Secret Access Key</Label>
+                <Input
+                  id="r2SecretKey"
+                  type="password"
+                  placeholder="R2 Secret Access Key"
+                  value={r2SecretKey}
+                  onChange={(e) => setR2SecretKey(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="r2BucketName">Bucket Name</Label>
+                <Input
+                  id="r2BucketName"
+                  placeholder="sparkyestimate-photos"
+                  value={r2BucketName}
+                  onChange={(e) => setR2BucketName(e.target.value)}
+                />
+              </div>
+            </div>
+          )}
+
+          {storageProvider === "google_drive" && (
+            <div className="space-y-4 pt-2 border-t">
+              {storageStatus?.googleDrive ? (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="default" className="bg-green-600">
+                      <CheckCircle2 className="w-3 h-3 mr-1" />
+                      Connected
+                    </Badge>
+                    {storageStatus.googleDriveEmail && (
+                      <span className="text-sm text-muted-foreground">
+                        {storageStatus.googleDriveEmail}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Photos are stored in your Google Drive under &quot;SparkyEstimate Photos&quot; with
+                    auto-created subfolders per project (Service / Rough-in / Finish / Misc).
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => disconnectMutation.mutate()}
+                    disabled={disconnectMutation.isPending}
+                    className="text-red-600 hover:text-red-700"
+                  >
+                    {disconnectMutation.isPending ? "Disconnecting..." : "Disconnect Google Drive"}
+                  </Button>
+                </div>
+              ) : storageStatus?.googleDriveOAuthAvailable ? (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Badge variant="secondary">Not connected</Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Connect your Google Drive account to store inspection photos. A &quot;SparkyEstimate Photos&quot;
+                    folder will be auto-created with subfolders per project.
+                  </p>
+                  <Button onClick={() => { window.location.href = "/api/google-drive/auth"; }}>
+                    Connect Google Drive
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Badge variant="secondary">Not available</Badge>
+                  </div>
+                  <div className="p-3 bg-muted/50 rounded-lg">
+                    <p className="text-xs text-muted-foreground">
+                      Google Drive OAuth is not configured. Set <code className="mx-1">GOOGLE_CLIENT_ID</code> and
+                      <code className="mx-1">GOOGLE_CLIENT_SECRET</code> in the <code className="ml-1">.env</code> file
+                      and restart the server.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          <Button
+            onClick={() => saveMutation.mutate()}
+            disabled={saveMutation.isPending}
+          >
+            <Save className="w-4 h-4 mr-2" />
+            {saveMutation.isPending ? "Saving..." : "Save Photo Settings"}
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base font-semibold">Employee Access</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">
+            Employees can upload photos via the mobile Employee Portal at <code>/employee</code>.
+            Each employee needs a PIN set in the Employees page. Photos are organized by project and inspection phase.
+          </p>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function EditableRateTable({ category, label, rates, onChange }: {
+  category: string;
+  label: string;
+  rates: any[];
+  onChange: (updated: any[]) => void;
+}) {
+  return (
+    <div>
+      <p className="text-xs font-semibold mb-2">{label}</p>
+      <div className="space-y-1">
+        {rates.map((r: any, i: number) => (
+          <div key={i} className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground flex-1 min-w-0 truncate">{r.label}</span>
+            <span className="text-xs text-muted-foreground">$</span>
+            <Input
+              type="number"
+              className="w-20 h-7 text-xs"
+              value={r.fee}
+              onChange={(e) => {
+                const updated = [...rates];
+                updated[i] = { ...updated[i], fee: parseFloat(e.target.value) || 0 };
+                onChange(updated);
+              }}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PermitsTab() {
+  const { toast } = useToast();
+  const { data: schedules, isLoading } = useQuery<PermitFeeSchedule[]>({
+    queryKey: ["/api/permit-fee-schedules"],
+  });
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editRates, setEditRates] = useState<any>(null);
+
+  const toggleActiveMutation = useMutation({
+    mutationFn: async ({ id, isActive }: { id: number; isActive: boolean }) => {
+      await apiRequest("PATCH", `/api/permit-fee-schedules/${id}`, { isActive });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/permit-fee-schedules"] });
+      toast({ title: "Schedule updated" });
+    },
+  });
+
+  const saveRatesMutation = useMutation({
+    mutationFn: async ({ id, rates }: { id: number; rates: any }) => {
+      await apiRequest("PATCH", `/api/permit-fee-schedules/${id}`, { rates });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/permit-fee-schedules"] });
+      setEditingId(null);
+      setEditRates(null);
+      toast({ title: "Rates saved" });
+    },
+  });
+
+  const startEditing = (schedule: PermitFeeSchedule) => {
+    setEditingId(schedule.id);
+    setEditRates(JSON.parse(JSON.stringify(schedule.rates)));
+  };
+
+  if (isLoading) return <Skeleton className="h-48 w-full" />;
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base font-semibold flex items-center gap-2">
+            <Shield className="w-4 h-4 text-amber-500" />
+            TSBC Permit Fee Schedules
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground mb-4">
+            Manage Technical Safety BC fee schedules. Click "Edit Rates" to modify fee amounts.
+            The active schedule auto-calculates permit fees on estimates when the permit checkbox is enabled.
+          </p>
+          {(!schedules || schedules.length === 0) ? (
+            <p className="text-sm text-muted-foreground">No permit fee schedules found. Run the database seed to load TSBC rates.</p>
+          ) : (
+            <div className="space-y-4">
+              {schedules.map((schedule) => {
+                const isEditing = editingId === schedule.id;
+                const rates = isEditing ? editRates : (schedule.rates as any);
+                return (
+                  <Card key={schedule.id} className={schedule.isActive ? "border-primary" : ""}>
+                    <CardHeader className="pb-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <CardTitle className="text-sm">{schedule.name}</CardTitle>
+                          <Badge variant={schedule.isActive ? "default" : "secondary"} className="text-xs">
+                            {schedule.isActive ? "Active" : "Inactive"}
+                          </Badge>
+                          <span className="text-xs text-muted-foreground">Effective: {schedule.effectiveDate}</span>
+                        </div>
+                        <div className="flex gap-2">
+                          {isEditing ? (
+                            <>
+                              <Button size="sm" variant="outline" onClick={() => { setEditingId(null); setEditRates(null); }}>
+                                Cancel
+                              </Button>
+                              <Button size="sm" onClick={() => saveRatesMutation.mutate({ id: schedule.id, rates: editRates })}
+                                disabled={saveRatesMutation.isPending}>
+                                <Save className="w-3 h-3 mr-1" />
+                                {saveRatesMutation.isPending ? "Saving..." : "Save"}
+                              </Button>
+                            </>
+                          ) : (
+                            <>
+                              <Button size="sm" variant="outline" onClick={() => startEditing(schedule)}>
+                                <Pencil className="w-3 h-3 mr-1" />
+                                Edit Rates
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant={schedule.isActive ? "secondary" : "default"}
+                                onClick={() => toggleActiveMutation.mutate({ id: schedule.id, isActive: !schedule.isActive })}
+                              >
+                                {schedule.isActive ? "Deactivate" : "Activate"}
+                              </Button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        {rates?.residential_service && (
+                          <EditableRateTable
+                            category="residential_service"
+                            label="Single Family (by Amps)"
+                            rates={rates.residential_service}
+                            onChange={(updated) => isEditing && setEditRates({ ...editRates, residential_service: updated })}
+                          />
+                        )}
+                        {rates?.service_upgrade && (
+                          <EditableRateTable
+                            category="service_upgrade"
+                            label="Service Upgrade (by Amps)"
+                            rates={rates.service_upgrade}
+                            onChange={(updated) => isEditing && setEditRates({ ...editRates, service_upgrade: updated })}
+                          />
+                        )}
+                        {rates?.other && (
+                          <EditableRateTable
+                            category="other"
+                            label="Other (by Job Value)"
+                            rates={rates.other}
+                            onChange={(updated) => isEditing && setEditRates({ ...editRates, other: updated })}
+                          />
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const { toast } = useToast();
   const [form, setForm] = useState<SettingsData>(defaultSettings);
@@ -1676,6 +2834,10 @@ export default function SettingsPage() {
             <Cable className="w-4 h-4 mr-2" />
             Wire Types
           </TabsTrigger>
+          <TabsTrigger value="job-types" data-testid="tab-job-types">
+            <Briefcase className="w-4 h-4 mr-2" />
+            Job Types
+          </TabsTrigger>
           <TabsTrigger value="services" data-testid="tab-services">
             <Wrench className="w-4 h-4 mr-2" />
             Services
@@ -1691,6 +2853,18 @@ export default function SettingsPage() {
           <TabsTrigger value="estimate-template" data-testid="tab-estimate-template">
             <DollarSign className="w-4 h-4 mr-2" />
             Estimate Template
+          </TabsTrigger>
+          <TabsTrigger value="parts-catalog" data-testid="tab-parts-catalog">
+            <ListTree className="w-4 h-4 mr-2" />
+            Parts Catalog
+          </TabsTrigger>
+          <TabsTrigger value="permits" data-testid="tab-permits">
+            <Shield className="w-4 h-4 mr-2" />
+            Permits
+          </TabsTrigger>
+          <TabsTrigger value="photos" data-testid="tab-photos">
+            <Upload className="w-4 h-4 mr-2" />
+            Photos
           </TabsTrigger>
         </TabsList>
 
@@ -1711,6 +2885,10 @@ export default function SettingsPage() {
           <WireTypesTab />
         </TabsContent>
 
+        <TabsContent value="job-types">
+          <JobTypesTab />
+        </TabsContent>
+
         <TabsContent value="services">
           <ServicesTab />
         </TabsContent>
@@ -1725,6 +2903,18 @@ export default function SettingsPage() {
 
         <TabsContent value="estimate-template">
           <EstimateTemplateTab />
+        </TabsContent>
+
+        <TabsContent value="parts-catalog">
+          <PartsCatalogTab />
+        </TabsContent>
+
+        <TabsContent value="permits">
+          <PermitsTab />
+        </TabsContent>
+
+        <TabsContent value="photos">
+          <PhotosSettingsTab />
         </TabsContent>
       </Tabs>
     </div>

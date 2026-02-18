@@ -19,7 +19,10 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { Plus, Pencil, Trash2, Users, Search } from "lucide-react";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue
+} from "@/components/ui/select";
+import { Plus, Pencil, Trash2, Users, Search, ArrowUpDown } from "lucide-react";
 import type { Customer, Project } from "@shared/schema";
 import { Link } from "wouter";
 
@@ -33,6 +36,22 @@ interface CustomerFormData {
   postalCode: string;
   notes: string;
 }
+
+const PROVINCES = [
+  { value: "BC", label: "BC" },
+  { value: "AB", label: "AB" },
+  { value: "SK", label: "SK" },
+  { value: "MB", label: "MB" },
+  { value: "ON", label: "ON" },
+  { value: "QC", label: "QC" },
+  { value: "NB", label: "NB" },
+  { value: "NS", label: "NS" },
+  { value: "PE", label: "PE" },
+  { value: "NL", label: "NL" },
+  { value: "YT", label: "YT" },
+  { value: "NT", label: "NT" },
+  { value: "NU", label: "NU" },
+];
 
 const emptyForm: CustomerFormData = {
   name: "",
@@ -182,13 +201,19 @@ function CustomerDialog({
             </div>
             <div className="space-y-2">
               <Label htmlFor="customer-province">Province</Label>
-              <Input
-                id="customer-province"
-                placeholder="ON"
-                value={form.province}
-                onChange={(e) => setForm((p) => ({ ...p, province: e.target.value }))}
-                data-testid="input-customer-province"
-              />
+              <Select
+                value={form.province || ""}
+                onValueChange={(v) => setForm((p) => ({ ...p, province: v }))}
+              >
+                <SelectTrigger id="customer-province" data-testid="input-customer-province">
+                  <SelectValue placeholder="Select" />
+                </SelectTrigger>
+                <SelectContent>
+                  {PROVINCES.map((prov) => (
+                    <SelectItem key={prov.value} value={prov.value}>{prov.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-2">
               <Label htmlFor="customer-postal-code">Postal Code</Label>
@@ -236,6 +261,7 @@ export default function Customers() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Customer | null>(null);
+  const [sortBy, setSortBy] = useState("name_asc");
   const { toast } = useToast();
 
   const { data: customers, isLoading } = useQuery<Customer[]>({
@@ -267,14 +293,28 @@ export default function Customers() {
     },
   });
 
-  const filtered = (customers || []).filter((c) =>
-    c.name.toLowerCase().includes(search.toLowerCase())
-  );
-
   const formatLocation = (c: Customer) => {
     const parts = [c.city, c.province, c.postalCode].filter(Boolean);
     return parts.length > 0 ? parts.join(", ") : "-";
   };
+
+  const filtered = (customers || []).filter((c) => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return [c.name, c.email, c.phone, c.city, c.province].some(
+      f => f?.toLowerCase().includes(q)
+    );
+  });
+
+  const sorted = [...filtered].sort((a, b) => {
+    switch (sortBy) {
+      case "name_asc": return a.name.localeCompare(b.name);
+      case "name_desc": return b.name.localeCompare(a.name);
+      case "projects_most": return (projectCountByCustomer[b.id] || 0) - (projectCountByCustomer[a.id] || 0);
+      case "location": return formatLocation(a).localeCompare(formatLocation(b));
+      default: return 0;
+    }
+  });
 
   const openCreateDialog = () => {
     setEditingCustomer(null);
@@ -334,12 +374,24 @@ export default function Customers() {
             data-testid="input-search-customers"
           />
         </div>
+        <Select value={sortBy} onValueChange={setSortBy}>
+          <SelectTrigger className="w-[170px] h-9" data-testid="select-sort">
+            <ArrowUpDown className="w-4 h-4 mr-2 text-muted-foreground" />
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="name_asc">Name (A-Z)</SelectItem>
+            <SelectItem value="name_desc">Name (Z-A)</SelectItem>
+            <SelectItem value="projects_most">Most Projects</SelectItem>
+            <SelectItem value="location">Location</SelectItem>
+          </SelectContent>
+        </Select>
         <span className="text-sm text-muted-foreground" data-testid="text-customer-count">
-          {filtered.length} customer{filtered.length !== 1 ? "s" : ""}
+          {sorted.length} customer{sorted.length !== 1 ? "s" : ""}
         </span>
       </div>
 
-      {filtered.length === 0 ? (
+      {sorted.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-16 text-center">
             <div className="flex items-center justify-center w-14 h-14 rounded-md bg-muted mb-4">
@@ -375,7 +427,7 @@ export default function Customers() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filtered.map((customer) => (
+                  {sorted.map((customer) => (
                     <TableRow
                       key={customer.id}
                       className="cursor-pointer"
@@ -463,12 +515,18 @@ export default function Customers() {
             <AlertDialogTitle>Delete Customer</AlertDialogTitle>
             <AlertDialogDescription>
               Are you sure you want to delete {deleteTarget?.name}? This action cannot be undone.
+              {deleteTarget && projectCountByCustomer[deleteTarget.id] > 0 && (
+                <span className="block mt-2 text-destructive font-medium">
+                  This customer has {projectCountByCustomer[deleteTarget.id]} linked project{projectCountByCustomer[deleteTarget.id] !== 1 ? "s" : ""} that will be unlinked.
+                </span>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel data-testid="button-cancel-delete">Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               data-testid="button-confirm-delete"
             >
               {deleteMutation.isPending ? "Deleting..." : "Delete"}

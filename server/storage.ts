@@ -1,8 +1,9 @@
 import {
   customers, employees, projects, estimates, estimateItems, invoices, invoiceItems,
   deviceAssemblies, aiAnalyses, settings,
-  wireTypes, serviceBundles, panelCircuits, estimateServices, complianceDocuments,
-  supplierImports,
+  wireTypes, serviceBundles, panelCircuits, estimateServices, estimateCrew, complianceDocuments,
+  supplierImports, jobTypes, partsCatalog, assemblyParts, roomPanelAssignments,
+  permitFeeSchedules, projectPhotos, projectAssignments,
   type Customer, type InsertCustomer,
   type Employee, type InsertEmployee,
   type Project, type InsertProject,
@@ -17,11 +18,19 @@ import {
   type ServiceBundle, type InsertServiceBundle,
   type PanelCircuit, type InsertPanelCircuit,
   type EstimateService, type InsertEstimateService,
+  type EstimateCrew, type InsertEstimateCrew,
   type ComplianceDocument, type InsertComplianceDocument,
   type SupplierImport, type InsertSupplierImport,
+  type JobType, type InsertJobType,
+  type PartsCatalogEntry, type InsertPartsCatalog,
+  type AssemblyPart, type InsertAssemblyPart,
+  type RoomPanelAssignment, type InsertRoomPanelAssignment,
+  type PermitFeeSchedule, type InsertPermitFeeSchedule,
+  type ProjectPhoto, type InsertProjectPhoto,
+  type ProjectAssignment, type InsertProjectAssignment,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, ilike, sql, and } from "drizzle-orm";
 
 export interface IStorage {
   getCustomers(): Promise<Customer[]>;
@@ -103,6 +112,10 @@ export interface IStorage {
   createEstimateService(data: InsertEstimateService): Promise<EstimateService>;
   deleteEstimateService(id: number): Promise<void>;
 
+  getEstimateCrew(estimateId: number): Promise<EstimateCrew[]>;
+  createEstimateCrew(data: InsertEstimateCrew): Promise<EstimateCrew>;
+  deleteEstimateCrew(id: number): Promise<void>;
+
   getComplianceDocuments(): Promise<ComplianceDocument[]>;
   getActiveComplianceDocument(): Promise<ComplianceDocument | undefined>;
   createComplianceDocument(data: InsertComplianceDocument): Promise<ComplianceDocument>;
@@ -110,10 +123,52 @@ export interface IStorage {
   deleteComplianceDocument(id: number): Promise<void>;
   deactivateAllComplianceDocuments(): Promise<void>;
 
+  getJobTypes(): Promise<JobType[]>;
+  createJobType(data: InsertJobType): Promise<JobType>;
+  updateJobType(id: number, data: Partial<InsertJobType>): Promise<JobType | undefined>;
+  deleteJobType(id: number): Promise<void>;
+
   getSupplierImports(): Promise<SupplierImport[]>;
   getSupplierImport(id: number): Promise<SupplierImport | undefined>;
   createSupplierImport(data: InsertSupplierImport): Promise<SupplierImport>;
   updateSupplierImport(id: number, data: Partial<InsertSupplierImport>): Promise<SupplierImport | undefined>;
+
+  // Parts Catalog
+  getPartsCatalog(): Promise<PartsCatalogEntry[]>;
+  getPart(id: number): Promise<PartsCatalogEntry | undefined>;
+  createPart(data: InsertPartsCatalog): Promise<PartsCatalogEntry>;
+  updatePart(id: number, data: Partial<InsertPartsCatalog>): Promise<PartsCatalogEntry | undefined>;
+  deletePart(id: number): Promise<void>;
+  searchParts(query: string): Promise<PartsCatalogEntry[]>;
+
+  // Assembly Parts
+  getAssemblyParts(assemblyId: number): Promise<(AssemblyPart & { part: PartsCatalogEntry })[]>;
+  setAssemblyParts(assemblyId: number, parts: Array<{ partId: number; quantity: number }>): Promise<void>;
+  recalcAssemblyMaterialCost(assemblyId: number): Promise<number>;
+
+  // Room Panel Assignments
+  getRoomPanelAssignments(analysisId: number): Promise<RoomPanelAssignment[]>;
+  createRoomPanelAssignment(data: InsertRoomPanelAssignment): Promise<RoomPanelAssignment>;
+  updateRoomPanelAssignment(id: number, data: Partial<InsertRoomPanelAssignment>): Promise<RoomPanelAssignment | undefined>;
+  deleteRoomPanelAssignments(analysisId: number): Promise<void>;
+
+  // Permit Fee Schedules
+  getPermitFeeSchedules(): Promise<PermitFeeSchedule[]>;
+  getActivePermitFeeSchedule(): Promise<PermitFeeSchedule | undefined>;
+  createPermitFeeSchedule(data: InsertPermitFeeSchedule): Promise<PermitFeeSchedule>;
+  updatePermitFeeSchedule(id: number, data: Partial<InsertPermitFeeSchedule>): Promise<PermitFeeSchedule | undefined>;
+  deletePermitFeeSchedule(id: number): Promise<void>;
+
+  // Project Photos
+  getProjectPhotos(projectId: number, phase?: string): Promise<ProjectPhoto[]>;
+  createProjectPhoto(data: InsertProjectPhoto): Promise<ProjectPhoto>;
+  deleteProjectPhoto(id: number): Promise<void>;
+
+  // Project Assignments
+  getProjectAssignments(projectId: number): Promise<ProjectAssignment[]>;
+  getEmployeeProjects(employeeId: number): Promise<ProjectAssignment[]>;
+  createProjectAssignment(data: InsertProjectAssignment): Promise<ProjectAssignment>;
+  deleteProjectAssignment(id: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -414,6 +469,19 @@ export class DatabaseStorage implements IStorage {
     await db.delete(estimateServices).where(eq(estimateServices.id, id));
   }
 
+  async getEstimateCrew(estimateId: number): Promise<EstimateCrew[]> {
+    return db.select().from(estimateCrew).where(eq(estimateCrew.estimateId, estimateId));
+  }
+
+  async createEstimateCrew(data: InsertEstimateCrew): Promise<EstimateCrew> {
+    const [ec] = await db.insert(estimateCrew).values(data).returning();
+    return ec;
+  }
+
+  async deleteEstimateCrew(id: number): Promise<void> {
+    await db.delete(estimateCrew).where(eq(estimateCrew.id, id));
+  }
+
   async getComplianceDocuments(): Promise<ComplianceDocument[]> {
     return db.select().from(complianceDocuments).orderBy(desc(complianceDocuments.uploadedAt));
   }
@@ -441,6 +509,24 @@ export class DatabaseStorage implements IStorage {
     await db.update(complianceDocuments).set({ isActive: false });
   }
 
+  async getJobTypes(): Promise<JobType[]> {
+    return db.select().from(jobTypes);
+  }
+
+  async createJobType(data: InsertJobType): Promise<JobType> {
+    const [jt] = await db.insert(jobTypes).values(data).returning();
+    return jt;
+  }
+
+  async updateJobType(id: number, data: Partial<InsertJobType>): Promise<JobType | undefined> {
+    const [jt] = await db.update(jobTypes).set(data).where(eq(jobTypes.id, id)).returning();
+    return jt;
+  }
+
+  async deleteJobType(id: number): Promise<void> {
+    await db.delete(jobTypes).where(eq(jobTypes.id, id));
+  }
+
   async getSupplierImports(): Promise<SupplierImport[]> {
     return db.select().from(supplierImports).orderBy(desc(supplierImports.createdAt));
   }
@@ -458,6 +544,165 @@ export class DatabaseStorage implements IStorage {
   async updateSupplierImport(id: number, data: Partial<InsertSupplierImport>): Promise<SupplierImport | undefined> {
     const [si] = await db.update(supplierImports).set(data).where(eq(supplierImports.id, id)).returning();
     return si;
+  }
+
+  // Parts Catalog
+  async getPartsCatalog(): Promise<PartsCatalogEntry[]> {
+    return db.select().from(partsCatalog).where(eq(partsCatalog.isActive, true)).orderBy(partsCatalog.name);
+  }
+
+  async getPart(id: number): Promise<PartsCatalogEntry | undefined> {
+    const [part] = await db.select().from(partsCatalog).where(eq(partsCatalog.id, id));
+    return part;
+  }
+
+  async createPart(data: InsertPartsCatalog): Promise<PartsCatalogEntry> {
+    const [part] = await db.insert(partsCatalog).values(data).returning();
+    return part;
+  }
+
+  async updatePart(id: number, data: Partial<InsertPartsCatalog>): Promise<PartsCatalogEntry | undefined> {
+    const [part] = await db.update(partsCatalog).set(data).where(eq(partsCatalog.id, id)).returning();
+    return part;
+  }
+
+  async deletePart(id: number): Promise<void> {
+    // Soft delete
+    await db.update(partsCatalog).set({ isActive: false }).where(eq(partsCatalog.id, id));
+  }
+
+  async searchParts(query: string): Promise<PartsCatalogEntry[]> {
+    return db.select().from(partsCatalog)
+      .where(and(eq(partsCatalog.isActive, true), ilike(partsCatalog.name, `%${query}%`)))
+      .orderBy(partsCatalog.name);
+  }
+
+  // Assembly Parts
+  async getAssemblyParts(assemblyId: number): Promise<(AssemblyPart & { part: PartsCatalogEntry })[]> {
+    const rows = await db.select({
+      id: assemblyParts.id,
+      assemblyId: assemblyParts.assemblyId,
+      partId: assemblyParts.partId,
+      quantity: assemblyParts.quantity,
+      part: partsCatalog,
+    })
+    .from(assemblyParts)
+    .innerJoin(partsCatalog, eq(assemblyParts.partId, partsCatalog.id))
+    .where(eq(assemblyParts.assemblyId, assemblyId));
+
+    return rows.map(r => ({
+      id: r.id,
+      assemblyId: r.assemblyId,
+      partId: r.partId,
+      quantity: r.quantity,
+      part: r.part,
+    }));
+  }
+
+  async setAssemblyParts(assemblyId: number, parts: Array<{ partId: number; quantity: number }>): Promise<void> {
+    // Delete existing parts for this assembly
+    await db.delete(assemblyParts).where(eq(assemblyParts.assemblyId, assemblyId));
+    // Insert new parts
+    if (parts.length > 0) {
+      await db.insert(assemblyParts).values(
+        parts.map(p => ({ assemblyId, partId: p.partId, quantity: p.quantity }))
+      );
+    }
+    // Recalculate material cost
+    await this.recalcAssemblyMaterialCost(assemblyId);
+  }
+
+  async recalcAssemblyMaterialCost(assemblyId: number): Promise<number> {
+    const parts = await this.getAssemblyParts(assemblyId);
+    if (parts.length === 0) return 0;
+    const totalCost = parts.reduce((sum, ap) => sum + (ap.part.unitCost * ap.quantity), 0);
+    await db.update(deviceAssemblies)
+      .set({ materialCost: Math.round(totalCost * 100) / 100 })
+      .where(eq(deviceAssemblies.id, assemblyId));
+    return totalCost;
+  }
+
+  // Room Panel Assignments
+  async getRoomPanelAssignments(analysisId: number): Promise<RoomPanelAssignment[]> {
+    return db.select().from(roomPanelAssignments)
+      .where(eq(roomPanelAssignments.analysisId, analysisId));
+  }
+
+  async createRoomPanelAssignment(data: InsertRoomPanelAssignment): Promise<RoomPanelAssignment> {
+    const [rpa] = await db.insert(roomPanelAssignments).values(data).returning();
+    return rpa;
+  }
+
+  async updateRoomPanelAssignment(id: number, data: Partial<InsertRoomPanelAssignment>): Promise<RoomPanelAssignment | undefined> {
+    const [rpa] = await db.update(roomPanelAssignments).set(data).where(eq(roomPanelAssignments.id, id)).returning();
+    return rpa;
+  }
+
+  async deleteRoomPanelAssignments(analysisId: number): Promise<void> {
+    await db.delete(roomPanelAssignments).where(eq(roomPanelAssignments.analysisId, analysisId));
+  }
+
+  // Permit Fee Schedules
+  async getPermitFeeSchedules(): Promise<PermitFeeSchedule[]> {
+    return db.select().from(permitFeeSchedules).orderBy(desc(permitFeeSchedules.createdAt));
+  }
+
+  async getActivePermitFeeSchedule(): Promise<PermitFeeSchedule | undefined> {
+    const [schedule] = await db.select().from(permitFeeSchedules).where(eq(permitFeeSchedules.isActive, true));
+    return schedule;
+  }
+
+  async createPermitFeeSchedule(data: InsertPermitFeeSchedule): Promise<PermitFeeSchedule> {
+    const [schedule] = await db.insert(permitFeeSchedules).values(data).returning();
+    return schedule;
+  }
+
+  async updatePermitFeeSchedule(id: number, data: Partial<InsertPermitFeeSchedule>): Promise<PermitFeeSchedule | undefined> {
+    const [schedule] = await db.update(permitFeeSchedules).set(data).where(eq(permitFeeSchedules.id, id)).returning();
+    return schedule;
+  }
+
+  async deletePermitFeeSchedule(id: number): Promise<void> {
+    await db.delete(permitFeeSchedules).where(eq(permitFeeSchedules.id, id));
+  }
+
+  // Project Photos
+  async getProjectPhotos(projectId: number, phase?: string): Promise<ProjectPhoto[]> {
+    if (phase) {
+      return db.select().from(projectPhotos)
+        .where(and(eq(projectPhotos.projectId, projectId), eq(projectPhotos.inspectionPhase, phase)))
+        .orderBy(desc(projectPhotos.createdAt));
+    }
+    return db.select().from(projectPhotos)
+      .where(eq(projectPhotos.projectId, projectId))
+      .orderBy(desc(projectPhotos.createdAt));
+  }
+
+  async createProjectPhoto(data: InsertProjectPhoto): Promise<ProjectPhoto> {
+    const [photo] = await db.insert(projectPhotos).values(data).returning();
+    return photo;
+  }
+
+  async deleteProjectPhoto(id: number): Promise<void> {
+    await db.delete(projectPhotos).where(eq(projectPhotos.id, id));
+  }
+
+  // Project Assignments
+  async getProjectAssignments(projectId: number): Promise<ProjectAssignment[]> {
+    return db.select().from(projectAssignments).where(eq(projectAssignments.projectId, projectId));
+  }
+
+  async getEmployeeProjects(employeeId: number): Promise<ProjectAssignment[]> {
+    return db.select().from(projectAssignments).where(eq(projectAssignments.employeeId, employeeId));
+  }
+
+  async createProjectAssignment(data: InsertProjectAssignment): Promise<ProjectAssignment> {
+    const [assignment] = await db.insert(projectAssignments).values(data).returning();
+    return assignment;
+  }
+
+  async deleteProjectAssignment(id: number): Promise<void> {
+    await db.delete(projectAssignments).where(eq(projectAssignments.id, id));
   }
 }
 

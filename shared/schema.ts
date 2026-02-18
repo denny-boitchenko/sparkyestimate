@@ -20,7 +20,8 @@ export const employees = pgTable("employees", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   name: text("name").notNull(),
   role: text("role").notNull().default("electrician"),
-  hourlyRate: real("hourly_rate").notNull().default(85),
+  hourlyRate: real("hourly_rate").notNull().default(90),
+  pin: text("pin"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -44,11 +45,20 @@ export const estimates = pgTable("estimates", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   projectId: integer("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
-  overheadPct: real("overhead_pct").notNull().default(15),
-  profitPct: real("profit_pct").notNull().default(10),
-  materialMarkupPct: real("material_markup_pct").notNull().default(0),
-  laborMarkupPct: real("labor_markup_pct").notNull().default(0),
-  laborRate: real("labor_rate").notNull().default(85),
+  overheadPct: real("overhead_pct").notNull().default(12),
+  profitPct: real("profit_pct").notNull().default(5),
+  materialMarkupPct: real("material_markup_pct").notNull().default(5),
+  laborMarkupPct: real("labor_markup_pct").notNull().default(5),
+  laborRate: real("labor_rate").notNull().default(90),
+  laborHoursOverride: real("labor_hours_override"),
+  laborMultiplier: real("labor_multiplier").notNull().default(1.0),
+  jobType: text("job_type").notNull().default("new_construction"),
+  panelSize: integer("panel_size").notNull().default(200),
+  wasteFactor: real("waste_factor").notNull().default(15),
+  spoolOverrides: jsonb("spool_overrides"),
+  permitFee: real("permit_fee"),
+  permitFeeOverride: real("permit_fee_override"),
+  includePermit: boolean("include_permit").notNull().default(false),
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -67,12 +77,14 @@ export const estimateItems = pgTable("estimate_items", {
   markupPct: real("markup_pct").notNull().default(0),
   boxType: text("box_type"),
   coverPlate: text("cover_plate"),
+  panelName: text("panel_name").notNull().default("Main Panel"),
+  assemblyId: integer("assembly_id").references(() => deviceAssemblies.id, { onDelete: "set null" }),
 });
 
 export const invoices = pgTable("invoices", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   invoiceNumber: text("invoice_number").notNull(),
-  estimateId: integer("estimate_id").references(() => estimates.id),
+  estimateId: integer("estimate_id").references(() => estimates.id, { onDelete: "set null" }),
   projectId: integer("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   customerId: integer("customer_id"),
   status: text("status").notNull().default("draft"),
@@ -102,6 +114,7 @@ export const invoiceItems = pgTable("invoice_items", {
 export const deviceAssemblies = pgTable("device_assemblies", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   name: text("name").notNull(),
+  symbolType: text("symbol_type"),
   category: text("category").notNull(),
   device: text("device").notNull(),
   boxType: text("box_type"),
@@ -115,9 +128,38 @@ export const deviceAssemblies = pgTable("device_assemblies", {
   supplier: text("supplier"),
 });
 
+export const partsCatalog = pgTable("parts_catalog", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  name: text("name").notNull(),
+  category: text("category").notNull(),
+  unitCost: real("unit_cost").notNull().default(0),
+  supplier: text("supplier"),
+  partNumber: text("part_number"),
+  description: text("description"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const assemblyParts = pgTable("assembly_parts", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  assemblyId: integer("assembly_id").notNull()
+    .references(() => deviceAssemblies.id, { onDelete: "cascade" }),
+  partId: integer("part_id").notNull()
+    .references(() => partsCatalog.id, { onDelete: "cascade" }),
+  quantity: real("quantity").notNull().default(1),
+});
+
+export const jobTypes = pgTable("job_types", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  value: text("value").notNull().unique(),
+  label: text("label").notNull(),
+  multiplier: real("multiplier").notNull().default(1.0),
+  isDefault: boolean("is_default").notNull().default(false),
+});
+
 export const aiAnalyses = pgTable("ai_analyses", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
-  projectId: integer("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }),
   fileName: text("file_name").notNull(),
   analysisMode: text("analysis_mode").notNull(),
   results: jsonb("results"),
@@ -156,6 +198,9 @@ export const panelCircuits = pgTable("panel_circuits", {
   wireType: text("wire_type"),
   isGfci: boolean("is_gfci").notNull().default(false),
   isAfci: boolean("is_afci").notNull().default(false),
+  roomType: text("room_type"),
+  outletCount: integer("outlet_count").notNull().default(0),
+  panelName: text("panel_name").notNull().default("Main Panel"),
 });
 
 export const estimateServices = pgTable("estimate_services", {
@@ -165,6 +210,12 @@ export const estimateServices = pgTable("estimate_services", {
   name: text("name").notNull(),
   materialCost: real("material_cost").notNull().default(0),
   laborHours: real("labor_hours").notNull().default(0),
+});
+
+export const estimateCrew = pgTable("estimate_crew", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  estimateId: integer("estimate_id").notNull().references(() => estimates.id, { onDelete: "cascade" }),
+  employeeId: integer("employee_id").notNull().references(() => employees.id),
 });
 
 export const complianceDocuments = pgTable("compliance_documents", {
@@ -188,6 +239,49 @@ export const supplierImports = pgTable("supplier_imports", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const roomPanelAssignments = pgTable("room_panel_assignments", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  analysisId: integer("analysis_id").notNull()
+    .references(() => aiAnalyses.id, { onDelete: "cascade" }),
+  roomName: text("room_name").notNull(),
+  panelName: text("panel_name").notNull().default("Main Panel"),
+  isManualOverride: boolean("is_manual_override").notNull().default(false),
+});
+
+// Permit Fee Schedule — TSBC rate tables (one row per effective year)
+export const permitFeeSchedules = pgTable("permit_fee_schedules", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  name: text("name").notNull(),
+  effectiveDate: text("effective_date").notNull(),
+  rates: jsonb("rates").notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// Project Photos — inspection photo records (files stored in Cloudflare R2)
+export const projectPhotos = pgTable("project_photos", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  projectId: integer("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  employeeId: integer("employee_id").references(() => employees.id, { onDelete: "set null" }),
+  inspectionPhase: text("inspection_phase").notNull(),
+  storageKey: text("storage_key").notNull(),
+  originalFilename: text("original_filename").notNull(),
+  mimeType: text("mime_type").notNull(),
+  fileSize: integer("file_size"),
+  caption: text("caption"),
+  gpsLat: real("gps_lat"),
+  gpsLng: real("gps_lng"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// Project Assignments — which employees can access which projects
+export const projectAssignments = pgTable("project_assignments", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  projectId: integer("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  employeeId: integer("employee_id").notNull().references(() => employees.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // Insert schemas
 export const insertCustomerSchema = createInsertSchema(customers).omit({ id: true, createdAt: true });
 export const insertEmployeeSchema = createInsertSchema(employees).omit({ id: true, createdAt: true });
@@ -197,14 +291,22 @@ export const insertEstimateItemSchema = createInsertSchema(estimateItems).omit({
 export const insertInvoiceSchema = createInsertSchema(invoices).omit({ id: true, createdAt: true });
 export const insertInvoiceItemSchema = createInsertSchema(invoiceItems).omit({ id: true });
 export const insertDeviceAssemblySchema = createInsertSchema(deviceAssemblies).omit({ id: true });
+export const insertJobTypeSchema = createInsertSchema(jobTypes).omit({ id: true });
 export const insertAiAnalysisSchema = createInsertSchema(aiAnalyses).omit({ id: true, createdAt: true });
 export const insertSettingSchema = createInsertSchema(settings).omit({ id: true });
 export const insertWireTypeSchema = createInsertSchema(wireTypes).omit({ id: true });
 export const insertServiceBundleSchema = createInsertSchema(serviceBundles).omit({ id: true });
 export const insertPanelCircuitSchema = createInsertSchema(panelCircuits).omit({ id: true });
 export const insertEstimateServiceSchema = createInsertSchema(estimateServices).omit({ id: true });
+export const insertEstimateCrewSchema = createInsertSchema(estimateCrew).omit({ id: true });
 export const insertComplianceDocumentSchema = createInsertSchema(complianceDocuments).omit({ id: true, uploadedAt: true });
 export const insertSupplierImportSchema = createInsertSchema(supplierImports).omit({ id: true, createdAt: true });
+export const insertPartsCatalogSchema = createInsertSchema(partsCatalog).omit({ id: true, createdAt: true });
+export const insertAssemblyPartSchema = createInsertSchema(assemblyParts).omit({ id: true });
+export const insertRoomPanelAssignmentSchema = createInsertSchema(roomPanelAssignments).omit({ id: true });
+export const insertPermitFeeScheduleSchema = createInsertSchema(permitFeeSchedules).omit({ id: true, createdAt: true });
+export const insertProjectPhotoSchema = createInsertSchema(projectPhotos).omit({ id: true, createdAt: true });
+export const insertProjectAssignmentSchema = createInsertSchema(projectAssignments).omit({ id: true, createdAt: true });
 
 // Types
 export type Customer = typeof customers.$inferSelect;
@@ -223,6 +325,8 @@ export type InvoiceItem = typeof invoiceItems.$inferSelect;
 export type InsertInvoiceItem = z.infer<typeof insertInvoiceItemSchema>;
 export type DeviceAssembly = typeof deviceAssemblies.$inferSelect;
 export type InsertDeviceAssembly = z.infer<typeof insertDeviceAssemblySchema>;
+export type JobType = typeof jobTypes.$inferSelect;
+export type InsertJobType = z.infer<typeof insertJobTypeSchema>;
 export type AiAnalysis = typeof aiAnalyses.$inferSelect;
 export type InsertAiAnalysis = z.infer<typeof insertAiAnalysisSchema>;
 export type Setting = typeof settings.$inferSelect;
@@ -235,13 +339,30 @@ export type PanelCircuit = typeof panelCircuits.$inferSelect;
 export type InsertPanelCircuit = z.infer<typeof insertPanelCircuitSchema>;
 export type EstimateService = typeof estimateServices.$inferSelect;
 export type InsertEstimateService = z.infer<typeof insertEstimateServiceSchema>;
+export type EstimateCrew = typeof estimateCrew.$inferSelect;
+export type InsertEstimateCrew = z.infer<typeof insertEstimateCrewSchema>;
 export type ComplianceDocument = typeof complianceDocuments.$inferSelect;
 export type InsertComplianceDocument = z.infer<typeof insertComplianceDocumentSchema>;
 export type SupplierImport = typeof supplierImports.$inferSelect;
 export type InsertSupplierImport = z.infer<typeof insertSupplierImportSchema>;
+export type PartsCatalogEntry = typeof partsCatalog.$inferSelect;
+export type InsertPartsCatalog = z.infer<typeof insertPartsCatalogSchema>;
+export type AssemblyPart = typeof assemblyParts.$inferSelect;
+export type InsertAssemblyPart = z.infer<typeof insertAssemblyPartSchema>;
+export type RoomPanelAssignment = typeof roomPanelAssignments.$inferSelect;
+export type InsertRoomPanelAssignment = z.infer<typeof insertRoomPanelAssignmentSchema>;
+export type PermitFeeSchedule = typeof permitFeeSchedules.$inferSelect;
+export type InsertPermitFeeSchedule = z.infer<typeof insertPermitFeeScheduleSchema>;
+export type ProjectPhoto = typeof projectPhotos.$inferSelect;
+export type InsertProjectPhoto = z.infer<typeof insertProjectPhotoSchema>;
+export type ProjectAssignment = typeof projectAssignments.$inferSelect;
+export type InsertProjectAssignment = z.infer<typeof insertProjectAssignmentSchema>;
 
 export const PROJECT_STATUSES = ["draft", "in_progress", "bid_sent", "won", "lost"] as const;
-export const DWELLING_TYPES = ["single", "duplex", "triplex", "fourplex"] as const;
+export const DWELLING_TYPES = [
+  "single", "duplex", "triplex", "fourplex",
+  "townhouse", "condo", "apartment", "commercial", "industrial",
+] as const;
 export const ANALYSIS_MODES = ["electrical", "floor_plan"] as const;
 export const INVOICE_STATUSES = ["draft", "sent", "paid", "overdue"] as const;
 export const EMPLOYEE_ROLES = ["owner", "journeyman", "apprentice", "helper"] as const;
@@ -250,9 +371,19 @@ export const DEVICE_CATEGORIES = [
   "receptacles", "switches", "lighting", "safety", "data_comm", "specialty", "service"
 ] as const;
 
+export const PART_CATEGORIES = [
+  "box", "cover_plate", "device", "connector", "wire_nut",
+  "mounting", "misc", "breaker", "panel_component"
+] as const;
+
+export const INSPECTION_PHASES = ["service", "roughin", "finish", "misc"] as const;
+
+export const PERMIT_CATEGORIES = ["residential_service", "service_upgrade", "other"] as const;
+
 export const DEFAULT_WIRE_TYPES = [
-  "14/2 NM-B", "14/3 NM-B", "12/2 NM-B", "12/3 NM-B",
-  "10/2 NM-B", "10/3 NM-B", "6/3 NM-B", "3 AWG NM-B",
-  "3/0 AL SER Cable", "18/2 Bell Wire", "18/5 Thermostat Wire",
-  "Cat6", "RG6 Coax"
+  "14/2 NMD-90", "14/3 NMD-90", "12/2 NMD-90", "12/3 NMD-90",
+  "10/2 NMD-90", "10/3 NMD-90", "8/3 NMD-90", "6/3 NMD-90", "3 AWG NMD-90",
+  "2/0 AL SER Cable", "3/0 AL SER Cable",
+  "18/2 Bell Wire", "18/4 Thermostat Wire", "18/5 Thermostat Wire",
+  "#6 Bare Copper", "Cat6", "RG6 Coax", "Fiber Optic", "Landscape Wire"
 ] as const;

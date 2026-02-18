@@ -17,6 +17,13 @@ export interface DetectedRoom {
   location: number[];
 }
 
+export interface DwellingContext {
+  dwellingType: string;
+  hasLegalSuite: boolean;
+  unitIdentifier?: string;
+  tier?: 'standard' | 'premium' | 'luxury';
+}
+
 interface CECRoomRequirement {
   room_type: string;
   min_receptacles: number;
@@ -470,6 +477,87 @@ export const CEC_ROOM_REQUIREMENTS: Record<string, CECRoomRequirement> = {
     cec_rules: ["26-712(a)", "26-722(a)"],
     notes: "Treated as finished room. 1.8m wall spacing rule.",
   },
+  ensuite: {
+    room_type: "ensuite",
+    min_receptacles: 1,
+    receptacle_type: "gfci",
+    uses_wall_spacing_rule: false,
+    wall_spacing_m: 0,
+    min_lighting_outlets: 1,
+    min_switches: 3,
+    needs_gfci: true,
+    needs_afci: true,
+    needs_exhaust_fan: true,
+    needs_smoke_detector: false,
+    needs_co_detector: false,
+    cec_rules: ["26-720(f)", "26-720(g)", "26-704(1)", "30-320"],
+    notes: "Ensuite attached to primary bedroom. 2 vanity sconces + shower potlight. 3 switches (sconce, shower, fan).",
+  },
+  half_bath: {
+    room_type: "half_bath",
+    min_receptacles: 1,
+    receptacle_type: "gfci",
+    uses_wall_spacing_rule: false,
+    wall_spacing_m: 0,
+    min_lighting_outlets: 1,
+    min_switches: 1,
+    needs_gfci: true,
+    needs_afci: true,
+    needs_exhaust_fan: true,
+    needs_smoke_detector: false,
+    needs_co_detector: false,
+    cec_rules: ["26-720(f)", "26-704(1)", "30-320"],
+    notes: "Small WC/powder room. 1 potlight + 1 sconce. Exhaust fan required.",
+  },
+  greatroom: {
+    room_type: "greatroom",
+    min_receptacles: 4,
+    receptacle_type: "duplex",
+    uses_wall_spacing_rule: true,
+    wall_spacing_m: 1.8,
+    min_lighting_outlets: 1,
+    min_switches: 2,
+    needs_gfci: false,
+    needs_afci: true,
+    needs_exhaust_fan: false,
+    needs_smoke_detector: true,
+    needs_co_detector: true,
+    cec_rules: ["26-712(a)", "26-722(a)", "26-658(1)", "32-110(1)"],
+    notes: "Large open-concept room. Potlights (6-8), LED strip, fireplace area. 3-way switches.",
+  },
+  sauna: {
+    room_type: "sauna",
+    min_receptacles: 0,
+    receptacle_type: "duplex",
+    uses_wall_spacing_rule: false,
+    wall_spacing_m: 0,
+    min_lighting_outlets: 1,
+    min_switches: 1,
+    needs_gfci: false,
+    needs_afci: false,
+    needs_exhaust_fan: false,
+    needs_smoke_detector: false,
+    needs_co_detector: false,
+    dedicated_circuits: ["Sauna heater (240V dedicated)"],
+    cec_rules: ["26-400"],
+    notes: "Sauna: 240V heater + thermostat + waterproof light. Dedicated circuit required.",
+  },
+  covered_deck: {
+    room_type: "covered_deck",
+    min_receptacles: 1,
+    receptacle_type: "gfci_weather",
+    uses_wall_spacing_rule: false,
+    wall_spacing_m: 0,
+    min_lighting_outlets: 1,
+    min_switches: 1,
+    needs_gfci: true,
+    needs_afci: false,
+    needs_exhaust_fan: false,
+    needs_smoke_detector: false,
+    needs_co_detector: false,
+    cec_rules: ["26-724(a)", "26-710(f)"],
+    notes: "Covered outdoor deck with ceiling. Gets potlights (tier-dependent), soffit outlet, GFI.",
+  },
 };
 
 /**
@@ -498,7 +586,7 @@ export function calculateReceptaclesFromArea(
   if (wallSpacingM === 4.5) {
     count = Math.min(count, 3);
   } else {
-    count = Math.min(count, 6);
+    count = Math.min(count, 8);
   }
 
   return count;
@@ -543,7 +631,7 @@ function buildNote(roomType: string, req: CECRoomRequirement, deviceType: string
 /**
  * Generate CEC-minimum device counts for a single detected room.
  */
-export function generateDevicesForRoom(room: DetectedRoom): Array<{ type: string; count: number; note: string }> {
+export function generateDevicesForRoom(room: DetectedRoom, dwellingContext?: DwellingContext): Array<{ type: string; count: number; note: string }> {
   const req = CEC_ROOM_REQUIREMENTS[room.room_type];
   if (!req) {
     return [
@@ -554,92 +642,347 @@ export function generateDevicesForRoom(room: DetectedRoom): Array<{ type: string
   }
 
   const devices: Array<{ type: string; count: number; note: string }> = [];
+  const tier = dwellingContext?.tier || "standard";
+  const isLuxury = tier === "luxury";
+  const isPremium = tier === "premium";
+  const isMultiStory = dwellingContext?.dwellingType === "fourplex" || dwellingContext?.dwellingType === "triplex";
 
-  // ── Receptacles ──
+  // ══════════════════════════════════════════════════════════════
+  // KITCHEN — verified from Bayliss, 1734, 4-Plex, Horizon
+  // ══════════════════════════════════════════════════════════════
   if (room.room_type === "kitchen") {
-    devices.push({ type: "gfci_receptacle", count: Math.max(req.min_receptacles, 3), note: "CEC 26-722(d), 26-656(d) — Counter GFCI receptacles, min 2 branch circuits" });
-    devices.push({ type: "dedicated_receptacle", count: 1, note: "CEC 26-654(a) — Refrigerator dedicated circuit" });
-    const wallRecepts = calculateReceptaclesFromArea(room.approx_area_sqft, 1.8, 2);
-    devices.push({ type: "duplex_receptacle", count: wallRecepts, note: "CEC 26-712(a) — General wall receptacles, 1.8m spacing" });
+    // Lighting: 4 potlights standard (confirmed across all 4 projects)
+    devices.push({ type: "recessed_light", count: 4, note: "CEC 30-200 — Kitchen potlights" });
+    devices.push({ type: "pendant_light", count: 2, note: "Island pendant lights" });
+    devices.push({ type: "under_cabinet_light", count: 1, note: "Under-cabinet LED strip lighting" });
+
+    // Island outlets: 1 GFI 20A + 1 regular 20A
+    devices.push({ type: "gfci_receptacle", count: 1, note: "CEC 26-722(d) — Island GFI 20A receptacle" });
+    devices.push({ type: "duplex_receptacle", count: 1, note: "Island 20A receptacle" });
+    // Counter outlets: 4 KCP 20A (no counter GFI — only island has GFI)
+    devices.push({ type: "duplex_receptacle", count: 4, note: "CEC 26-712(a) — Counter 20A receptacles (KCP)" });
+    // Dedicated circuits: range, DW, fridge
+    devices.push({ type: "range_outlet", count: 1, note: "CEC 26-744 — 240V range outlet" });
+    devices.push({ type: "dedicated_receptacle", count: 2, note: "Dedicated circuits: dishwasher, refrigerator" });
     devices.push({ type: "range_hood_fan", count: 1, note: "CEC 26-656(d) — Range hood exhaust" });
-  } else if (room.room_type === "bathroom" || room.room_type === "powder_room") {
-    devices.push({ type: "gfci_receptacle", count: req.min_receptacles, note: buildNote(room.room_type, req, "gfci_receptacle") });
+    // Switches: 4 single-pole (dining light, island pendants, kitchen pots, living/other)
+    devices.push({ type: "single_pole_switch", count: 4, note: "Switches for dining light, island pendants, kitchen potlights, living/other" });
+
+  // ══════════════════════════════════════════════════════════════
+  // LIVING ROOM / FAMILY ROOM — verified from all 4 projects
+  // ══════════════════════════════════════════════════════════════
+  } else if (room.room_type === "living_room" || room.room_type === "family_room") {
+    // Lighting: 4 potlights/gimbals regardless of tier (confirmed Horizon luxury + 4-Plex standard)
+    devices.push({ type: "recessed_light", count: 4, note: "CEC 30-200 — Living area potlights/gimbals" });
+
+    // Receptacles
+    const wallCount = calculateReceptaclesFromArea(room.approx_area_sqft, 1.8, 4);
+    devices.push({ type: "duplex_receptacle", count: wallCount, note: "CEC 26-712(a) — Wall receptacles, 1.8m spacing" });
+    devices.push({ type: "tv_outlet", count: 1, note: "TV outlet" });
+    devices.push({ type: "data_outlet", count: 1, note: "Cat6 data outlet" });
+    // Switches: 2 three-way + 2 single-pole (soffit, balcony)
+    devices.push({ type: "three_way_switch", count: 2, note: "3-way switches for main potlights" });
+    devices.push({ type: "single_pole_switch", count: 2, note: "Switches for soffit outlet, secondary lights" });
+    devices.push({ type: "switched_soffit_outlet", count: 1, note: "Switched soffit outlet for holiday lights" });
+    // Safety
+    if (req.needs_smoke_detector) {
+      devices.push({ type: "smoke_co_combo", count: 1, note: "CEC 32-110(1) — Smoke/CO alarm" });
+    }
+
+  // ══════════════════════════════════════════════════════════════
+  // PRIMARY BEDROOM — verified: 1 flush (standard), 4 pots (luxury)
+  // ══════════════════════════════════════════════════════════════
+  } else if (room.room_type === "primary_bedroom") {
+    // Lighting: luxury gets 4 potlights (Horizon 13x15 confirmed), standard gets 1 flush
+    if (isLuxury || isPremium) {
+      devices.push({ type: "recessed_light", count: 4, note: "CEC 30-200 — Primary bedroom potlights" });
+    } else {
+      devices.push({ type: "surface_mount_light", count: 1, note: "CEC 30-200 — Ceiling flush light" });
+    }
+    // Receptacles: min 4 (U2) to 6 (U1/Bayliss)
+    const outletCount = calculateReceptaclesFromArea(room.approx_area_sqft, 1.8, 4);
+    devices.push({ type: "duplex_receptacle", count: outletCount, note: "CEC 26-712(a) — Wall receptacles, 1.8m spacing" });
+    devices.push({ type: "tv_outlet", count: 1, note: "TV outlet" });
+    // Switch: 1 single-pole (confirmed 4-Plex + Horizon)
+    devices.push({ type: "single_pole_switch", count: 1, note: "Single-pole switch for light" });
+    // Safety
+    devices.push({ type: "smoke_co_combo", count: 1, note: "CEC 32-110(1) — Smoke/CO alarm in sleeping rooms" });
+
+  // ══════════════════════════════════════════════════════════════
+  // SECONDARY BEDROOM — ALWAYS 1 flush, verified all projects
+  // ══════════════════════════════════════════════════════════════
+  } else if (room.room_type === "bedroom") {
+    devices.push({ type: "surface_mount_light", count: 1, note: "CEC 30-200 — Ceiling flush light" });
+    const outletCount = calculateReceptaclesFromArea(room.approx_area_sqft, 1.8, 3);
+    devices.push({ type: "duplex_receptacle", count: outletCount, note: "CEC 26-712(a) — Wall receptacles, 1.8m spacing" });
+    devices.push({ type: "single_pole_switch", count: 1, note: "Single-pole switch for light" });
+    devices.push({ type: "smoke_co_combo", count: 1, note: "CEC 32-110(1) — Smoke/CO alarm in sleeping rooms" });
+
+  // ══════════════════════════════════════════════════════════════
+  // DINING ROOM — ALWAYS 1 flush, verified all projects
+  // ══════════════════════════════════════════════════════════════
+  } else if (room.room_type === "dining_room") {
+    devices.push({ type: "surface_mount_light", count: 1, note: "CEC 30-200 — Ceiling flush light" });
+    const outletCount = calculateReceptaclesFromArea(room.approx_area_sqft, 1.8, 1);
+    devices.push({ type: "duplex_receptacle", count: outletCount, note: "CEC 26-712(a) — Wall receptacles" });
+    devices.push({ type: "single_pole_switch", count: 1, note: "Switch for dining light (often controlled from kitchen switch bank)" });
+
+  // ══════════════════════════════════════════════════════════════
+  // ENSUITE — 2 sconces + shower pot + flush, verified all 4 projects
+  // ══════════════════════════════════════════════════════════════
+  } else if (room.room_type === "ensuite") {
+    // Lighting: 1 pot over shower + 1 flush light (all tiers — Horizon luxury confirmed)
+    devices.push({ type: "recessed_light", count: 1, note: "CEC 30-200 — Shower potlight" });
+    devices.push({ type: "surface_mount_light", count: 1, note: "CEC 30-200 — Ensuite ceiling flush light" });
+    devices.push({ type: "wall_sconce", count: 2, note: "Vanity sconce lights (always 2)" });
+    // Outlets: 1 GFI
+    devices.push({ type: "gfci_receptacle", count: 1, note: "CEC 26-720(f) — GFCI at vanity" });
+    // Floor heat in luxury ensuites
+    if (isLuxury || isPremium) {
+      devices.push({ type: "floor_heat", count: 1, note: "240V GFI — In-floor radiant heat (luxury ensuite)" });
+    }
+    // Switches: 3 single-pole (sconces, shower pot, fan)
+    devices.push({ type: "single_pole_switch", count: 3, note: "Switches for sconces, shower light, exhaust fan" });
+    devices.push({ type: "exhaust_fan", count: 1, note: "CEC 30-320 — Exhaust fan required" });
+
+  // ══════════════════════════════════════════════════════════════
+  // FULL BATHROOM — tub potlight + sconce, verified all projects
+  // ══════════════════════════════════════════════════════════════
+  } else if (room.room_type === "bathroom") {
+    devices.push({ type: "recessed_light", count: 1, note: "CEC 30-200 — Tub/shower potlight" });
+    devices.push({ type: "wall_sconce", count: 1, note: "Vanity sconce light" });
+    devices.push({ type: "gfci_receptacle", count: 1, note: "CEC 26-720(f) — GFCI at vanity" });
+    devices.push({ type: "single_pole_switch", count: 3, note: "Switches for light, sconce, exhaust fan" });
+    devices.push({ type: "exhaust_fan", count: 1, note: "CEC 30-320 — Exhaust fan required" });
+
+  // ══════════════════════════════════════════════════════════════
+  // HALF BATH / WC — potlight + sconce, verified 4-Plex
+  // ══════════════════════════════════════════════════════════════
+  } else if (room.room_type === "half_bath" || room.room_type === "powder_room") {
+    devices.push({ type: "recessed_light", count: 1, note: "CEC 30-200 — Potlight" });
+    devices.push({ type: "wall_sconce", count: 1, note: "Vanity sconce light" });
+    devices.push({ type: "gfci_receptacle", count: 1, note: "CEC 26-720(f) — GFCI at vanity" });
+    devices.push({ type: "single_pole_switch", count: 1, note: "Switch for light" });
+    devices.push({ type: "exhaust_fan", count: 1, note: "CEC 30-320 — Exhaust fan required" });
+
+  // ══════════════════════════════════════════════════════════════
+  // HALLWAY — potlights vary (2-7), outlets vary (0-2)
+  // ══════════════════════════════════════════════════════════════
+  } else if (room.room_type === "hallway") {
+    // Lighting: varies by project size — max(2, floor(sqft/50))
+    const hallPots = Math.max(2, Math.floor(room.approx_area_sqft / 50));
+    devices.push({ type: "recessed_light", count: hallPots, note: "CEC 30-200 — Hallway potlights" });
+    // Outlets: include if hallway >= 100 SF (CEC 4.5m rule)
+    if (room.approx_area_sqft >= 100) {
+      devices.push({ type: "duplex_receptacle", count: 2, note: "CEC 26-712(b) — Hallway receptacles" });
+    }
+    // Switches: always 3-way, 4-way if multi-story with 3+ access
+    if (isMultiStory) {
+      devices.push({ type: "four_way_switch", count: 1, note: "4-way switch for multi-story hallway" });
+      devices.push({ type: "three_way_switch", count: 2, note: "3-way switches for hallway potlights" });
+      devices.push({ type: "single_pole_switch", count: 1, note: "Switch for down stair light" });
+      devices.push({ type: "recessed_light", count: 1, note: "Down stair light" });
+    } else {
+      devices.push({ type: "three_way_switch", count: 2, note: "3-way switches for hallway potlights" });
+    }
+    // Safety
+    devices.push({ type: "smoke_co_combo", count: 1, note: "CEC 32-110(3) — Smoke/CO combo in hallway" });
+
+  // ══════════════════════════════════════════════════════════════
+  // GARAGE — flush lights (size-based), NO smoke alarm, NO panel (panel in mech)
+  // Verified 4-Plex + Horizon
+  // ══════════════════════════════════════════════════════════════
   } else if (room.room_type === "garage") {
-    const carSpaces = Math.max(1, Math.floor(room.approx_area_sqft / 250));
-    devices.push({ type: "duplex_receptacle", count: carSpaces + 1, note: "CEC 26-710(e), 26-724(b) — 1 per car space + 1 door opener" });
+    // Lighting: size-based — 2 for standard, 3 for large/L-shaped
+    const garageLights = Math.max(2, Math.ceil(room.approx_area_sqft / 200));
+    devices.push({ type: "surface_mount_light", count: garageLights, note: "CEC 30-200 — Garage ceiling flush lights" });
+    // Receptacles: 4 wall + 2 ceiling plugs + 1 outdoor GFI
+    devices.push({ type: "duplex_receptacle", count: 4, note: "CEC 26-710(e) — Garage wall receptacles (15A)" });
+    devices.push({ type: "duplex_receptacle", count: 2, note: "Garage ceiling plug receptacles" });
+    devices.push({ type: "gfci_receptacle", count: 1, note: "CEC 26-724(b) — Outdoor GFI receptacle" });
+    // EV charger
+    devices.push({ type: "ev_charger_outlet", count: 1, note: "240V EV charger outlet (NEMA 14-50)" });
+    // Exterior lighting: 2 outdoor sconces
+    devices.push({ type: "wall_sconce", count: 2, note: "Exterior garage sconce lights" });
+    // Switches: single-pole for lights + 1 for exterior sconces
+    devices.push({ type: "single_pole_switch", count: 1, note: "Switch for garage lights" });
+    devices.push({ type: "single_pole_switch", count: 1, note: "Switch for exterior sconces" });
+
+  // ══════════════════════════════════════════════════════════════
+  // ENTRANCE / ENTRY FOYER — 2 flush + outdoor sconce + GFI, 3 switches
+  // Verified 4-Plex + Horizon
+  // ══════════════════════════════════════════════════════════════
+  } else if (room.room_type === "entry_foyer" || room.room_type === "mudroom") {
+    devices.push({ type: "surface_mount_light", count: 2, note: "CEC 30-200 — Entrance ceiling flush lights" });
+    devices.push({ type: "wall_sconce", count: 1, note: "Outdoor entrance sconce" });
+    devices.push({ type: "duplex_receptacle", count: 2, note: "CEC 26-712(a) — Entrance receptacles" });
+    devices.push({ type: "gfci_receptacle", count: 1, note: "CEC 26-724(a) — Front outdoor GFI" });
+    // 3 switches: 2 three-way for entrance lights + 1 for outdoor sconce
+    devices.push({ type: "three_way_switch", count: 2, note: "3-way switches for entrance lights" });
+    devices.push({ type: "single_pole_switch", count: 1, note: "Switch for outdoor sconce" });
+    devices.push({ type: "smoke_co_combo", count: 1, note: "CEC 32-110(3) — Smoke/CO alarm at entry" });
+
+  // ══════════════════════════════════════════════════════════════
+  // LAUNDRY — washer + dryer + GFI, verified 4-Plex
+  // ══════════════════════════════════════════════════════════════
   } else if (room.room_type === "laundry_room") {
-    devices.push({ type: "duplex_receptacle", count: 2, note: "CEC 26-720(e), 26-654(b) — Washer (dedicated) + 1 additional" });
+    devices.push({ type: "surface_mount_light", count: 1, note: "CEC 30-200 — Laundry ceiling light" });
+    devices.push({ type: "duplex_receptacle", count: 1, note: "CEC 26-654(b) — Washer dedicated receptacle" });
     devices.push({ type: "dryer_outlet", count: 1, note: "CEC 26-744(2) — Dryer NEMA 14-30 dedicated circuit" });
+    devices.push({ type: "gfci_receptacle", count: 1, note: "CEC 26-720(e) — Additional GFI receptacle" });
+    devices.push({ type: "single_pole_switch", count: 1, note: "Switch for light" });
+
+  // ══════════════════════════════════════════════════════════════
+  // COVERED DECK — 4 pots, 2 switches, 1 15A weather (verified Horizon)
+  // ══════════════════════════════════════════════════════════════
+  } else if (room.room_type === "covered_deck") {
+    devices.push({ type: "recessed_light", count: 4, note: "CEC 30-200 — Covered deck potlights" });
+    devices.push({ type: "weather_resistant_receptacle", count: 1, note: "CEC 26-724(a) — 15A weatherproof receptacle" });
+    devices.push({ type: "switched_soffit_outlet", count: 1, note: "Switched soffit outlet for holiday lights" });
+    // 2 switches: 1 for potlights (3-way from living), 1 for soffit
+    devices.push({ type: "three_way_switch", count: 2, note: "3-way switches for deck potlights" });
+    devices.push({ type: "single_pole_switch", count: 1, note: "Switch for soffit outlet" });
+
+  // ══════════════════════════════════════════════════════════════
+  // GREATROOM — large open concept room with fireplace (verified Horizon)
+  // ══════════════════════════════════════════════════════════════
+  } else if (room.room_type === "greatroom") {
+    // Lighting: 6-8 potlights for large rooms
+    const grPots = Math.max(6, Math.floor(room.approx_area_sqft / 50));
+    devices.push({ type: "recessed_light", count: grPots, note: "CEC 30-200 — Greatroom potlights" });
+    devices.push({ type: "led_strip_light", count: 1, note: "LED strip light (fireplace/built-in area)" });
+    // Receptacles
+    const grOutlets = calculateReceptaclesFromArea(room.approx_area_sqft, 1.8, 4);
+    devices.push({ type: "duplex_receptacle", count: grOutlets, note: "CEC 26-712(a) — Wall receptacles" });
+    // Switches: 3-way for main lighting
+    devices.push({ type: "three_way_switch", count: 2, note: "3-way switches for greatroom potlights" });
+    // Safety
+    devices.push({ type: "smoke_co_combo", count: 1, note: "CEC 32-110(1) — Smoke/CO alarm" });
+
+  // ══════════════════════════════════════════════════════════════
+  // SAUNA — 240V heater + thermostat + waterproof light (verified Horizon)
+  // ══════════════════════════════════════════════════════════════
+  } else if (room.room_type === "sauna") {
+    devices.push({ type: "sauna_heater", count: 1, note: "240V dedicated sauna heater" });
+    devices.push({ type: "thermostat", count: 1, note: "LV sauna thermostat" });
+    devices.push({ type: "surface_mount_light", count: 1, note: "Waterproof sauna light fixture" });
+    devices.push({ type: "single_pole_switch", count: 1, note: "Switch for sauna light" });
+
+  // ══════════════════════════════════════════════════════════════
+  // OPEN DECK / PATIO — minimal outdoor
+  // ══════════════════════════════════════════════════════════════
   } else if (room.room_type === "deck" || room.room_type === "patio") {
-    devices.push({ type: "gfci_weather_receptacle", count: 1, note: `CEC 26-724(a) — 1 weatherproof GFCI receptacle required for ${room.room_type}` });
+    devices.push({ type: "exterior_light", count: 1, note: "CEC 30-200 — Exterior light at exit" });
+    devices.push({ type: "gfci_weather_receptacle", count: 1, note: "CEC 26-724(a) — Weatherproof GFCI" });
+    devices.push({ type: "single_pole_switch", count: 1, note: "Switch for exterior light" });
+
+  // ══════════════════════════════════════════════════════════════
+  // MECHANICAL ROOM — panel + 3 outlets (verified Horizon)
+  // ══════════════════════════════════════════════════════════════
   } else if (room.room_type === "mechanical_room") {
-    devices.push({ type: "duplex_receptacle", count: 1, note: "CEC 26-720(e)(iii) — 1 receptacle for mechanical room" });
-    devices.push({ type: "panel_board", count: 1, note: "CEC 26-400 — Panel board location, clear working space required" });
+    devices.push({ type: "surface_mount_light", count: 1, note: "CEC 30-200 — Mechanical room light" });
+    devices.push({ type: "duplex_receptacle", count: 3, note: "CEC 26-720(e)(iii) — Receptacles for mechanical room" });
+    devices.push({ type: "single_pole_switch", count: 1, note: "Switch for light" });
+    devices.push({ type: "panel_board", count: 1, note: "CEC 26-400 — 200A main panel, clear working space required" });
+
+  // ══════════════════════════════════════════════════════════════
+  // WALK-IN CLOSET — ALWAYS 1 flush, 0 outlets (verified all 4 projects)
+  // ══════════════════════════════════════════════════════════════
+  } else if (room.room_type === "closet_walkin") {
+    devices.push({ type: "surface_mount_light", count: 1, note: "CEC 30-204(1) — Ceiling flush light" });
+    devices.push({ type: "single_pole_switch", count: 1, note: "Switch for light" });
+
+  // ══════════════════════════════════════════════════════════════
+  // STANDARD CLOSET — no outlets, just light
+  // ══════════════════════════════════════════════════════════════
+  } else if (room.room_type === "closet_standard") {
+    devices.push({ type: "surface_mount_light", count: 1, note: "CEC 30-204(1) — Ceiling light" });
+    devices.push({ type: "single_pole_switch", count: 1, note: "Switch for light" });
+
+  // ══════════════════════════════════════════════════════════════
+  // PANTRY — standard: 1 flush, 0 outlets; luxury with cabinets: 2 pots + outlets
+  // ══════════════════════════════════════════════════════════════
+  } else if (room.room_type === "pantry") {
+    if (isLuxury || isPremium) {
+      // Luxury pantry with built-in cabinets (Horizon confirmed)
+      devices.push({ type: "recessed_light", count: 2, note: "CEC 30-204(1) — Pantry potlights" });
+      devices.push({ type: "duplex_receptacle", count: 2, note: "CEC 26-712(a) — Pantry 20A receptacles (built-in cabinets)" });
+      devices.push({ type: "gfci_receptacle", count: 1, note: "CEC 26-722(d) — Pantry GFI 20A receptacle" });
+    } else {
+      devices.push({ type: "surface_mount_light", count: 1, note: "CEC 30-204(1) — Pantry ceiling light" });
+    }
+    devices.push({ type: "single_pole_switch", count: 1, note: "Switch for light" });
+
+  // ══════════════════════════════════════════════════════════════
+  // OFFICE / DEN — flush light, data, smoke detector (verified Horizon)
+  // ══════════════════════════════════════════════════════════════
+  } else if (room.room_type === "office_den") {
+    devices.push({ type: "surface_mount_light", count: 1, note: "CEC 30-200 — Office ceiling light" });
+    const outletCount = calculateReceptaclesFromArea(room.approx_area_sqft, 1.8, 4);
+    devices.push({ type: "duplex_receptacle", count: outletCount, note: "CEC 26-712(a) — Wall receptacles" });
+    devices.push({ type: "data_outlet", count: 1, note: "Cat6 data outlet (LV)" });
+    devices.push({ type: "single_pole_switch", count: 1, note: "Switch for light" });
+    devices.push({ type: "smoke_co_combo", count: 1, note: "CEC 32-110(1) — Smoke/CO alarm" });
+
+  // ══════════════════════════════════════════════════════════════
+  // STAIRWAY — down stair light + 3-way
+  // ══════════════════════════════════════════════════════════════
+  } else if (room.room_type === "stairway") {
+    devices.push({ type: "recessed_light", count: 1, note: "CEC 30-200 — Down stair light" });
+    devices.push({ type: "three_way_switch", count: 2, note: "CEC 26-722(e) — 3-way switches at top and bottom" });
+
+  // ══════════════════════════════════════════════════════════════
+  // OPEN TO BELOW — no devices
+  // ══════════════════════════════════════════════════════════════
   } else if (room.room_type === "open_to_below") {
     // No devices
-  } else if (room.room_type === "stairway") {
-    // No receptacles for stairways
-  } else if (room.room_type === "closet_walkin" || room.room_type === "closet_standard") {
-    // CEC does not require receptacles in closets
-  } else if (room.room_type === "pantry") {
-    devices.push({ type: "duplex_receptacle", count: 1, note: "CEC 26-712(a) — 1 receptacle for walk-in pantry" });
-  } else if (room.room_type === "mudroom") {
-    devices.push({ type: "duplex_receptacle", count: 1, note: "CEC 26-712(a) — 1 receptacle minimum" });
-  } else if (room.room_type === "utility_room") {
-    devices.push({ type: "duplex_receptacle", count: 1, note: "CEC 26-720(e)(iii) — 1 receptacle minimum" });
-  } else if (room.room_type === "basement_unfinished") {
-    devices.push({ type: "duplex_receptacle", count: 1, note: "CEC 26-720(e)(iv) — 1 receptacle minimum" });
-  } else if (req.uses_wall_spacing_rule && req.wall_spacing_m > 0) {
-    const count = calculateReceptaclesFromArea(room.approx_area_sqft, req.wall_spacing_m, req.min_receptacles);
-    devices.push({ type: "duplex_receptacle", count, note: buildNote(room.room_type, req, "duplex_receptacle") });
-  } else if (req.min_receptacles > 0) {
-    devices.push({ type: "duplex_receptacle", count: req.min_receptacles, note: buildNote(room.room_type, req, "duplex_receptacle") });
-  }
 
-  // ── Lighting ──
-  if (req.min_lighting_outlets > 0) {
-    if (room.room_type === "closet_walkin" || room.room_type === "closet_standard" || room.room_type === "pantry") {
-      devices.push({ type: "surface_mount_light", count: 1, note: "CEC 30-204(1) — Luminaire on ceiling or above door" });
-    } else if (room.room_type === "kitchen") {
-      const potCount = Math.max(4, Math.floor(room.approx_area_sqft / 30));
-      devices.push({ type: "recessed_light", count: potCount, note: "CEC 30-200 — Kitchen lighting" });
-    } else if (room.room_type === "bathroom" || room.room_type === "powder_room") {
-      devices.push({ type: "surface_mount_light", count: 1, note: "CEC 30-200, 26-704(1) — Wall switch controlled luminaire" });
-    } else if (room.room_type === "living_room" || room.room_type === "family_room" || room.room_type === "primary_bedroom") {
-      const potCount = Math.max(4, Math.floor(room.approx_area_sqft / 40));
-      devices.push({ type: "recessed_light", count: potCount, note: "CEC 30-200 — Lighting for living area" });
-    } else if (room.room_type === "garage") {
-      devices.push({ type: "fluorescent_light", count: Math.max(1, Math.floor(room.approx_area_sqft / 200)), note: "CEC 30-200 — Garage lighting" });
-    } else if (room.room_type === "basement_unfinished") {
-      devices.push({ type: "fluorescent_light", count: Math.max(1, Math.floor(room.approx_area_sqft / 200)), note: "CEC 30-200 — Guarded luminaire if <2m" });
-    } else if (room.room_type === "deck") {
-      devices.push({ type: "exterior_light", count: 1, note: "CEC 30-200 — Exterior light at deck exit" });
-    } else if (room.room_type === "patio") {
-      devices.push({ type: "exterior_light", count: 1, note: "CEC 30-200 — Exterior light at patio" });
-    } else if (room.room_type === "mechanical_room") {
-      devices.push({ type: "surface_mount_light", count: 1, note: "CEC 30-200 — Luminaire for mechanical room" });
-    } else {
-      devices.push({ type: "surface_mount_light", count: req.min_lighting_outlets, note: buildNote(room.room_type, req, "surface_mount_light") });
+  // ══════════════════════════════════════════════════════════════
+  // BASEMENT (finished/unfinished) + UTILITY + SUNROOM — generic
+  // ══════════════════════════════════════════════════════════════
+  } else {
+    // Generic fallback for remaining room types
+    if (req.min_lighting_outlets > 0) {
+      if (room.room_type === "basement_unfinished") {
+        devices.push({ type: "fluorescent_light", count: Math.max(1, Math.floor(room.approx_area_sqft / 200)), note: "CEC 30-200 — Guarded luminaire if <2m" });
+      } else {
+        devices.push({ type: "surface_mount_light", count: req.min_lighting_outlets, note: buildNote(room.room_type, req, "surface_mount_light") });
+      }
     }
-  }
-
-  // ── Switches ──
-  if (req.min_switches > 0) {
+    if (req.uses_wall_spacing_rule && req.wall_spacing_m > 0) {
+      const count = calculateReceptaclesFromArea(room.approx_area_sqft, req.wall_spacing_m, req.min_receptacles);
+      devices.push({ type: "duplex_receptacle", count, note: buildNote(room.room_type, req, "duplex_receptacle") });
+    } else if (req.min_receptacles > 0) {
+      devices.push({ type: "duplex_receptacle", count: req.min_receptacles, note: buildNote(room.room_type, req, "duplex_receptacle") });
+    }
     if (req.min_switches >= 2) {
       devices.push({ type: "three_way_switch", count: 2, note: buildNote(room.room_type, req, "three_way_switch") });
-    } else {
+    } else if (req.min_switches > 0) {
       devices.push({ type: "single_pole_switch", count: 1, note: buildNote(room.room_type, req, "single_pole_switch") });
+    }
+    if (req.needs_exhaust_fan) {
+      devices.push({ type: "exhaust_fan", count: 1, note: buildNote(room.room_type, req, "exhaust_fan") });
+    }
+    if (req.needs_smoke_detector) {
+      devices.push({ type: "smoke_co_combo", count: 1, note: "CEC 32-110(1) — Smoke/CO alarm required" });
     }
   }
 
-  // ── Exhaust Fan ──
-  if (req.needs_exhaust_fan) {
-    devices.push({ type: "exhaust_fan", count: 1, note: buildNote(room.room_type, req, "exhaust_fan") });
-  }
+  // ── Suite / Multi-Unit Panel ──
+  if (dwellingContext) {
+    const isSuiteRoom = (
+      dwellingContext.dwellingType === "single" &&
+      dwellingContext.hasLegalSuite &&
+      (room.room_type === "basement_finished" || room.room_name.toUpperCase().includes("SUITE"))
+    );
 
-  // ── Smoke Detector ──
-  if (req.needs_smoke_detector) {
-    devices.push({ type: "smoke_co_combo", count: 1, note: "CEC 32-110(1) — Smoke/CO alarm required in sleeping rooms" });
+    if (isSuiteRoom) {
+      devices.push({
+        type: "subpanel",
+        count: 1,
+        note: "CEC 26-256 — 60A minimum sub-panel for secondary suite. Requires dedicated feeder from main panel.",
+      });
+    }
   }
 
   return devices;
@@ -652,33 +995,40 @@ export function generateDevicesForRoom(room: DetectedRoom): Array<{ type: string
  * Panel Board is NOT included here — it should be placed in the Mechanical Room
  * or Garage by the calling code.
  */
-export function generateWholeHouseDevices(rooms: DetectedRoom[]): Array<{ type: string; count: number; note: string }> {
+export function generateWholeHouseDevices(rooms: DetectedRoom[], dwellingContext?: DwellingContext): Array<{ type: string; count: number; note: string }> {
   const devices: Array<{ type: string; count: number; note: string }> = [];
 
-  devices.push({ type: "outdoor_receptacle", count: 1, note: "CEC 26-724(a) — Outdoor weatherproof GFCI receptacle" });
+  // Outdoor: rear weatherproof GFCI (front GFI handled by entry_foyer block)
+  devices.push({ type: "outdoor_receptacle", count: 1, note: "CEC 26-724(a) — Rear outdoor weatherproof GFCI receptacle" });
   devices.push({ type: "exterior_light", count: 2, note: "CEC 30-200 — Front and rear entry lights" });
   devices.push({ type: "doorbell", count: 1, note: "Standard — Low-voltage doorbell" });
   devices.push({ type: "thermostat", count: 1, note: "Standard — HVAC thermostat" });
-
-  const livingAreas = rooms.filter(r =>
-    ["living_room", "family_room", "primary_bedroom", "bedroom", "office_den", "basement_finished"].includes(r.room_type)
-  ).length;
-
-  const tvAreas = rooms.filter(r =>
-    ["living_room", "family_room", "primary_bedroom", "basement_finished"].includes(r.room_type)
-  ).length;
-
-  if (livingAreas > 0) {
-    devices.push({ type: "data_outlet", count: livingAreas, note: "Standard — Cat6 data outlet per living/bedroom area" });
-  }
-  if (tvAreas > 0) {
-    devices.push({ type: "tv_outlet", count: tvAreas, note: "Standard — Coax TV outlet in main living areas" });
-  }
 
   const hallwayCount = rooms.filter(r => r.room_type === "hallway").length;
   const hasBasement = rooms.some(r => r.room_type === "basement_finished" || r.room_type === "basement_unfinished");
   const extraSmoke = Math.max(hallwayCount, 1) + (hasBasement ? 1 : 0);
   devices.push({ type: "smoke_co_combo", count: extraSmoke, note: "CEC 32-110(3) — Smoke/CO on each storey + hallways" });
+
+  // ── Suite / Multi-Unit Extras ──
+  if (dwellingContext) {
+    if (dwellingContext.dwellingType === "single" && dwellingContext.hasLegalSuite) {
+      devices.push({ type: "smoke_co_combo", count: 2, note: "CEC 32-110 — Smoke/CO alarms for secondary suite (bedroom + hallway)" });
+      devices.push({ type: "doorbell", count: 1, note: "Standard — Suite separate entrance doorbell" });
+      devices.push({ type: "thermostat", count: 1, note: "Standard — Suite separate HVAC thermostat" });
+      devices.push({ type: "exterior_light", count: 1, note: "CEC 30-200 — Suite entrance exterior light" });
+    }
+
+    if (["duplex", "triplex", "fourplex"].includes(dwellingContext.dwellingType)) {
+      const unitCount = dwellingContext.dwellingType === "duplex" ? 2
+        : dwellingContext.dwellingType === "triplex" ? 3 : 4;
+      const extraUnits = unitCount - 1;
+      // Each unit gets its own doorbell, thermostat, entry light, and 200A panel
+      devices.push({ type: "doorbell", count: extraUnits, note: `Standard — Doorbell per additional unit (${unitCount} units total)` });
+      devices.push({ type: "thermostat", count: extraUnits, note: `Standard — Thermostat per additional unit (${unitCount} units total)` });
+      devices.push({ type: "exterior_light", count: extraUnits, note: `CEC 30-200 — Entry light per additional unit (${unitCount} units total)` });
+      devices.push({ type: "smoke_co_combo", count: extraUnits, note: `CEC 32-110 — Smoke/CO per additional unit hallway (${unitCount} units total)` });
+    }
+  }
 
   return devices;
 }

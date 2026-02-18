@@ -5,10 +5,14 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  FolderOpen, Calculator, Clock, TrendingUp,
-  Plus, ArrowRight, Zap, CheckCircle2, AlertCircle, Send, ScanLine
+  FolderOpen, Calculator, Clock, DollarSign,
+  Plus, ArrowRight, Zap, CheckCircle2, Send, ScanLine, FileText
 } from "lucide-react";
-import type { Project, Estimate } from "@shared/schema";
+import type { Project, Estimate, Invoice } from "@shared/schema";
+
+function formatCurrency(amount: number) {
+  return new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD" }).format(amount);
+}
 
 function StatCard({ title, value, icon: Icon, description, color }: {
   title: string; value: string | number; icon: any; description: string; color: string;
@@ -52,6 +56,10 @@ export default function Dashboard() {
     queryKey: ["/api/estimates"],
   });
 
+  const { data: invoices, isLoading: loadingInvoices } = useQuery<Invoice[]>({
+    queryKey: ["/api/invoices"],
+  });
+
   const totalProjects = projects?.length || 0;
   const activeProjects = projects?.filter(p => p.status === "in_progress").length || 0;
   const bidsSent = projects?.filter(p => p.status === "bid_sent").length || 0;
@@ -59,9 +67,12 @@ export default function Dashboard() {
 
   const recentProjects = projects?.slice(0, 5) || [];
 
-  const totalEstimates = estimates?.length || 0;
+  const allInvoices = invoices || [];
+  const totalInvoiced = allInvoices.reduce((sum, inv) => sum + inv.total, 0);
+  const totalPaid = allInvoices.filter(inv => inv.status === "paid").reduce((sum, inv) => sum + inv.total, 0);
+  const totalOutstanding = allInvoices.filter(inv => inv.status !== "paid").reduce((sum, inv) => sum + inv.total, 0);
 
-  if (loadingProjects || loadingEstimates) {
+  if (loadingProjects || loadingEstimates || loadingInvoices) {
     return (
       <div className="p-6 space-y-6">
         <div className="space-y-1">
@@ -71,6 +82,11 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {[1, 2, 3, 4].map((i) => (
             <Skeleton key={i} className="h-32" />
+          ))}
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {[1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-24" />
           ))}
         </div>
         <Skeleton className="h-64" />
@@ -89,7 +105,7 @@ export default function Dashboard() {
             Overview of your electrical estimating projects
           </p>
         </div>
-        <Link href="/projects">
+        <Link href="/projects?new=1">
           <Button data-testid="button-new-project">
             <Plus className="w-4 h-4 mr-2" />
             New Project
@@ -128,6 +144,53 @@ export default function Dashboard() {
         />
       </div>
 
+      {allInvoices.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Total Invoiced</CardTitle>
+              <DollarSign className="w-4 h-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <p className="text-2xl font-bold" data-testid="stat-total-invoiced">
+                {formatCurrency(totalInvoiced)}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {allInvoices.length} invoice{allInvoices.length !== 1 ? "s" : ""}
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Paid</CardTitle>
+              <CheckCircle2 className="w-4 h-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <p className="text-2xl font-bold text-chart-3" data-testid="stat-total-paid">
+                {formatCurrency(totalPaid)}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {allInvoices.filter(i => i.status === "paid").length} paid
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Outstanding</CardTitle>
+              <Clock className="w-4 h-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <p className={`text-2xl font-bold ${totalOutstanding > 0 ? "text-chart-5" : ""}`} data-testid="stat-total-outstanding">
+                {formatCurrency(totalOutstanding)}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {allInvoices.filter(i => i.status !== "paid").length} unpaid
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card className="lg:col-span-2">
           <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
@@ -149,7 +212,7 @@ export default function Dashboard() {
                 <p className="text-xs text-muted-foreground mt-1">
                   Create your first project to get started
                 </p>
-                <Link href="/projects">
+                <Link href="/projects?new=1">
                   <Button variant="outline" size="sm" className="mt-4" data-testid="button-create-first-project">
                     <Plus className="w-4 h-4 mr-1" />
                     Create Project
@@ -189,7 +252,7 @@ export default function Dashboard() {
             <CardTitle className="text-base font-semibold">Quick Actions</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            <Link href="/projects">
+            <Link href="/projects?new=1">
               <Button variant="outline" className="w-full justify-start" data-testid="button-quick-new-project">
                 <FolderOpen className="w-4 h-4 mr-2" />
                 New Project
@@ -205,6 +268,12 @@ export default function Dashboard() {
               <Button variant="outline" className="w-full justify-start" data-testid="button-quick-estimates">
                 <Calculator className="w-4 h-4 mr-2" />
                 View Estimates
+              </Button>
+            </Link>
+            <Link href="/invoices">
+              <Button variant="outline" className="w-full justify-start" data-testid="button-quick-invoices">
+                <FileText className="w-4 h-4 mr-2" />
+                View Invoices
               </Button>
             </Link>
           </CardContent>
