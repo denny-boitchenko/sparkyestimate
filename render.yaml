@@ -9,7 +9,7 @@ services:
     name: sparkyestimate
     runtime: node
     plan: free
-    buildCommand: npm install --include=dev && npm run build
+    buildCommand: npm install --include=dev && npm run db:push && npm run build
     startCommand: npm start
     envVars:
       - key: NODE_ENV
