@@ -440,8 +440,22 @@ export async function registerRoutes(
       poles: number;
       roomType: string;
       outletCount: number;
+      panelName?: string;
     };
     const circuits: CircuitData[] = [];
+
+    // Group items by panel for multi-panel support (e.g., Main Panel + Suite Sub-Panel)
+    const panelItemGroups = new Map<string, typeof items>();
+    for (const item of items) {
+      const panel = item.panelName || "Main Panel";
+      if (!panelItemGroups.has(panel)) panelItemGroups.set(panel, []);
+      panelItemGroups.get(panel)!.push(item);
+    }
+
+    // If no items have explicit panel assignments, ensure at least "Main Panel"
+    if (panelItemGroups.size === 0) {
+      panelItemGroups.set("Main Panel", items);
+    }
 
     // --- Room classification helpers (case-insensitive) -------------------
 
@@ -484,10 +498,14 @@ export async function registerRoutes(
       return d.includes("exhaust") || d.includes("vent fan") || desc.includes("exhaust");
     };
 
+    // --- Generate circuits per panel (Main Panel, Suite Sub-Panel, etc.) ---
+    for (const [currentPanel, panelFilteredItems] of Array.from(panelItemGroups.entries())) {
+    const panelStartIdx = circuits.length;
+
     // --- Group items by NORMALIZED room (case-insensitive merge) ----------
 
-    const roomItems: Record<string, typeof items> = {};
-    for (const item of items) {
+    const roomItems: Record<string, typeof panelFilteredItems> = {};
+    for (const item of panelFilteredItems) {
       // Normalize: uppercase first letter, rest as-is, default "General"
       const rawRoom = (item.room || "General").trim();
       const normRoom = rawRoom.toUpperCase();
@@ -1043,50 +1061,76 @@ export async function registerRoutes(
       });
     }
 
-    // --- Sort by priority then description --------------------------------
-    circuits.sort((a, b) => a.priority - b.priority || a.description.localeCompare(b.description));
+    // --- Sort this panel's circuits by priority then description -----------
+    const panelCircuitSlice = circuits.slice(panelStartIdx);
+    panelCircuitSlice.sort((a, b) => a.priority - b.priority || a.description.localeCompare(b.description));
 
     // =====================================================================
-    // PRIORITY 16: Spare circuits
+    // PRIORITY 16: Spare circuits (per panel)
     // Fill remaining panel spaces (minimum 2, maximum 4)
     // =====================================================================
-    const currentPanelSize = estimate.panelSize || 200;
+    const currentPanelSize = currentPanel === "Main Panel"
+      ? (estimate.panelSize || 200)
+      : 100; // Sub-panels (suite, etc.) typically 100A
     const panelSpaces = cecRules.PANEL_SPACES[currentPanelSize] || 40;
-    const spacesUsedBefore = circuits.reduce((s, c) => s + c.poles, 0);
+    const spacesUsedBefore = panelCircuitSlice.reduce((s, c) => s + c.poles, 0);
     const availableSpares = Math.max(0, panelSpaces - spacesUsedBefore);
     const spareCount = Math.min(4, Math.max(2, availableSpares));
     for (let i = 0; i < spareCount; i++) {
-      circuits.push({
+      panelCircuitSlice.push({
         priority: 16,
         description: `Spare ${i + 1}`,
         wireType: null,
         isGfci: false, isAfci: false, amps: 15, poles: 1,
         roomType: "spare", outletCount: 0,
+        panelName: currentPanel,
       });
     }
 
-    // --- Persist to DB ---------------------------------------------------
-    let circuitNumber = 1;
+    // Assign panelName to all circuits built for this panel
+    for (const c of panelCircuitSlice) {
+      c.panelName = currentPanel;
+    }
+
+    // Replace the unsorted slice with sorted + spares
+    circuits.splice(panelStartIdx, circuits.length - panelStartIdx, ...panelCircuitSlice);
+
+    } // end of panelItemGroups loop
+
+    // --- Persist to DB (per-panel circuit numbering) ----------------------
     const created: any[] = [];
-    for (const data of circuits) {
-      const circuit = await storage.createPanelCircuit({
-        estimateId: id,
-        circuitNumber,
-        amps: data.amps,
-        poles: data.poles,
-        description: data.description,
-        wireType: data.wireType,
-        isGfci: data.isGfci,
-        isAfci: data.isAfci,
-        roomType: data.roomType,
-        outletCount: data.outletCount,
-      });
-      created.push(circuit);
-      circuitNumber++;
+    const circuitsByPanel = new Map<string, CircuitData[]>();
+    for (const c of circuits) {
+      const pn = c.panelName || "Main Panel";
+      if (!circuitsByPanel.has(pn)) circuitsByPanel.set(pn, []);
+      circuitsByPanel.get(pn)!.push(c);
     }
 
-    // --- Summary ---------------------------------------------------------
+    for (const [pn, panelCircuitList] of Array.from(circuitsByPanel.entries())) {
+      let circuitNumber = 1;
+      for (const data of panelCircuitList) {
+        const circuit = await storage.createPanelCircuit({
+          estimateId: id,
+          circuitNumber,
+          panelName: data.panelName,
+          amps: data.amps,
+          poles: data.poles,
+          description: data.description,
+          wireType: data.wireType,
+          isGfci: data.isGfci,
+          isAfci: data.isAfci,
+          roomType: data.roomType,
+          outletCount: data.outletCount,
+        });
+        created.push(circuit);
+        circuitNumber++;
+      }
+    }
+
+    // --- Summary (based on main panel for overall stats) ------------------
     const totalCircuits = created.length;
+    const mainPanelSize = estimate.panelSize || 200;
+    const mainPanelSpaces = cecRules.PANEL_SPACES[mainPanelSize] || 40;
     const spacesUsed = circuits.reduce((s, c) => s + c.poles, 0);
     const gfciCount = circuits.filter(c => c.isGfci).length;
     const afciCount = circuits.filter(c => c.isAfci).length;
@@ -1123,12 +1167,12 @@ export async function registerRoutes(
       summary: {
         totalCircuits,
         spacesUsed,
-        panelSpaces,
+        panelSpaces: mainPanelSpaces,
         connectedLoad,
         demandLoad,
         demandAmps,
         recommendedPanelSize,
-        currentPanelSize,
+        currentPanelSize: mainPanelSize,
         gfciCount,
         afciCount,
         spareCount: sparesInSchedule,
@@ -2047,6 +2091,36 @@ VERIFICATION:
           }
         }
 
+        // Deduplicate rooms (same room detected on multiple pages)
+        {
+          const seenRooms = new Map<string, number>();
+          for (let i = allRooms.length - 1; i >= 0; i--) {
+            const key = (allRooms[i].name || "").toLowerCase().trim();
+            const existingIdx = seenRooms.get(key);
+            if (existingIdx !== undefined) {
+              // Merge devices: keep max count per device type
+              const existing = allRooms[existingIdx];
+              for (const device of (allRooms[i].devices || [])) {
+                const existingDevice = (existing.devices || []).find(
+                  (d: any) => d.type === device.type
+                );
+                if (existingDevice) {
+                  existingDevice.count = Math.max(existingDevice.count || 1, device.count || 1);
+                } else {
+                  existing.devices = existing.devices || [];
+                  existing.devices.push(device);
+                }
+              }
+              if (allRooms[i].area_sqft && (!existing.area_sqft || allRooms[i].area_sqft > existing.area_sqft)) {
+                existing.area_sqft = allRooms[i].area_sqft;
+              }
+              allRooms.splice(i, 1);
+            } else {
+              seenRooms.set(key, i);
+            }
+          }
+        }
+
         if (!panelBoardAdded && allRooms.length > 0) {
           const mechRoom = allRooms.find((r: any) => r.type === "mechanical_room");
           const garageRoom = allRooms.find((r: any) => r.type === "garage");
@@ -2138,6 +2212,32 @@ VERIFICATION:
           }
         }
 
+        // Deduplicate rooms (same room detected on multiple pages)
+        {
+          const seenRooms = new Map<string, number>();
+          for (let i = allRooms.length - 1; i >= 0; i--) {
+            const key = (allRooms[i].name || "").toLowerCase().trim();
+            const existingIdx = seenRooms.get(key);
+            if (existingIdx !== undefined) {
+              const existing = allRooms[existingIdx];
+              for (const device of (allRooms[i].devices || [])) {
+                const existingDevice = (existing.devices || []).find(
+                  (d: any) => d.type === device.type
+                );
+                if (existingDevice) {
+                  existingDevice.count = Math.max(existingDevice.count || 1, device.count || 1);
+                } else {
+                  existing.devices = existing.devices || [];
+                  existing.devices.push(device);
+                }
+              }
+              allRooms.splice(i, 1);
+            } else {
+              seenRooms.set(key, i);
+            }
+          }
+        }
+
         const deviceTotals: Record<string, { count: number; rooms: string[] }> = {};
         for (const room of allRooms) {
           for (const d of (room.devices || [])) {
@@ -2179,6 +2279,20 @@ VERIFICATION:
         results: finalResults,
         status: "completed",
       });
+
+      // Auto-assign suite rooms to Sub-Panel when hasLegalSuite is checked
+      // (fallback if Gemini doesn't set panelAssignment in its response)
+      if (hasLegalSuite && finalResults?.rooms) {
+        for (const room of finalResults.rooms) {
+          if (!room.panelAssignment || room.panelAssignment === "Main Panel") {
+            const name = (room.name || "").toLowerCase();
+            // Match suite rooms: "S.Bedroom", "S.Kitchen", "2 Bedroom Suite", etc.
+            if (/^s\.|^s\s|suite|s\.bedroom|s\.kitchen|s\.bath|s\.living/i.test(name)) {
+              room.panelAssignment = "Suite Sub-Panel";
+            }
+          }
+        }
+      }
 
       // Auto-create room panel assignments from analysis results
       if (finalResults?.rooms) {
@@ -2272,6 +2386,36 @@ VERIFICATION:
         stairway: 25, deck: 35, patio: 35, sunroom: 35,
       };
 
+      // Circuit-aware wire estimation: devices share circuits, not individual runs
+      const DEVICES_PER_CIRCUIT: Record<string, number> = {
+        lighting: 8,     // CEC max 12 per 15A; typical fill ~8
+        receptacle: 8,   // CEC max 12 per circuit; typical fill ~8
+        switch: 0,       // Switches share lighting circuit wire (no separate run)
+        dedicated: 1,    // Range, dryer, AC, etc. — one device = one circuit
+      };
+      const DAISY_CHAIN_FT = 4; // avg feet of wire between devices on same circuit
+
+      const classifyDeviceForWire = (symbolType: string, assemblyName?: string): string => {
+        const s = (symbolType + " " + (assemblyName || "")).toLowerCase();
+        if (/range|oven|stove|dryer|dishwasher|garburator|microwave|fridge|freezer|ac_disconnect|ev_charger|hot_tub|sauna|furnace|baseboard|floor_heat|hot_water|well_pump|sump_pump|hot_tub/i.test(s)) return "dedicated";
+        if (/switch|dimmer|occupancy_sensor|motion_sensor/i.test(s)) return "switch";
+        if (/light|fixture|pot|luminaire|sconce|pendant|flush|ceiling_fan|exhaust|range_hood|led|fan/i.test(s)) return "lighting";
+        return "receptacle";
+      };
+
+      const calculateCircuitWireFootage = (
+        deviceCount: number, roomDistance: number, category: string
+      ): number => {
+        const perCircuit = DEVICES_PER_CIRCUIT[category] || 8;
+        if (perCircuit === 0 || deviceCount === 0) return 0;
+        const circuitsNeeded = Math.ceil(deviceCount / perCircuit);
+        const avgDevicesPerCircuit = deviceCount / circuitsNeeded;
+        const daisyChain = avgDevicesPerCircuit * DAISY_CHAIN_FT;
+        const wirePerCircuit = roomDistance + daisyChain;
+        const totalWire = circuitsNeeded * wirePerCircuit;
+        return totalWire / deviceCount; // per-device share
+      };
+
       // Aggregate devices: key = "symbolType|room" → { count, assembly }
       const aggregated = new Map<string, {
         symbolType: string;
@@ -2318,13 +2462,35 @@ VERIFICATION:
               matched = assemblyBySymbol.get(symbolType);
             }
 
+            // Convert Title Case → snake_case for lookup
+            // AI generates "Surface Mount Light" → need "surface_mount_light"
+            if (!matched) {
+              const snakeType = symbolType.toLowerCase().replace(/\s+/g, "_");
+              matched = assemblyBySymbol.get(snakeType);
+            }
+
+            // Try common aliases (AI name → symbolType)
+            if (!matched) {
+              const aliasMap: Record<string, string> = {
+                "gfci_weather_receptacle": "outdoor_receptacle",
+                "gfci_receptacle": "gfci_receptacle_15a",
+                "weather_resistant_gfci": "outdoor_receptacle",
+              };
+              const snakeType = symbolType.toLowerCase().replace(/\s+/g, "_");
+              const aliasType = aliasMap[snakeType];
+              if (aliasType) matched = assemblyBySymbol.get(aliasType);
+            }
+
             // Fallback: fuzzy name match if no symbolType match
             if (!matched) {
-              const normalizedType = symbolType.toLowerCase().replace(/_/g, " ");
-              matched = assemblies.find(a =>
-                a.name.toLowerCase().includes(normalizedType) ||
-                normalizedType.includes(a.name.toLowerCase().split("(")[0].trim())
-              );
+              const normalizedType = symbolType.toLowerCase().replace(/_/g, " ").replace(/-/g, " ");
+              matched = assemblies.find(a => {
+                const aName = a.name.toLowerCase().replace(/-/g, " ");
+                const aBase = aName.split("(")[0].trim();
+                return aName.includes(normalizedType) ||
+                  normalizedType.includes(aBase) ||
+                  aBase.includes(normalizedType);
+              });
             }
 
             aggregated.set(key, {
@@ -2343,9 +2509,14 @@ VERIFICATION:
         const baseWireDistance = WIRE_DISTANCE_MAP[item.roomType] || 30;
         const assembly = item.assembly;
 
-        const estimatedWireFootage = assembly?.wireFootage
-          ? Math.max(assembly.wireFootage, baseWireDistance)
-          : baseWireDistance;
+        // Circuit-aware wire: dedicated devices get full panel run,
+        // shared devices (lighting/receptacles) split wire across circuits
+        const deviceCategory = classifyDeviceForWire(item.symbolType, assembly?.name);
+        const estimatedWireFootage = deviceCategory === "dedicated"
+          ? baseWireDistance  // 1 device = 1 circuit = full run from panel
+          : deviceCategory === "switch"
+            ? 0  // switches share lighting circuit wire
+            : calculateCircuitWireFootage(item.count, baseWireDistance, deviceCategory);
 
         await storage.createEstimateItem({
           estimateId: estimate.id,
@@ -2588,6 +2759,32 @@ VERIFICATION:
             allRooms.push({ name: detectedRoom.room_name, type: roomType, floor: detectedRoom.floor_level || "Main Floor", area_sqft: areaSqFt, page: pageResult._pageNumber, devices: deviceList });
           }
         }
+        // Deduplicate rooms (same room detected on multiple pages)
+        {
+          const seenRooms = new Map<string, number>();
+          for (let i = allRooms.length - 1; i >= 0; i--) {
+            const key = (allRooms[i].name || "").toLowerCase().trim();
+            const existingIdx = seenRooms.get(key);
+            if (existingIdx !== undefined) {
+              const existing = allRooms[existingIdx];
+              for (const device of (allRooms[i].devices || [])) {
+                const existingDevice = (existing.devices || []).find((d: any) => d.type === device.type);
+                if (existingDevice) {
+                  existingDevice.count = Math.max(existingDevice.count || 1, device.count || 1);
+                } else {
+                  existing.devices = existing.devices || [];
+                  existing.devices.push(device);
+                }
+              }
+              if (allRooms[i].area_sqft && (!existing.area_sqft || allRooms[i].area_sqft > existing.area_sqft)) {
+                existing.area_sqft = allRooms[i].area_sqft;
+              }
+              allRooms.splice(i, 1);
+            } else {
+              seenRooms.set(key, i);
+            }
+          }
+        }
         if (!panelBoardAdded && allRooms.length > 0) {
           const targetRoom = allRooms.find((r: any) => r.type === "mechanical_room") || allRooms.find((r: any) => r.type === "garage") || allRooms.find((r: any) => r.type === "utility_room") || allRooms[0];
           targetRoom.devices.push({ type: "Panel Board", count: 1, confidence: 0.95, notes: "CEC 26-400 — Main panel board (200A typical residential)" });
@@ -2626,6 +2823,29 @@ VERIFICATION:
             allRooms.push({ ...room, page: pageResult._pageNumber, floor: room.floor || pageResult.floor_level || "Main Floor" });
           }
         }
+        // Deduplicate rooms (same room detected on multiple pages)
+        {
+          const seenRooms = new Map<string, number>();
+          for (let i = allRooms.length - 1; i >= 0; i--) {
+            const key = (allRooms[i].name || "").toLowerCase().trim();
+            const existingIdx = seenRooms.get(key);
+            if (existingIdx !== undefined) {
+              const existing = allRooms[existingIdx];
+              for (const device of (allRooms[i].devices || [])) {
+                const existingDevice = (existing.devices || []).find((d: any) => d.type === device.type);
+                if (existingDevice) {
+                  existingDevice.count = Math.max(existingDevice.count || 1, device.count || 1);
+                } else {
+                  existing.devices = existing.devices || [];
+                  existing.devices.push(device);
+                }
+              }
+              allRooms.splice(i, 1);
+            } else {
+              seenRooms.set(key, i);
+            }
+          }
+        }
         const deviceTotals: Record<string, { count: number; rooms: string[] }> = {};
         for (const room of allRooms) {
           for (const d of (room.devices || [])) {
@@ -2645,6 +2865,18 @@ VERIFICATION:
         results: finalResults,
         status: "completed",
       });
+
+      // Auto-assign suite rooms to Sub-Panel when hasLegalSuite is checked
+      if (hasLegalSuite && finalResults?.rooms) {
+        for (const room of finalResults.rooms) {
+          if (!room.panelAssignment || room.panelAssignment === "Main Panel") {
+            const name = (room.name || "").toLowerCase();
+            if (/^s\.|^s\s|suite|s\.bedroom|s\.kitchen|s\.bath|s\.living/i.test(name)) {
+              room.panelAssignment = "Suite Sub-Panel";
+            }
+          }
+        }
+      }
 
       // Re-create room panel assignments
       await storage.deleteRoomPanelAssignments(id);
