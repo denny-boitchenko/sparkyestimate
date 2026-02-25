@@ -220,15 +220,77 @@ export default function AiAnalysisPage() {
   const getMatchedAssembly = useCallback((deviceType: string): { assembly: DeviceAssembly | undefined; matchType: "exact" | "fuzzy" | "none" } => {
     if (!deviceAssemblies) return { assembly: undefined, matchType: "none" };
     const symbolMap = assemblyBySymbol();
-    // Direct symbolType match
+
+    // 1. Direct symbolType match (works when AI returns snake_case)
     const exact = symbolMap.get(deviceType);
     if (exact) return { assembly: exact, matchType: "exact" };
-    // Fuzzy name match
-    const normalizedType = deviceType.toLowerCase().replace(/_/g, " ");
-    const fuzzy = deviceAssemblies.find(a =>
-      a.name.toLowerCase().includes(normalizedType) ||
-      normalizedType.includes(a.name.toLowerCase().split("(")[0].trim())
-    );
+
+    // 2. Convert Title Case → snake_case (AI stores "Surface Mount Light" → need "surface_mount_light")
+    const snakeType = deviceType.toLowerCase().replace(/\s+/g, "_");
+    const snakeMatch = symbolMap.get(snakeType);
+    if (snakeMatch) return { assembly: snakeMatch, matchType: "exact" };
+
+    // 3. Common aliases (AI name → our symbolType)
+    const aliasMap: Record<string, string> = {
+      "gfci_weather_receptacle": "outdoor_receptacle",
+      "gfci_receptacle": "gfci_receptacle_15a",
+      "weather_resistant_gfci": "outdoor_receptacle",
+      "weather_proof_receptacle": "outdoor_receptacle",
+      "weatherproof_receptacle": "outdoor_receptacle",
+      "wp_receptacle": "outdoor_receptacle",
+      "pot_light_4": "recessed_light",
+      "pot_light_6": "pot_light",
+      "ceiling_light": "surface_mount_light",
+      "flush_mount_light": "surface_mount_light",
+      "flush_light": "surface_mount_light",
+      "ceiling_fixture": "surface_mount_light",
+      "smoke_alarm": "smoke_co_combo",
+      "carbon_monoxide_detector": "co_detector",
+      "co_alarm": "co_detector",
+      "smoke_detector_co": "smoke_co_combo",
+      "combo_detector": "smoke_co_combo",
+      "combination_detector": "smoke_co_combo",
+      "cat6_outlet": "data_outlet",
+      "network_outlet": "data_outlet",
+      "coax_outlet": "tv_outlet",
+      "cable_outlet": "tv_outlet",
+      "television_outlet": "tv_outlet",
+      "ev_outlet": "ev_charger_outlet",
+      "electric_vehicle_outlet": "ev_charger_outlet",
+      "sub_panel": "subpanel",
+      "sub-panel": "subpanel",
+      "panel": "panel_board",
+      "main_panel": "panel_board",
+      "hot_tub_disconnect": "hot_tub",
+      "spa_disconnect": "hot_tub",
+      "furnace_connection": "furnace_disconnect",
+      "furnace": "furnace_disconnect",
+      "dishwasher_connection": "dedicated_receptacle",
+      "dishwasher": "dedicated_receptacle",
+      "garburator_connection": "dedicated_receptacle",
+      "garburator": "dedicated_receptacle",
+      "microwave_receptacle": "dedicated_receptacle",
+      "microwave": "dedicated_receptacle",
+      "fridge_receptacle": "dedicated_receptacle",
+      "fridge": "dedicated_receptacle",
+      "refrigerator": "dedicated_receptacle",
+      "hot_water_tank": "dedicated_receptacle",
+    };
+    const aliasType = aliasMap[snakeType];
+    if (aliasType) {
+      const aliasMatch = symbolMap.get(aliasType);
+      if (aliasMatch) return { assembly: aliasMatch, matchType: "exact" };
+    }
+
+    // 4. Fuzzy name match
+    const normalizedType = deviceType.toLowerCase().replace(/_/g, " ").replace(/-/g, " ");
+    const fuzzy = deviceAssemblies.find(a => {
+      const aName = a.name.toLowerCase().replace(/-/g, " ");
+      const aBase = aName.split("(")[0].trim();
+      return aName.includes(normalizedType) ||
+        normalizedType.includes(aBase) ||
+        aBase.includes(normalizedType);
+    });
     if (fuzzy) return { assembly: fuzzy, matchType: "fuzzy" };
     return { assembly: undefined, matchType: "none" };
   }, [deviceAssemblies, assemblyBySymbol]);
