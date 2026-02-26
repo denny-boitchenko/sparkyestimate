@@ -136,6 +136,7 @@ export default function EstimateDetail() {
   const [pendingDeviceItemId, setPendingDeviceItemId] = useState<number | null>(null);
   const [addWireRunOpen, setAddWireRunOpen] = useState(false);
   const [localSpoolOverrides, setLocalSpoolOverrides] = useState<Record<string, { s150?: number; s75?: number }>>({});
+  const [localWireOverrides, setLocalWireOverrides] = useState<Record<string, number>>({});
   const [deleteTarget, setDeleteTarget] = useState<{
     type: "item" | "material" | "circuit" | "service" | "crew";
     ids: number[];
@@ -1923,7 +1924,18 @@ export default function EstimateDetail() {
                 }
 
                 const wireEntries = Array.from(wireSummary.entries()).sort(([a], [b]) => a.localeCompare(b));
-                const wireGrandTotal = wireEntries.reduce((s, [, d]) => s + d.footage * (1 + wasteFactor) * d.costPerFt, 0);
+
+                // Wire footage overrides from estimate or local state
+                const wireFootageOverrides: Record<string, number> =
+                  (estimate?.wireFootageOverrides as any) || {};
+                const getWireFootage = (wt: string, computed: number) => {
+                  return localWireOverrides[wt] ?? wireFootageOverrides[wt] ?? computed;
+                };
+
+                const wireGrandTotal = wireEntries.reduce((s, [wt, d]) => {
+                  const footage = getWireFootage(wt, d.footage);
+                  return s + footage * (1 + wasteFactor) * d.costPerFt;
+                }, 0);
 
                 // Spool overrides from estimate or local state
                 const spoolOverrides: Record<string, { s150?: number; s75?: number }> =
@@ -1951,7 +1963,9 @@ export default function EstimateDetail() {
                         </TableHeader>
                         <TableBody>
                           {wireEntries.map(([wt, data]) => {
-                            const withWaste = data.footage * (1 + wasteFactor);
+                            const effectiveFootage = getWireFootage(wt, data.footage);
+                            const isOverridden = effectiveFootage !== data.footage;
+                            const withWaste = effectiveFootage * (1 + wasteFactor);
                             const metres = withWaste * 0.3048;
                             const calcSpools150 = Math.ceil(metres / 150);
                             const calcSpools75 = Math.ceil(metres / 75);
@@ -2003,7 +2017,24 @@ export default function EstimateDetail() {
                                       </AccordionItem>
                                     </Accordion>
                                   </TableCell>
-                                  <TableCell className="text-right text-sm">{data.footage.toFixed(0)}</TableCell>
+                                  <TableCell className="text-right">
+                                    <Input
+                                      type="number"
+                                      className={`w-20 h-7 text-right text-sm ml-auto ${isOverridden ? "font-bold text-blue-600" : ""}`}
+                                      value={effectiveFootage.toFixed(0)}
+                                      onChange={(e) => {
+                                        const v = parseInt(e.target.value) || 0;
+                                        setLocalWireOverrides(prev => ({ ...prev, [wt]: v }));
+                                      }}
+                                      onBlur={() => {
+                                        const merged = { ...wireFootageOverrides, ...localWireOverrides };
+                                        updateEstimateMutation.mutate({ wireFootageOverrides: merged } as any);
+                                      }}
+                                      min={0}
+                                      title={isOverridden ? `Computed: ${data.footage.toFixed(0)} ft (overridden)` : "Click to override"}
+                                      data-testid={`input-wire-footage-${wt}`}
+                                    />
+                                  </TableCell>
                                   <TableCell className="text-right text-sm text-muted-foreground">${data.costPerFt.toFixed(2)}</TableCell>
                                   <TableCell className="text-right text-sm">{withWaste.toFixed(0)} ft</TableCell>
                                   <TableCell className="text-right text-sm">{metres.toFixed(0)} m</TableCell>

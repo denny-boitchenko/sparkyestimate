@@ -56,6 +56,7 @@ export const estimates = pgTable("estimates", {
   panelSize: integer("panel_size").notNull().default(200),
   wasteFactor: real("waste_factor").notNull().default(15),
   spoolOverrides: jsonb("spool_overrides"),
+  wireFootageOverrides: jsonb("wire_footage_overrides"),
   permitFee: real("permit_fee"),
   permitFeeOverride: real("permit_fee_override"),
   includePermit: boolean("include_permit").notNull().default(false),

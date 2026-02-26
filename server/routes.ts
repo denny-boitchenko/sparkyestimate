@@ -519,7 +519,7 @@ export async function registerRoutes(
     const allKitchenReceps: typeof items = [];
     const allKitchenLighting: typeof items = [];
     const allKitchenSwitches: typeof items = [];
-    const kitchenDedicated: Array<{ item: typeof items[0]; label: string }> = [];
+    const kitchenDedicated: Array<{ item: typeof items[0]; label: string; room: string }> = [];
 
     // Bathroom buckets (per bathroom room, for splitting)
     const bathroomReceps: Array<{ room: string; items: typeof items }> = [];
@@ -586,7 +586,7 @@ export async function registerRoutes(
           } else if (/smoke|co/i.test(match.label)) {
             smokeItems.push({ room: normRoom, item });
           } else if (isKitchenRoom(normRoom) && /fridge|refrigerator|dishwasher|garburator|microwave/i.test(match.label)) {
-            kitchenDedicated.push({ item, label: match.label });
+            kitchenDedicated.push({ item, label: match.label, room: normRoom });
           } else {
             otherDedicated.push({ room: normRoom, item, pattern: match });
           }
@@ -688,37 +688,45 @@ export async function registerRoutes(
     // =====================================================================
     // PRIORITY 2: Kitchen dedicated appliances
     // =====================================================================
-    for (const { item, label } of kitchenDedicated.filter(d => /fridge|refrigerator/i.test(d.label))) {
+    // Deduplicate kitchen dedicated: only 1 of each appliance type per room
+    const seenKitchenDedicated = new Set<string>();
+    const dedupedKitchenDedicated = kitchenDedicated.filter(d => {
+      const key = `${d.room}|${d.label}`;
+      if (seenKitchenDedicated.has(key)) return false;
+      seenKitchenDedicated.add(key);
+      return true;
+    });
+    for (const { item, label, room } of dedupedKitchenDedicated.filter(d => /fridge|refrigerator/i.test(d.label))) {
       circuits.push({
         priority: 2,
-        description: `Kitchen - Refrigerator`,
+        description: `${room} - Refrigerator`,
         wireType: cecRules.getWireTypeForAmps(15),
         isGfci: false, isAfci: false, amps: 15, poles: 1,
         roomType: "kitchen", outletCount: 1,
       });
     }
-    for (const { item, label } of kitchenDedicated.filter(d => /dishwasher/i.test(d.label))) {
+    for (const { item, label, room } of dedupedKitchenDedicated.filter(d => /dishwasher/i.test(d.label))) {
       circuits.push({
         priority: 2,
-        description: `Kitchen - Dishwasher`,
+        description: `${room} - Dishwasher`,
         wireType: cecRules.getWireTypeForAmps(15),
         isGfci: true, isAfci: false, amps: 15, poles: 1,
         roomType: "kitchen", outletCount: 1,
       });
     }
-    for (const { item, label } of kitchenDedicated.filter(d => /garburator/i.test(d.label))) {
+    for (const { item, label, room } of dedupedKitchenDedicated.filter(d => /garburator/i.test(d.label))) {
       circuits.push({
         priority: 2,
-        description: `Kitchen - Garburator`,
+        description: `${room} - Garburator`,
         wireType: cecRules.getWireTypeForAmps(15),
         isGfci: true, isAfci: false, amps: 15, poles: 1,
         roomType: "kitchen", outletCount: 1,
       });
     }
-    for (const { item, label } of kitchenDedicated.filter(d => /microwave/i.test(d.label))) {
+    for (const { item, label, room } of dedupedKitchenDedicated.filter(d => /microwave/i.test(d.label))) {
       circuits.push({
         priority: 2,
-        description: `Kitchen - Microwave`,
+        description: `${room} - Microwave`,
         wireType: cecRules.getWireTypeForAmps(20),
         isGfci: true, isAfci: false, amps: 20, poles: 1,
         roomType: "kitchen", outletCount: 1,
@@ -816,10 +824,14 @@ export async function registerRoutes(
         roomType: "laundry", outletCount: count,
       });
     }
+    // Deduplicate: max 1 dryer circuit per room
+    const seenDryers = new Set<string>();
     for (const { room, item } of dryers) {
+      if (seenDryers.has(room)) continue;
+      seenDryers.add(room);
       circuits.push({
         priority: 4,
-        description: `Laundry - Dryer`,
+        description: `${room} - Dryer`,
         wireType: "10/3 NMD-90",
         isGfci: true, isAfci: false, amps: 30, poles: 2,
         roomType: "laundry", outletCount: 1,
@@ -827,12 +839,15 @@ export async function registerRoutes(
     }
 
     // =====================================================================
-    // PRIORITY 5: Range / Oven
+    // PRIORITY 5: Range / Oven — deduplicate: max 1 per room
     // =====================================================================
+    const seenRanges = new Set<string>();
     for (const { room, item } of rangeOvens) {
+      if (seenRanges.has(room)) continue;
+      seenRanges.add(room);
       circuits.push({
         priority: 5,
-        description: `Kitchen - Range/Oven`,
+        description: `${room} - Range/Oven`,
         wireType: "6/3 NMD-90",
         isGfci: false, isAfci: false, amps: 40, poles: 2,
         roomType: "kitchen", outletCount: 1,
@@ -869,7 +884,11 @@ export async function registerRoutes(
     // =====================================================================
     // PRIORITY 8: EV charger
     // =====================================================================
+    // Deduplicate: max 1 EV charger circuit per room
+    const seenEV = new Set<string>();
     for (const { room, item } of evChargers) {
+      if (seenEV.has(room)) continue;
+      seenEV.add(room);
       circuits.push({
         priority: 8,
         description: `${room} - EV Charger`,
@@ -937,7 +956,11 @@ export async function registerRoutes(
     // =====================================================================
     // PRIORITY 12: Furnace
     // =====================================================================
+    // Deduplicate: max 1 furnace circuit per room
+    const seenFurnaces = new Set<string>();
     for (const { room, item } of furnaces) {
+      if (seenFurnaces.has(room)) continue;
+      seenFurnaces.add(room);
       circuits.push({
         priority: 12,
         description: `${room} - Furnace`,
@@ -1347,32 +1370,133 @@ export async function registerRoutes(
     if (!id) return res.status(400).json({ message: "Invalid estimate ID" });
     try {
       const items = await storage.getEstimateItems(id);
+      const allAssemblies = await storage.getDeviceAssemblies();
+      const allParts = await storage.getPartsCatalog();
+      const circuits = await storage.getPanelCircuits(id);
+
+      // Build assembly lookup by ID
+      const assemblyById = new Map(allAssemblies.map(a => [a.id, a]));
+
+      // Build parts lookup by normalized name for fuzzy matching
+      const partsByName = new Map(allParts.map(p => [p.name.toLowerCase(), p]));
+
+      // Fuzzy match assembly text field → parts catalog entry
+      const findPart = (text: string): typeof allParts[0] | undefined => {
+        if (!text) return undefined;
+        const lower = text.toLowerCase().trim();
+        // 1. Exact match
+        const exact = partsByName.get(lower);
+        if (exact) return exact;
+        // 2. Assembly text contains part name or vice versa
+        for (const p of allParts) {
+          const pLower = p.name.toLowerCase();
+          if (lower.includes(pLower) || pLower.includes(lower)) return p;
+        }
+        // 3. Keyword match — look for key terms
+        const keywords = lower.split(/[\s,/]+/).filter(w => w.length > 2);
+        let bestMatch: typeof allParts[0] | undefined;
+        let bestScore = 0;
+        for (const p of allParts) {
+          const pLower = p.name.toLowerCase();
+          const score = keywords.filter(k => pLower.includes(k)).length;
+          if (score > bestScore && score >= 2) {
+            bestScore = score;
+            bestMatch = p;
+          }
+        }
+        return bestMatch;
+      };
+
       const partsMap = new Map<number, { part: any; totalQuantity: number; usedInItems: any[] }>();
       const unmatchedItems: any[] = [];
+
+      // Helper to add a part to the aggregation map
+      const addPartToMap = (part: typeof allParts[0], qty: number, room: string, deviceType: string, itemQty: number) => {
+        const existing = partsMap.get(part.id);
+        if (existing) {
+          existing.totalQuantity += qty;
+          existing.usedInItems.push({ room, deviceType, quantity: itemQty });
+        } else {
+          partsMap.set(part.id, {
+            part,
+            totalQuantity: qty,
+            usedInItems: [{ room, deviceType, quantity: itemQty }],
+          });
+        }
+      };
 
       for (const item of items) {
         if (!item.assemblyId) {
           unmatchedItems.push({ deviceType: item.deviceType, room: item.room, quantity: item.quantity, materialCost: item.materialCost });
           continue;
         }
-        const assemblyParts = await storage.getAssemblyParts(item.assemblyId);
-        if (assemblyParts.length === 0) {
-          unmatchedItems.push({ deviceType: item.deviceType, room: item.room, quantity: item.quantity, materialCost: item.materialCost });
-          continue;
-        }
-        for (const ap of assemblyParts) {
-          const existing = partsMap.get(ap.partId);
-          const partQty = ap.quantity * item.quantity;
-          if (existing) {
-            existing.totalQuantity += partQty;
-            existing.usedInItems.push({ room: item.room, deviceType: item.deviceType, quantity: item.quantity });
-          } else {
-            partsMap.set(ap.partId, {
-              part: ap.part,
-              totalQuantity: partQty,
-              usedInItems: [{ room: item.room, deviceType: item.deviceType, quantity: item.quantity }],
-            });
+        const linkedParts = await storage.getAssemblyParts(item.assemblyId);
+        if (linkedParts.length > 0) {
+          // Use linked assembly_parts (existing behavior)
+          for (const ap of linkedParts) {
+            addPartToMap(ap.part, ap.quantity * item.quantity, item.room || "", item.deviceType || "", item.quantity);
           }
+        } else {
+          // Fallback: generate virtual BOM from assembly metadata fields
+          const assembly = assemblyById.get(item.assemblyId);
+          if (!assembly) {
+            unmatchedItems.push({ deviceType: item.deviceType, room: item.room, quantity: item.quantity, materialCost: item.materialCost });
+            continue;
+          }
+          let matched = false;
+          // Match device field
+          if (assembly.device) {
+            const part = findPart(assembly.device);
+            if (part) { addPartToMap(part, item.quantity, item.room || "", item.deviceType || "", item.quantity); matched = true; }
+          }
+          // Match box type
+          if (assembly.boxType) {
+            const part = findPart(assembly.boxType);
+            if (part) { addPartToMap(part, item.quantity, item.room || "", item.deviceType || "", item.quantity); matched = true; }
+          }
+          // Match cover plate
+          if (assembly.coverPlate) {
+            const part = findPart(assembly.coverPlate);
+            if (part) { addPartToMap(part, item.quantity, item.room || "", item.deviceType || "", item.quantity); matched = true; }
+          }
+          // Match misc parts (comma-separated)
+          if (assembly.miscParts) {
+            for (const mp of assembly.miscParts.split(",").map(s => s.trim()).filter(Boolean)) {
+              const part = findPart(mp);
+              if (part) { addPartToMap(part, item.quantity, item.room || "", item.deviceType || "", item.quantity); matched = true; }
+            }
+          }
+          if (!matched) {
+            unmatchedItems.push({ deviceType: item.deviceType, room: item.room, quantity: item.quantity, materialCost: item.materialCost });
+          }
+        }
+      }
+
+      // Generate breaker BOM entries from panel circuits
+      const breakerCounts = new Map<string, { name: string; count: number; descriptions: string[] }>();
+      for (const c of circuits) {
+        let breakerName: string;
+        if (c.isAfci && c.isGfci) {
+          breakerName = `${c.amps}A Arc/GFCI SP Breaker`;
+        } else if (c.isAfci) {
+          breakerName = `${c.amps}A Arc Fault SP Breaker`;
+        } else if (c.poles === 2) {
+          breakerName = `${c.amps}A 2-Pole Breaker`;
+        } else {
+          breakerName = `${c.amps}A Single Pole Breaker`;
+        }
+        const existing = breakerCounts.get(breakerName);
+        if (existing) {
+          existing.count += 1;
+          existing.descriptions.push(c.description);
+        } else {
+          breakerCounts.set(breakerName, { name: breakerName, count: 1, descriptions: [c.description] });
+        }
+      }
+      for (const [breakerName, data] of Array.from(breakerCounts.entries())) {
+        const part = findPart(breakerName);
+        if (part) {
+          addPartToMap(part, data.count, "Panel", `Breakers (${data.descriptions.slice(0, 3).join(", ")}${data.descriptions.length > 3 ? "..." : ""})`, data.count);
         }
       }
 
