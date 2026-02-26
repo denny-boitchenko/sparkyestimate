@@ -1,5 +1,5 @@
 import { useLocation, Link } from "wouter";
-import { Zap, LayoutDashboard, FolderOpen, Calculator, ScanLine, Settings, Users, FileText, HardHat, Camera } from "lucide-react";
+import { Zap, LayoutDashboard, FolderOpen, Calculator, Settings, Users, FileText, HardHat, Camera } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -21,7 +21,6 @@ const navItems = [
   { title: "Customers", url: "/customers", icon: Users },
   { title: "Employees", url: "/employees", icon: HardHat },
   { title: "Photos", url: "/photos", icon: Camera },
-  { title: "AI Analysis", url: "/ai-analysis", icon: ScanLine },
   { title: "Settings", url: "/settings", icon: Settings },
 ];
 
