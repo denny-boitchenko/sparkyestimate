@@ -34,7 +34,8 @@ import {
   ArrowLeft, ArrowRight, Plus, Trash2, DollarSign, Clock, Cable,
   Package, Zap, ShieldCheck, Wrench, RefreshCw, Play,
   Download, FileText, FileSpreadsheet, ScanLine, FileOutput,
-  ChevronDown, Users, Layers, AlertTriangle
+  ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Users, Layers, AlertTriangle,
+  Pencil, Check, X
 } from "lucide-react";
 import { Combobox } from "@/components/ui/combobox";
 import AiAnalysisPanel from "@/components/ai-analysis-panel";
@@ -131,6 +132,10 @@ export default function EstimateDetail() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const [addItemOpen, setAddItemOpen] = useState(false);
+  const [collapsedRooms, setCollapsedRooms] = useState<Set<string>>(new Set());
+  const [bomOpenCategories, setBomOpenCategories] = useState<string[] | null>(null); // null = all open (default)
+  const [renamingRoom, setRenamingRoom] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
   const [addCircuitOpen, setAddCircuitOpen] = useState(false);
   const [addSubpanelOpen, setAddSubpanelOpen] = useState(false);
   const [addBomMaterialOpen, setAddBomMaterialOpen] = useState(false);
@@ -280,6 +285,18 @@ export default function EstimateDetail() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/estimates", estimateId, "items"] });
+    },
+  });
+
+  const renameRoomMutation = useMutation({
+    mutationFn: async ({ oldName, newName }: { oldName: string; newName: string }) => {
+      const roomItems = items?.filter(i => (i.room || "Unassigned") === oldName) || [];
+      await Promise.all(roomItems.map(i => apiRequest("PATCH", `/api/estimate-items/${i.id}`, { room: newName })));
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/estimates", estimateId, "items"] });
+      toast({ title: "Room renamed" });
+      setRenamingRoom(null);
     },
   });
 
@@ -1309,15 +1326,25 @@ export default function EstimateDetail() {
           <CardTitle className="text-base font-semibold">Rates & Markups</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
             <div className="space-y-1">
-              <Label className="text-xs">Labor Rate ($/hr)</Label>
+              <Label className="text-xs">Client Rate ($/hr)</Label>
               <Input
                 type="number"
                 step="0.01"
                 value={estimate.laborRate}
                 onChange={(e) => updateEstimateMutation.mutate({ laborRate: parseFloat(e.target.value) || 0 })}
                 data-testid="input-labor-rate"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Cost Rate ($/hr)</Label>
+              <Input
+                type="number"
+                step="0.01"
+                value={(estimate as any).laborCostRate ?? 45}
+                onChange={(e) => updateEstimateMutation.mutate({ laborCostRate: parseFloat(e.target.value) || 0 } as any)}
+                data-testid="input-labor-cost-rate"
               />
             </div>
             <div className="space-y-1">
@@ -1410,10 +1437,32 @@ export default function EstimateDetail() {
               <CardTitle className="text-base font-semibold">
                 Line Items ({items?.length || 0})
               </CardTitle>
+              <div className="flex gap-2">
+                {items && items.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      const roomNames = Array.from(new Set(items.map(i => i.room || "Unassigned")));
+                      if (collapsedRooms.size >= roomNames.length) {
+                        setCollapsedRooms(new Set());
+                      } else {
+                        setCollapsedRooms(new Set(roomNames));
+                      }
+                    }}
+                  >
+                    {collapsedRooms.size > 0 ? (
+                      <><ChevronsDown className="w-4 h-4 mr-1" />Expand All</>
+                    ) : (
+                      <><ChevronsUp className="w-4 h-4 mr-1" />Collapse All</>
+                    )}
+                  </Button>
+                )}
               <Button size="sm" onClick={() => setAddItemOpen(true)} data-testid="button-add-item">
                 <Plus className="w-4 h-4 mr-1" />
                 Add Item
               </Button>
+              </div>
             </CardHeader>
             <CardContent className="p-0">
               {!items || items.length === 0 ? (
@@ -1436,12 +1485,19 @@ export default function EstimateDetail() {
                 const roomNames = Object.keys(roomGroups).sort();
                 const totalDevices = items.reduce((s, i) => s + i.quantity, 0);
                 const totalDeviceTypes = new Set(items.map(i => i.deviceType)).size;
+                // Collect all unique panel names from items for the dropdown
+                const allItemPanelNames = new Set<string>();
+                items.forEach(i => allItemPanelNames.add((i as any).panelName || "Main Panel"));
+                allItemPanelNames.add("Main Panel");
+                circuits?.forEach(c => allItemPanelNames.add((c as any).panelName || "Main Panel"));
+                const panelOptions = Array.from(allItemPanelNames).sort();
                 return (
                   <>
                     <Table>
                       <TableHeader>
                         <TableRow>
                           <TableHead className="text-xs uppercase text-muted-foreground">Room / Device</TableHead>
+                          <TableHead className="w-[140px] text-xs uppercase text-muted-foreground">Panel</TableHead>
                           <TableHead className="text-right w-20 text-xs uppercase text-muted-foreground">Count</TableHead>
                           <TableHead className="w-24 text-xs uppercase text-muted-foreground">Edit</TableHead>
                           <TableHead className="w-10"></TableHead>
@@ -1451,25 +1507,109 @@ export default function EstimateDetail() {
                         {roomNames.map((roomName) => {
                           const roomItems = roomGroups[roomName];
                           const deviceCount = roomItems.reduce((s, i) => s + i.quantity, 0);
+                          const roomPanel = (roomItems[0] as any)?.panelName || "Main Panel";
+                          const isCollapsed = collapsedRooms.has(roomName);
                           return (
                             <Fragment key={roomName}>
-                              <TableRow className="bg-primary/5 border-b-0" data-testid={`row-room-${roomName}`}>
+                              <TableRow
+                                className="bg-primary/5 border-b-0 cursor-pointer select-none"
+                                data-testid={`row-room-${roomName}`}
+                                onClick={() => {
+                                  setCollapsedRooms(prev => {
+                                    const next = new Set(prev);
+                                    if (next.has(roomName)) next.delete(roomName);
+                                    else next.add(roomName);
+                                    return next;
+                                  });
+                                }}
+                              >
                                 <TableCell className="py-2.5">
-                                  <div className="flex items-center gap-3">
+                                  <div className="flex items-center gap-2">
+                                    {isCollapsed ? <ChevronRight className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
                                     <div className="w-1 h-6 rounded-sm bg-primary" />
-                                    <span className="text-sm font-bold uppercase tracking-wide">{roomName}</span>
+                                    {renamingRoom === roomName ? (
+                                      <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                                        <Input
+                                          className="h-7 w-40 text-sm font-bold uppercase"
+                                          value={renameValue}
+                                          onChange={(e) => setRenameValue(e.target.value)}
+                                          autoFocus
+                                          onKeyDown={(e) => {
+                                            if (e.key === "Enter" && renameValue.trim()) {
+                                              renameRoomMutation.mutate({ oldName: roomName, newName: renameValue.trim() });
+                                            } else if (e.key === "Escape") {
+                                              setRenamingRoom(null);
+                                            }
+                                          }}
+                                        />
+                                        <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => { if (renameValue.trim()) renameRoomMutation.mutate({ oldName: roomName, newName: renameValue.trim() }); }}>
+                                          <Check className="w-3.5 h-3.5" />
+                                        </Button>
+                                        <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setRenamingRoom(null)}>
+                                          <X className="w-3.5 h-3.5" />
+                                        </Button>
+                                      </div>
+                                    ) : (
+                                      <div className="flex items-center gap-2 group/room">
+                                        <span className="text-sm font-bold uppercase tracking-wide">{roomName}</span>
+                                        <Button
+                                          size="icon"
+                                          variant="ghost"
+                                          className="h-6 w-6 opacity-0 group-hover/room:opacity-100 transition-opacity"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setRenamingRoom(roomName);
+                                            setRenameValue(roomName);
+                                          }}
+                                        >
+                                          <Pencil className="w-3 h-3" />
+                                        </Button>
+                                      </div>
+                                    )}
                                   </div>
+                                </TableCell>
+                                <TableCell className="py-2.5">
+                                  <Badge variant="outline" className={`text-[10px] ${roomPanel === "Main Panel" ? "border-blue-300 text-blue-700 dark:border-blue-600 dark:text-blue-400" : "border-amber-300 text-amber-700 dark:border-amber-600 dark:text-amber-400"}`}>
+                                    {roomPanel}
+                                  </Badge>
                                 </TableCell>
                                 <TableCell className="text-right py-2.5">
                                   <span className="text-sm font-semibold">{deviceCount} devices</span>
                                 </TableCell>
                                 <TableCell className="py-2.5"></TableCell>
-                                <TableCell className="py-2.5"></TableCell>
+                                <TableCell className="py-2.5">
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setDeleteTarget({ type: "item", ids: roomItems.map(i => i.id), label: `all ${deviceCount} devices in ${roomName}` });
+                                    }}
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </Button>
+                                </TableCell>
                               </TableRow>
-                              {roomItems.map((item) => (
+                              {!isCollapsed && roomItems.map((item) => (
                                 <TableRow key={item.id} className="group hover:bg-muted/30" data-testid={`row-item-${item.id}`}>
                                   <TableCell className="pl-10 py-2">
                                     <span className="text-sm">{item.deviceType}</span>
+                                  </TableCell>
+                                  <TableCell className="py-2">
+                                    <Select
+                                      value={(item as any).panelName || "Main Panel"}
+                                      onValueChange={(v) => updateItemMutation.mutate({ id: item.id, panelName: v } as any)}
+                                    >
+                                      <SelectTrigger className={`h-7 text-[11px] w-[130px] ${((item as any).panelName || "Main Panel") === "Main Panel" ? "border-blue-300 text-blue-700 dark:border-blue-600 dark:text-blue-400" : "border-amber-300 text-amber-700 dark:border-amber-600 dark:text-amber-400"}`}>
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {panelOptions.map(name => (
+                                          <SelectItem key={name} value={name}>{name}</SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
                                   </TableCell>
                                   <TableCell className="text-right py-2">
                                     <span className="text-sm">{item.quantity}</span>
@@ -1690,9 +1830,22 @@ export default function EstimateDetail() {
                     }
                   };
 
+                  const effectiveOpen = bomOpenCategories === null ? sortedCategories : bomOpenCategories;
                   return (
                     <>
-                      <Accordion type="multiple" defaultValue={sortedCategories} className="w-full">
+                      <div className="flex items-center justify-between px-6 py-2 border-b bg-muted/30">
+                        <span className="text-xs text-muted-foreground">{sortedCategories.length} categories, {effectiveParts.length} parts</span>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 text-xs"
+                          onClick={() => setBomOpenCategories(prev => (prev !== null && prev.length === 0) ? null : [])}
+                        >
+                          {effectiveOpen.length === 0 ? <ChevronsDown className="w-3.5 h-3.5 mr-1" /> : <ChevronsUp className="w-3.5 h-3.5 mr-1" />}
+                          {effectiveOpen.length === 0 ? "Expand All" : "Collapse All"}
+                        </Button>
+                      </div>
+                      <Accordion type="multiple" value={effectiveOpen} onValueChange={(v) => setBomOpenCategories(v)} className="w-full">
                         {sortedCategories.map(cat => {
                           const parts = byCategory.get(cat)!.sort((a, b) => a.partName.localeCompare(b.partName));
                           const catTotal = parts.reduce((s, p) => s + p.totalCost, 0);
@@ -2440,6 +2593,14 @@ export default function EstimateDetail() {
                 const finishCost = finishHours * blendedRate;
                 const totalLabourCost = roughInCost + finishCost;
 
+                // Internal cost vs client billing
+                const internalCostRate = (estimate as any)?.laborCostRate ?? 45;
+                const clientBillingRate = estimate?.laborRate ?? 90;
+                const internalLabourCost = totalHours * internalCostRate;
+                const clientLabourCost = totalHours * clientBillingRate;
+                const labourMargin = clientLabourCost > 0 ? ((clientLabourCost - internalLabourCost) / clientLabourCost) * 100 : 0;
+                const labourProfit = clientLabourCost - internalLabourCost;
+
                 return (
                   <div className="space-y-6">
                     {/* Crew Section */}
@@ -2666,9 +2827,9 @@ export default function EstimateDetail() {
                       </Card>
                       <Card>
                         <CardContent className="pt-4">
-                          <p className="text-xs text-muted-foreground mb-1">Rate</p>
-                          <p className="text-lg font-bold">${blendedRate.toFixed(2)}/hr</p>
-                          <p className="text-xs text-muted-foreground">{crewEmployees.length > 0 ? "Blended crew" : "Default"}</p>
+                          <p className="text-xs text-muted-foreground mb-1">Client Billing Rate</p>
+                          <p className="text-lg font-bold">${clientBillingRate.toFixed(2)}/hr</p>
+                          <p className="text-xs text-muted-foreground">Client pays: ${clientLabourCost.toFixed(0)}</p>
                         </CardContent>
                       </Card>
                       <Card>
@@ -2677,6 +2838,48 @@ export default function EstimateDetail() {
                           <p className="text-lg font-bold text-chart-3" data-testid="text-labour-total-cost">${totalLabourCost.toFixed(2)}</p>
                           <p className="text-xs text-muted-foreground">
                             ${roughInCost.toFixed(0)} rough-in + ${finishCost.toFixed(0)} finish
+                          </p>
+                        </CardContent>
+                      </Card>
+                    </div>
+
+                    {/* Internal Cost & Margin */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <Card className="border-amber-200 dark:border-amber-800">
+                        <CardContent className="pt-4">
+                          <p className="text-xs text-muted-foreground mb-1">Internal Cost Rate ($/hr)</p>
+                          <Input
+                            type="number"
+                            step="1"
+                            className="h-8 text-sm font-bold w-28"
+                            defaultValue={internalCostRate}
+                            key={`cost-rate-${internalCostRate}`}
+                            onBlur={(e) => {
+                              const v = parseFloat(e.target.value) || 0;
+                              updateEstimateMutation.mutate({ laborCostRate: v } as any);
+                            }}
+                            data-testid="input-internal-cost-rate"
+                          />
+                          <p className="text-xs text-muted-foreground mt-1">What you pay your crew per hour</p>
+                        </CardContent>
+                      </Card>
+                      <Card className="border-amber-200 dark:border-amber-800">
+                        <CardContent className="pt-4">
+                          <p className="text-xs text-muted-foreground mb-1">Internal Labour Cost</p>
+                          <p className="text-lg font-bold text-amber-600">${internalLabourCost.toFixed(2)}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {totalHours.toFixed(1)} hrs × ${internalCostRate.toFixed(0)}/hr
+                          </p>
+                        </CardContent>
+                      </Card>
+                      <Card className={labourMargin > 30 ? "border-green-200 dark:border-green-800" : labourMargin > 15 ? "border-amber-200 dark:border-amber-800" : "border-red-200 dark:border-red-800"}>
+                        <CardContent className="pt-4">
+                          <p className="text-xs text-muted-foreground mb-1">Labour Margin</p>
+                          <p className={`text-lg font-bold ${labourMargin > 30 ? "text-green-600" : labourMargin > 15 ? "text-amber-600" : "text-red-600"}`}>
+                            {labourMargin.toFixed(1)}%
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            Profit: ${labourProfit.toFixed(0)} (${clientBillingRate.toFixed(0)} - ${internalCostRate.toFixed(0)} = ${(clientBillingRate - internalCostRate).toFixed(0)}/hr)
                           </p>
                         </CardContent>
                       </Card>
@@ -2762,47 +2965,63 @@ export default function EstimateDetail() {
                     }
                     const panelNamesList = Array.from(allPanelNames);
                     return Array.from(panelGroups.entries()).map(([panelName, panelCircuits]) => {
-                      const totalAmps = panelCircuits.reduce((s, c) => s + (c.amps * c.poles), 0);
+                      const connectedWatts = panelCircuits.reduce((s, c) => {
+                        const voltage = c.poles >= 2 ? 240 : 120;
+                        return s + (c.amps * voltage);
+                      }, 0);
+                      const isPanelCollapsed = collapsedRooms.has(`panel:${panelName}`);
                       return (
                         <div key={panelName} className="border rounded-lg">
-                          <div className="flex items-center gap-3 px-4 py-2 bg-muted/40 border-b">
+                          <div
+                            className="flex items-center gap-3 px-4 py-2 bg-muted/40 border-b cursor-pointer select-none"
+                            onClick={() => {
+                              setCollapsedRooms(prev => {
+                                const next = new Set(prev);
+                                const key = `panel:${panelName}`;
+                                if (next.has(key)) next.delete(key); else next.add(key);
+                                return next;
+                              });
+                            }}
+                          >
+                            {isPanelCollapsed ? <ChevronRight className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
                             <Zap className="w-4 h-4 text-primary" />
                             <span className="font-semibold text-sm">{panelName}</span>
                             <Badge variant="outline" className="text-xs">{panelCircuits.length} circuits</Badge>
-                            <span className="text-xs text-muted-foreground ml-auto">{totalAmps}A total load</span>
+                            <span className="text-xs text-muted-foreground ml-auto">{(connectedWatts / 1000).toFixed(1)} kW connected</span>
                           </div>
+                          {!isPanelCollapsed && (
                           <div className="overflow-x-auto">
                             <Table>
                               <TableHeader>
                                 <TableRow>
-                                  <TableHead className="text-right">Circuit #</TableHead>
-                                  <TableHead className="text-right">Amps</TableHead>
-                                  <TableHead className="text-right">Poles</TableHead>
+                                  <TableHead className="w-[70px] text-center">Circuit #</TableHead>
+                                  <TableHead className="w-[70px] text-center">Amps</TableHead>
+                                  <TableHead className="w-[60px] text-center">Poles</TableHead>
                                   <TableHead>Description</TableHead>
-                                  <TableHead>Wire Type</TableHead>
-                                  <TableHead className="text-right">Outlets</TableHead>
-                                  <TableHead>GFCI</TableHead>
-                                  <TableHead>AFCI</TableHead>
-                                  <TableHead></TableHead>
+                                  <TableHead className="w-[140px]">Wire Type</TableHead>
+                                  <TableHead className="w-[60px] text-center">Outlets</TableHead>
+                                  <TableHead className="w-[55px] text-center">GFCI</TableHead>
+                                  <TableHead className="w-[55px] text-center">AFCI</TableHead>
+                                  <TableHead className="w-[70px]"></TableHead>
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
                                 {panelCircuits.map((circuit) => (
                                   <TableRow key={circuit.id} data-testid={`row-circuit-${circuit.id}`}>
-                                    <TableCell className="text-right text-sm font-medium">{circuit.circuitNumber}</TableCell>
-                                    <TableCell className="text-right">
+                                    <TableCell className="text-center text-sm font-medium">{circuit.circuitNumber}</TableCell>
+                                    <TableCell className="text-center">
                                       <Input
                                         type="number"
-                                        className="w-16 text-right"
+                                        className="w-[70px] text-center"
                                         value={circuit.amps}
                                         onChange={(e) => updateCircuitMutation.mutate({ id: circuit.id, amps: parseInt(e.target.value) || 15 })}
                                         data-testid={`input-circuit-amps-${circuit.id}`}
                                       />
                                     </TableCell>
-                                    <TableCell className="text-right">
+                                    <TableCell className="text-center">
                                       <Input
                                         type="number"
-                                        className="w-14 text-right"
+                                        className="w-12 text-center"
                                         value={circuit.poles}
                                         onChange={(e) => updateCircuitMutation.mutate({ id: circuit.id, poles: parseInt(e.target.value) || 1 })}
                                         min={1}
@@ -2888,6 +3107,7 @@ export default function EstimateDetail() {
                               </TableBody>
                             </Table>
                           </div>
+                          )}
                         </div>
                       );
                     });
@@ -2898,24 +3118,104 @@ export default function EstimateDetail() {
           </Card>
 
           {circuits && circuits.length > 0 && (() => {
-            // CEC Rule 8-200 load calculation
-            const singlePoleCircuits = circuits.filter(c => c.poles === 1);
-            const doublePoleCircuits = circuits.filter(c => c.poles === 2);
-            const basicLoad = singlePoleCircuits.reduce((s, c) => s + c.amps * 120, 0);
-            const largeLoad = doublePoleCircuits.reduce((s, c) => s + c.amps * c.poles * 120, 0);
-            const totalConnectedLoad = basicLoad + largeLoad;
-            const demandLoad = Math.min(basicLoad, 5000) + Math.max(0, basicLoad - 5000) * 0.25 + largeLoad;
-            const demandAmps = Math.ceil(demandLoad / 240);
+            // CEC Rule 8-200 load calculation (Floor Area Method)
+            // Spaces: only count Main Panel circuits (sub-panel circuits use their own spaces)
+            const mainPanelCircuits = circuits.filter(c => (c as any).panelName === "Main Panel" || !(c as any).panelName);
+            const mainSingle = mainPanelCircuits.filter(c => c.poles === 1);
+            const mainDouble = mainPanelCircuits.filter(c => c.poles >= 2);
             const selectedPanelSize = estimate?.panelSize || 200;
             const panelSpaces = selectedPanelSize <= 100 ? 20 : selectedPanelSize <= 125 ? 30 : selectedPanelSize <= 200 ? 40 : 80;
-            const spacesUsed = singlePoleCircuits.length + doublePoleCircuits.length * 2;
-            const spareCircuits = circuits.filter(c => c.description.toLowerCase().includes("spare"));
+            const spacesUsed = mainSingle.length + mainDouble.reduce((s, c) => s + c.poles, 0);
+            const spareCircuits = mainPanelCircuits.filter(c => c.description.toLowerCase().includes("spare"));
             const gfciCount = circuits.filter(c => c.isGfci).length;
             const afciCount = circuits.filter(c => c.isAfci).length;
             const spacePct = Math.round((spacesUsed / panelSpaces) * 100);
             const spaceColor = spacePct >= 90 ? "bg-red-500" : spacePct >= 75 ? "bg-amber-500" : "bg-emerald-500";
+
+            // --- CEC 8-200(1)(b)(i) Floor Area Demand Calculation ---
+            const sqft = (estimate as any)?.squareFootage || 0;
+            // CEC 8-200(1)(b)(i): 5,000W for first 90 m², +1,000W per additional 90 m² (or portion)
+            const sqm = sqft * 0.0929; // ft² to m²
+            const basicLoadWatts = sqm <= 0 ? 0 : 5000 + Math.ceil(Math.max(0, sqm - 90) / 90) * 1000;
+
+            // Apply demand factor (CEC Table 14): first 5,000W @ 100%, remainder @ 25%
+            const basicFirst5000 = Math.min(basicLoadWatts, 5000);
+            const basicRemainder25 = Math.max(0, basicLoadWatts - 5000) * 0.25;
+            const basicDemand = basicFirst5000 + basicRemainder25;
+
+            // CEC 8-200: Only FIXED appliances get added to demand (not general circuits).
+            // General lighting + receptacles are already covered by the floor area × 3 VA/ft².
+            // Appliance nameplate lookup — only circuits matching these are counted.
+            const APPLIANCE_PATTERNS: { re: RegExp; watts: number; type: "range" | "heat" | "cool" | "other"; label: string }[] = [
+              // Ranges — CEC Table 62 (watts handled separately)
+              { re: /\b(range|oven|stove|cooktop)\b/i, watts: 12000, type: "range", label: "Range/Oven" },
+              // Heating
+              { re: /\bbaseboard\b/i, watts: 1500, type: "heat", label: "Baseboard Heater" },
+              { re: /\b(electric\s*heat|infloor|radiant)\b/i, watts: 1500, type: "heat", label: "Electric Heat" },
+              { re: /\bfurnace\b/i, watts: 1800, type: "heat", label: "Furnace" },
+              // Cooling
+              { re: /\b(a\/c|air\s*condition|condenser)\b/i, watts: 3600, type: "cool", label: "A/C" },
+              { re: /\bheat\s*pump\b/i, watts: 3600, type: "cool", label: "Heat Pump" },
+              // Other fixed appliances
+              { re: /\bdryer\b/i, watts: 6000, type: "other", label: "Dryer (CEC default)" },
+              { re: /\bev\s*charger\b/i, watts: 10000, type: "other", label: "EV Charger" },
+              { re: /\b(hot\s*tub|spa|jacuzzi)\b/i, watts: 9600, type: "other", label: "Hot Tub" },
+              { re: /\b(pool\s*pump)\b/i, watts: 2400, type: "other", label: "Pool Pump" },
+              { re: /\b(fridge|refrigerator)\b/i, watts: 600, type: "other", label: "Refrigerator" },
+              { re: /\bdishwasher\b/i, watts: 1800, type: "other", label: "Dishwasher" },
+              { re: /\b(garburator|disposal)\b/i, watts: 600, type: "other", label: "Garburator" },
+              { re: /\bmicrowave\b/i, watts: 1800, type: "other", label: "Microwave" },
+              { re: /\b(hwt|water\s*heater|hot\s*water\s*tank)\b/i, watts: 4500, type: "other", label: "HWT" },
+              { re: /\bhrv\b/i, watts: 300, type: "other", label: "HRV" },
+            ];
+
+            // Classify circuits — ONLY match known appliances, skip everything else
+            let rangeCount = 0;
+            let heatingLoad = 0;
+            let coolingLoad = 0;
+            let otherApplianceDemand = 0;
+            const applianceDetails: { label: string; watts: number; type: string }[] = [];
+
+            for (const c of circuits) {
+              const desc = c.description;
+              // Skip sub-panel feed circuits
+              if (/feed|sub.?panel/i.test(desc)) continue;
+              // Skip spare circuits
+              if (/spare/i.test(desc)) continue;
+
+              // Try to match a known appliance
+              const match = APPLIANCE_PATTERNS.find(p => p.re.test(desc));
+              if (!match) continue; // Not an appliance — covered by floor area basic load
+
+              const watts = match.watts;
+              if (match.type === "range") {
+                rangeCount += 1;
+                applianceDetails.push({ label: `${match.label} — ${desc}`, watts: 0, type: "range" });
+              } else if (match.type === "heat") {
+                heatingLoad += watts;
+                applianceDetails.push({ label: `${match.label} — ${desc}`, watts, type: "heat" });
+              } else if (match.type === "cool") {
+                coolingLoad += watts;
+                applianceDetails.push({ label: `${match.label} — ${desc}`, watts, type: "cool" });
+              } else {
+                otherApplianceDemand += watts;
+                applianceDetails.push({ label: `${match.label} — ${desc}`, watts, type: "other" });
+              }
+            }
+
+            // CEC Table 62 range demand
+            const rangeDemand = rangeCount <= 0 ? 0 : rangeCount === 1 ? 6000 : rangeCount === 2 ? 9000 : 9000 + (rangeCount - 2) * 2500;
+            // Heating/cooling interlock: use larger, not both
+            const heatingCoolingDemand = Math.max(heatingLoad, coolingLoad);
+            const heatingCoolingLabel = heatingLoad >= coolingLoad ? "Heating" : "Cooling";
+
+            const totalDemandWatts = Math.ceil(basicDemand + rangeDemand + heatingCoolingDemand + otherApplianceDemand);
+            const demandAmps = Math.ceil(totalDemandWatts / 240);
             const recommendedSize = demandAmps <= 80 ? 100 : demandAmps <= 100 ? 125 : demandAmps <= 160 ? 200 : 400;
             const isOverloaded = demandAmps > selectedPanelSize * 0.8;
+
+            // Connected load (informational only — sum of all breaker capacities)
+            const totalConnectedLoad = circuits.reduce((s, c) => s + c.amps * (c.poles >= 2 ? 240 : 120), 0);
 
             return (
               <>
@@ -2934,7 +3234,7 @@ export default function EstimateDetail() {
 
                 <Card className="mt-4">
                   <CardHeader>
-                    <CardTitle className="text-base font-semibold">Panel Summary — CEC Rule 8-200</CardTitle>
+                    <CardTitle className="text-base font-semibold">Panel Summary — CEC Rule 8-200 (Floor Area Method)</CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
                     {/* Spaces progress bar */}
@@ -2948,45 +3248,112 @@ export default function EstimateDetail() {
                       </div>
                     </div>
 
+                    {/* Square footage input */}
+                    <div className="flex items-center gap-3">
+                      <Label className="text-xs text-muted-foreground whitespace-nowrap">Floor Area (ft²)</Label>
+                      <Input
+                        key={`sqft-${sqft}`}
+                        type="number"
+                        className="w-28 h-8 text-sm"
+                        placeholder="e.g. 2400"
+                        defaultValue={sqft || ""}
+                        onBlur={(e) => {
+                          const val = parseInt(e.target.value) || 0;
+                          if (val !== sqft) {
+                            updateEstimateMutation.mutate({ squareFootage: val } as any);
+                          }
+                        }}
+                        onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                      />
+                      {!sqft && (
+                        <span className="text-xs text-amber-600">Enter square footage for accurate demand calculation</span>
+                      )}
+                    </div>
+
                     {/* Demand calculation breakdown */}
                     <div className="rounded-md bg-muted/50 p-3">
-                      <p className="text-xs font-medium mb-2">Demand Calculation (CEC Rule 8-200)</p>
+                      <p className="text-xs font-medium mb-2">Demand Calculation (CEC Rule 8-200 — Floor Area Method)</p>
                       <div className="space-y-1 text-xs text-muted-foreground">
+                        {/* Basic load */}
                         <div className="flex justify-between">
-                          <span>Basic load (single-pole circuits)</span>
-                          <span>{basicLoad.toLocaleString()}W</span>
+                          <span>Basic load ({sqft.toLocaleString()} ft² / {Math.round(sqm)} m² — CEC 8-200(1)(b)(i))</span>
+                          <span>{basicLoadWatts.toLocaleString()}W</span>
                         </div>
                         <div className="flex justify-between pl-3">
                           <span>First 5,000W @ 100%</span>
-                          <span>{Math.min(basicLoad, 5000).toLocaleString()}W</span>
+                          <span>{basicFirst5000.toLocaleString()}W</span>
                         </div>
-                        {basicLoad > 5000 && (
+                        {basicLoadWatts > 5000 && (
                           <div className="flex justify-between pl-3">
-                            <span>Remainder @ 25%</span>
-                            <span>{Math.round((basicLoad - 5000) * 0.25).toLocaleString()}W</span>
+                            <span>Remainder ({(basicLoadWatts - 5000).toLocaleString()}W) @ 25% (Table 14)</span>
+                            <span>{Math.round(basicRemainder25).toLocaleString()}W</span>
                           </div>
                         )}
-                        <div className="flex justify-between">
-                          <span>Large appliances (double-pole)</span>
-                          <span>{largeLoad.toLocaleString()}W</span>
+                        <div className="flex justify-between pl-3 font-medium text-foreground">
+                          <span>Basic demand subtotal</span>
+                          <span>{Math.round(basicDemand).toLocaleString()}W</span>
                         </div>
+
+                        {/* Range (CEC Table 62) */}
+                        {rangeCount > 0 && (
+                          <div className="flex justify-between mt-1">
+                            <span>Range/Oven ({rangeCount}) — CEC Table 62</span>
+                            <span>{rangeDemand.toLocaleString()}W</span>
+                          </div>
+                        )}
+
+                        {/* Heating/Cooling interlock */}
+                        {(heatingLoad > 0 || coolingLoad > 0) && (
+                          <>
+                            <div className="flex justify-between mt-1">
+                              <span>Heating load (nameplate)</span>
+                              <span>{heatingLoad.toLocaleString()}W</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Cooling load (nameplate)</span>
+                              <span>{coolingLoad.toLocaleString()}W</span>
+                            </div>
+                            <div className="flex justify-between pl-3 text-foreground">
+                              <span>Interlock: use {heatingCoolingLabel} (larger)</span>
+                              <span>{heatingCoolingDemand.toLocaleString()}W</span>
+                            </div>
+                          </>
+                        )}
+
+                        {/* Other appliances — itemized */}
+                        {applianceDetails.filter(a => a.type === "other").length > 0 && (
+                          <>
+                            <div className="flex justify-between mt-1 font-medium text-foreground">
+                              <span>Other appliances @ 100% nameplate</span>
+                              <span>{otherApplianceDemand.toLocaleString()}W</span>
+                            </div>
+                            {applianceDetails.filter(a => a.type === "other").map((a, i) => (
+                              <div key={i} className="flex justify-between pl-3">
+                                <span>{a.label}</span>
+                                <span>{a.watts.toLocaleString()}W</span>
+                              </div>
+                            ))}
+                          </>
+                        )}
+
+                        {/* Total */}
                         <div className="flex justify-between border-t pt-1 mt-1 font-medium text-foreground">
-                          <span>Demand Load</span>
-                          <span>{Math.round(demandLoad).toLocaleString()}W ({demandAmps}A @ 240V)</span>
+                          <span>Total Demand</span>
+                          <span>{totalDemandWatts.toLocaleString()}W ({demandAmps}A @ 240V)</span>
                         </div>
                       </div>
                     </div>
 
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                       <div>
-                        <p className="text-xs text-muted-foreground">Total Circuits</p>
-                        <p className="text-lg font-bold" data-testid="text-total-circuits">{circuits.length}</p>
-                        <p className="text-xs text-muted-foreground">{singlePoleCircuits.length} single + {doublePoleCircuits.length} double pole</p>
+                        <p className="text-xs text-muted-foreground">Main Panel Circuits</p>
+                        <p className="text-lg font-bold" data-testid="text-total-circuits">{mainPanelCircuits.length}</p>
+                        <p className="text-xs text-muted-foreground">{mainSingle.length} single + {mainDouble.length} double pole</p>
                       </div>
                       <div>
                         <p className="text-xs text-muted-foreground">Connected Load</p>
                         <p className="text-lg font-bold">{totalConnectedLoad.toLocaleString()}W</p>
-                        <p className="text-xs text-muted-foreground">Demand: {Math.round(demandLoad).toLocaleString()}W</p>
+                        <p className="text-xs text-muted-foreground">Demand: {totalDemandWatts.toLocaleString()}W</p>
                       </div>
                       <div>
                         <p className="text-xs text-muted-foreground">Panel Size</p>
@@ -3346,6 +3713,17 @@ export default function EstimateDetail() {
         assemblies={assemblies || []}
         onAdd={(data) => addItemMutation.mutate(data)}
         isPending={addItemMutation.isPending}
+        existingRooms={Array.from(new Set((items || []).map(i => i.room || "Unassigned").filter(r => r !== "Unassigned"))).sort()}
+        panelNames={(() => {
+          const names = new Set<string>(["Main Panel"]);
+          items?.forEach(i => names.add((i as any).panelName || "Main Panel"));
+          circuits?.forEach(c => names.add((c as any).panelName || "Main Panel"));
+          return Array.from(names).sort();
+        })()}
+        onCreateNewAssembly={() => {
+          setAddItemOpen(false);
+          setCreateDeviceOpen(true);
+        }}
       />
 
       <AddCircuitDialog
@@ -3397,6 +3775,7 @@ export default function EstimateDetail() {
         onOpenChange={setCreateDeviceOpen}
         onCreate={(data) => createAssemblyMutation.mutate(data)}
         isPending={createAssemblyMutation.isPending}
+        existingCategories={Array.from(new Set((assemblies || []).map(a => a.category)))}
       />
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
@@ -3441,48 +3820,42 @@ export default function EstimateDetail() {
   );
 }
 
-function AddItemDialog({ open, onOpenChange, assemblies, onAdd, isPending }: {
+function AddItemDialog({ open, onOpenChange, assemblies, onAdd, isPending, existingRooms, panelNames, onCreateNewAssembly }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   assemblies: DeviceAssembly[];
   onAdd: (data: any) => void;
   isPending: boolean;
+  existingRooms: string[];
+  panelNames: string[];
+  onCreateNewAssembly: () => void;
 }) {
-  const [mode, setMode] = useState<"assembly" | "custom">("assembly");
   const [selectedAssembly, setSelectedAssembly] = useState("");
-  const [customForm, setCustomForm] = useState({
-    deviceType: "",
-    description: "",
-    room: "",
-    quantity: 1,
-    materialCost: 0,
-    laborHours: 0,
-    wireType: "14/2 NMD-90",
-    wireFootage: 15,
-    markupPct: 0,
-  });
+  const [roomMode, setRoomMode] = useState<"existing" | "new">("existing");
+  const [room, setRoom] = useState("");
+  const [quantity, setQuantity] = useState(1);
+  const [panelName, setPanelName] = useState("Main Panel");
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (mode === "assembly" && selectedAssembly) {
-      const assembly = assemblies.find(a => a.id.toString() === selectedAssembly);
-      if (assembly) {
-        onAdd({
-          deviceType: assembly.name,
-          description: assembly.device,
-          room: customForm.room,
-          quantity: customForm.quantity,
-          materialCost: assembly.materialCost,
-          laborHours: assembly.laborHours,
-          wireType: assembly.wireType,
-          wireFootage: assembly.wireFootage,
-          markupPct: 0,
-          boxType: assembly.boxType,
-          coverPlate: assembly.coverPlate,
-        });
-      }
-    } else {
-      onAdd(customForm);
+    if (!selectedAssembly) return;
+    const assembly = assemblies.find(a => a.id.toString() === selectedAssembly);
+    if (assembly) {
+      onAdd({
+        deviceType: assembly.name,
+        description: assembly.device,
+        room,
+        quantity,
+        materialCost: assembly.materialCost,
+        laborHours: assembly.laborHours,
+        wireType: assembly.wireType,
+        wireFootage: assembly.wireFootage,
+        markupPct: 0,
+        boxType: assembly.boxType,
+        coverPlate: assembly.coverPlate,
+        panelName,
+        assemblyId: assembly.id,
+      });
     }
   };
 
@@ -3494,136 +3867,97 @@ function AddItemDialog({ open, onOpenChange, assemblies, onAdd, isPending }: {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Add Line Item</DialogTitle>
         </DialogHeader>
-        <div className="flex gap-2 mb-4">
-          <Button
-            variant={mode === "assembly" ? "default" : "outline"}
-            size="sm"
-            onClick={() => setMode("assembly")}
-            className={mode === "assembly" ? "toggle-elevate toggle-elevated" : ""}
-            data-testid="button-mode-assembly"
-          >
-            From Library
-          </Button>
-          <Button
-            variant={mode === "custom" ? "default" : "outline"}
-            size="sm"
-            onClick={() => setMode("custom")}
-            className={mode === "custom" ? "toggle-elevate toggle-elevated" : ""}
-            data-testid="button-mode-custom"
-          >
-            Custom
-          </Button>
-        </div>
         <form onSubmit={handleSubmit} className="space-y-4">
-          {mode === "assembly" ? (
-            <>
-              <div className="space-y-2">
-                <Label>Device Assembly</Label>
-                <Select value={selectedAssembly} onValueChange={setSelectedAssembly}>
-                  <SelectTrigger data-testid="select-assembly">
-                    <SelectValue placeholder="Select a device..." />
+          <div className="space-y-2">
+            <Label>Device Assembly</Label>
+            <Select value={selectedAssembly} onValueChange={(v) => {
+              if (v === "__create__") {
+                onCreateNewAssembly();
+              } else {
+                setSelectedAssembly(v);
+              }
+            }}>
+              <SelectTrigger data-testid="select-assembly">
+                <SelectValue placeholder="Select a device..." />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__create__" className="font-medium text-primary">+ Create New Assembly</SelectItem>
+                {Object.entries(groupedAssemblies).map(([category, items]) => (
+                  items.map(item => (
+                    <SelectItem key={item.id} value={item.id.toString()}>
+                      {item.name} - ${item.materialCost.toFixed(2)}
+                    </SelectItem>
+                  ))
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <Label>Room</Label>
+              {existingRooms.length > 0 && roomMode === "existing" ? (
+                <Select value={room} onValueChange={(v) => {
+                  if (v === "__new__") { setRoomMode("new"); setRoom(""); }
+                  else setRoom(v);
+                }}>
+                  <SelectTrigger data-testid="select-room">
+                    <SelectValue placeholder="Select room..." />
                   </SelectTrigger>
                   <SelectContent>
-                    {Object.entries(groupedAssemblies).map(([category, items]) => (
-                      items.map(item => (
-                        <SelectItem key={item.id} value={item.id.toString()}>
-                          {item.name} - ${item.materialCost.toFixed(2)}
-                        </SelectItem>
-                      ))
+                    <SelectItem value="__new__">+ Add New Room</SelectItem>
+                    {existingRooms.map(r => (
+                      <SelectItem key={r} value={r}>{r}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-2">
-                  <Label>Room</Label>
+              ) : (
+                <div className="flex gap-2">
                   <Input
                     placeholder="e.g., Kitchen"
-                    value={customForm.room}
-                    onChange={(e) => setCustomForm(p => ({ ...p, room: e.target.value }))}
+                    value={room}
+                    onChange={(e) => setRoom(e.target.value)}
+                    autoFocus={roomMode === "new"}
                     data-testid="input-item-room"
                   />
+                  {existingRooms.length > 0 && (
+                    <Button type="button" size="icon" variant="outline" className="shrink-0" onClick={() => setRoomMode("existing")}>
+                      <ChevronDown className="w-4 h-4" />
+                    </Button>
+                  )}
                 </div>
-                <div className="space-y-2">
-                  <Label>Quantity</Label>
-                  <Input
-                    type="number"
-                    min={1}
-                    value={customForm.quantity}
-                    onChange={(e) => setCustomForm(p => ({ ...p, quantity: parseInt(e.target.value) || 1 }))}
-                    data-testid="input-item-quantity"
-                  />
-                </div>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-2">
-                  <Label>Device Type</Label>
-                  <Input
-                    placeholder="e.g., Duplex Receptacle"
-                    value={customForm.deviceType}
-                    onChange={(e) => setCustomForm(p => ({ ...p, deviceType: e.target.value }))}
-                    required
-                    data-testid="input-custom-device"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Room</Label>
-                  <Input
-                    placeholder="e.g., Kitchen"
-                    value={customForm.room}
-                    onChange={(e) => setCustomForm(p => ({ ...p, room: e.target.value }))}
-                  />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label>Description</Label>
-                <Input
-                  placeholder="15A duplex receptacle, TR"
-                  value={customForm.description}
-                  onChange={(e) => setCustomForm(p => ({ ...p, description: e.target.value }))}
-                  required
-                />
-              </div>
-              <div className="grid grid-cols-3 gap-3">
-                <div className="space-y-2">
-                  <Label>Qty</Label>
-                  <Input type="number" min={1} value={customForm.quantity} onChange={(e) => setCustomForm(p => ({ ...p, quantity: parseInt(e.target.value) || 1 }))} />
-                </div>
-                <div className="space-y-2">
-                  <Label>Material $</Label>
-                  <Input type="number" step="0.01" value={customForm.materialCost} onChange={(e) => setCustomForm(p => ({ ...p, materialCost: parseFloat(e.target.value) || 0 }))} />
-                </div>
-                <div className="space-y-2">
-                  <Label>Labor (hrs)</Label>
-                  <Input type="number" step="0.01" value={customForm.laborHours} onChange={(e) => setCustomForm(p => ({ ...p, laborHours: parseFloat(e.target.value) || 0 }))} />
-                </div>
-              </div>
-              <div className="grid grid-cols-3 gap-3">
-                <div className="space-y-2">
-                  <Label>Wire Type</Label>
-                  <Input value={customForm.wireType} onChange={(e) => setCustomForm(p => ({ ...p, wireType: e.target.value }))} />
-                </div>
-                <div className="space-y-2">
-                  <Label>Wire (ft)</Label>
-                  <Input type="number" value={customForm.wireFootage} onChange={(e) => setCustomForm(p => ({ ...p, wireFootage: parseFloat(e.target.value) || 0 }))} />
-                </div>
-                <div className="space-y-2">
-                  <Label>Markup %</Label>
-                  <Input type="number" step="0.1" value={customForm.markupPct} onChange={(e) => setCustomForm(p => ({ ...p, markupPct: parseFloat(e.target.value) || 0 }))} />
-                </div>
-              </div>
-            </>
-          )}
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label>Quantity</Label>
+              <Input
+                type="number"
+                min={1}
+                value={quantity}
+                onChange={(e) => setQuantity(parseInt(e.target.value) || 1)}
+                data-testid="input-item-quantity"
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label>Panel</Label>
+            <Select value={panelName} onValueChange={setPanelName}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {panelNames.map(name => (
+                  <SelectItem key={name} value={name}>{name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" disabled={isPending} data-testid="button-submit-item">
+            <Button type="submit" disabled={isPending || !selectedAssembly} data-testid="button-submit-item">
               {isPending ? "Adding..." : "Add Item"}
             </Button>
           </div>
@@ -4003,24 +4337,35 @@ function AddServiceDialog({ open, onOpenChange, bundles, onAdd, isPending }: {
   );
 }
 
-function CreateDeviceDialog({ open, onOpenChange, onCreate, isPending }: {
+function CreateDeviceDialog({ open, onOpenChange, onCreate, isPending, existingCategories }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   onCreate: (data: any) => void;
   isPending: boolean;
+  existingCategories?: string[];
 }) {
   const [form, setForm] = useState({
     name: "",
     category: "receptacles",
     materialCost: 0,
   });
+  const [categoryMode, setCategoryMode] = useState<"existing" | "new">("existing");
+  const [newCategory, setNewCategory] = useState("");
+
+  // Merge built-in categories with any custom ones from existing assemblies
+  const allCategories = Array.from(new Set([
+    ...DEVICE_CATEGORIES,
+    ...(existingCategories || []),
+  ])).sort();
+
+  const activeCategory = categoryMode === "new" ? newCategory.toLowerCase().replace(/\s+/g, "_") : form.category;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onCreate({
       name: form.name,
       device: form.name,
-      category: form.category,
+      category: activeCategory,
       materialCost: form.materialCost,
       laborHours: 0.25,
       wireType: "14/2 NMD-90",
@@ -4050,18 +4395,40 @@ function CreateDeviceDialog({ open, onOpenChange, onCreate, isPending }: {
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
               <Label>Category</Label>
-              <Select value={form.category} onValueChange={(v) => setForm(p => ({ ...p, category: v }))}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {DEVICE_CATEGORIES.map(cat => (
-                    <SelectItem key={cat} value={cat}>
-                      {cat.charAt(0).toUpperCase() + cat.slice(1).replace(/_/g, " ")}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {categoryMode === "existing" ? (
+                <Select value={form.category} onValueChange={(v) => {
+                  if (v === "__new__") {
+                    setCategoryMode("new");
+                    setNewCategory("");
+                  } else {
+                    setForm(p => ({ ...p, category: v }));
+                  }
+                }}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__new__" className="font-medium text-primary">+ New Category</SelectItem>
+                    {allCategories.map(cat => (
+                      <SelectItem key={cat} value={cat}>
+                        {cat.charAt(0).toUpperCase() + cat.slice(1).replace(/_/g, " ")}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <div className="flex gap-1">
+                  <Input
+                    placeholder="e.g., Solar"
+                    value={newCategory}
+                    onChange={(e) => setNewCategory(e.target.value)}
+                    autoFocus
+                  />
+                  <Button type="button" size="icon" variant="outline" className="shrink-0" onClick={() => setCategoryMode("existing")}>
+                    <X className="w-4 h-4" />
+                  </Button>
+                </div>
+              )}
             </div>
             <div className="space-y-2">
               <Label>Material Cost ($)</Label>
@@ -4074,11 +4441,11 @@ function CreateDeviceDialog({ open, onOpenChange, onCreate, isPending }: {
             </div>
           </div>
           <p className="text-xs text-muted-foreground">
-            Wire type, labor hours, and box details can be edited after adding.
+            Wire type, labor hours, and box details can be edited in Settings after adding.
           </p>
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" disabled={isPending || !form.name.trim()}>
+            <Button type="submit" disabled={isPending || !form.name.trim() || (categoryMode === "new" && !newCategory.trim())}>
               {isPending ? "Creating..." : "Add to Catalog"}
             </Button>
           </div>
