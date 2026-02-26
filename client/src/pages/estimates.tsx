@@ -20,7 +20,9 @@ import {
 import { Calculator, ArrowRight, FileText, Trash2, Search, ArrowUpDown, Plus, FolderOpen } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Estimate, Project } from "@shared/schema";
+import { Textarea } from "@/components/ui/textarea";
+import type { Estimate, Project, Customer } from "@shared/schema";
+import { DWELLING_TYPES } from "@shared/schema";
 
 export default function Estimates() {
   const [, navigate] = useLocation();
@@ -33,6 +35,12 @@ export default function Estimates() {
   const [showNewProject, setShowNewProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectAddress, setNewProjectAddress] = useState("");
+  const [newProjectClientName, setNewProjectClientName] = useState("");
+  const [newProjectEmail, setNewProjectEmail] = useState("");
+  const [newProjectPhone, setNewProjectPhone] = useState("");
+  const [newProjectDwelling, setNewProjectDwelling] = useState("single");
+  const [newProjectNotes, setNewProjectNotes] = useState("");
+  const [newProjectCustomerId, setNewProjectCustomerId] = useState("");
 
   const { data: estimates, isLoading } = useQuery<Estimate[]>({
     queryKey: ["/api/estimates"],
@@ -40,6 +48,10 @@ export default function Estimates() {
 
   const { data: projects } = useQuery<Project[]>({
     queryKey: ["/api/projects"],
+  });
+
+  const { data: customers } = useQuery<Customer[]>({
+    queryKey: ["/api/customers"],
   });
 
   const deleteEstimateMutation = useMutation({
@@ -56,13 +68,28 @@ export default function Estimates() {
     },
   });
 
+  const resetNewProjectForm = () => {
+    setNewProjectName("");
+    setNewProjectAddress("");
+    setNewProjectClientName("");
+    setNewProjectEmail("");
+    setNewProjectPhone("");
+    setNewProjectDwelling("single");
+    setNewProjectNotes("");
+    setNewProjectCustomerId("");
+  };
+
   const createProjectMutation = useMutation({
-    mutationFn: async ({ name, address }: { name: string; address?: string }) => {
+    mutationFn: async () => {
       const res = await apiRequest("POST", "/api/projects", {
-        name,
-        clientName: name,
-        address: address || null,
-        dwellingType: "single",
+        name: newProjectName.trim(),
+        clientName: newProjectClientName.trim() || newProjectName.trim(),
+        customerId: newProjectCustomerId ? parseInt(newProjectCustomerId) : null,
+        clientEmail: newProjectEmail.trim() || null,
+        clientPhone: newProjectPhone.trim() || null,
+        address: newProjectAddress.trim() || null,
+        dwellingType: newProjectDwelling,
+        notes: newProjectNotes.trim() || null,
       });
       return res.json();
     },
@@ -70,8 +97,7 @@ export default function Estimates() {
       queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
       setNewProjectId(project.id.toString());
       setShowNewProject(false);
-      setNewProjectName("");
-      setNewProjectAddress("");
+      resetNewProjectForm();
       toast({ title: "Project created" });
     },
     onError: (err: Error) => {
@@ -303,33 +329,103 @@ export default function Estimates() {
                   </Select>
                 </div>
               ) : (
-                <div className="space-y-2 p-3 rounded-md border bg-muted/30">
+                <div className="space-y-3 p-3 rounded-md border bg-muted/30">
                   <div className="flex items-center justify-between">
                     <p className="text-xs font-medium">New Project</p>
-                    <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setShowNewProject(false)}>
+                    <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => { setShowNewProject(false); resetNewProjectForm(); }}>
                       Cancel
                     </Button>
                   </div>
-                  <Input
-                    placeholder="Project name"
-                    value={newProjectName}
-                    onChange={(e) => setNewProjectName(e.target.value)}
-                    data-testid="input-new-project-name"
-                  />
-                  <Input
-                    placeholder="Address (optional)"
-                    value={newProjectAddress}
-                    onChange={(e) => setNewProjectAddress(e.target.value)}
-                    data-testid="input-new-project-address"
-                  />
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Project Name *</Label>
+                    <Input
+                      placeholder="e.g. Wolf Street Residence"
+                      value={newProjectName}
+                      onChange={(e) => setNewProjectName(e.target.value)}
+                      data-testid="input-new-project-name"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Link to Customer</Label>
+                    <Select value={newProjectCustomerId} onValueChange={setNewProjectCustomerId}>
+                      <SelectTrigger className="h-9">
+                        <SelectValue placeholder="No linked customer" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">No linked customer</SelectItem>
+                        {(customers || []).map(c => (
+                          <SelectItem key={c.id} value={c.id.toString()}>{c.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Client Name</Label>
+                      <Input
+                        placeholder="Client name"
+                        value={newProjectClientName}
+                        onChange={(e) => setNewProjectClientName(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Dwelling Type</Label>
+                      <Select value={newProjectDwelling} onValueChange={setNewProjectDwelling}>
+                        <SelectTrigger className="h-9">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {DWELLING_TYPES.map(dt => (
+                            <SelectItem key={dt} value={dt}>
+                              {({ single: "Single Family", duplex: "Duplex", triplex: "Triplex", fourplex: "Fourplex", townhouse: "Townhouse", condo: "Condo", apartment: "Apartment", commercial: "Commercial", industrial: "Industrial" } as Record<string, string>)[dt] || dt}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Email</Label>
+                      <Input
+                        type="email"
+                        placeholder="client@email.com"
+                        value={newProjectEmail}
+                        onChange={(e) => setNewProjectEmail(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Phone</Label>
+                      <Input
+                        placeholder="(555) 123-4567"
+                        value={newProjectPhone}
+                        onChange={(e) => setNewProjectPhone(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Address</Label>
+                    <Input
+                      placeholder="123 Main St, City, Province"
+                      value={newProjectAddress}
+                      onChange={(e) => setNewProjectAddress(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Notes</Label>
+                    <Textarea
+                      placeholder="Any notes about this project..."
+                      value={newProjectNotes}
+                      onChange={(e) => setNewProjectNotes(e.target.value)}
+                      rows={2}
+                      className="text-sm"
+                    />
+                  </div>
                   <Button
                     size="sm"
                     className="w-full"
                     disabled={!newProjectName.trim() || createProjectMutation.isPending}
-                    onClick={() => createProjectMutation.mutate({
-                      name: newProjectName.trim(),
-                      address: newProjectAddress.trim() || undefined,
-                    })}
+                    onClick={() => createProjectMutation.mutate()}
                     data-testid="button-save-new-project"
                   >
                     {createProjectMutation.isPending ? "Creating..." : "Save Project"}
