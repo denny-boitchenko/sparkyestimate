@@ -12,7 +12,6 @@ import Projects from "@/pages/projects";
 import ProjectDetail from "@/pages/project-detail";
 import Estimates from "@/pages/estimates";
 import EstimateDetail from "@/pages/estimate-detail";
-import AiAnalysisPage from "@/pages/ai-analysis";
 import Customers from "@/pages/customers";
 import SettingsPage from "@/pages/settings-page";
 import Invoices from "@/pages/invoices";
@@ -35,7 +34,6 @@ function Router() {
       <Route path="/customers" component={Customers} />
       <Route path="/employees" component={Employees} />
       <Route path="/photos" component={Photos} />
-      <Route path="/ai-analysis" component={AiAnalysisPage} />
       <Route path="/settings" component={SettingsPage} />
       <Route component={NotFound} />
     </Switch>

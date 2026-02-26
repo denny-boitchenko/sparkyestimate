@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   FolderOpen, Calculator, Clock, DollarSign,
-  Plus, ArrowRight, Zap, CheckCircle2, Send, ScanLine, FileText
+  Plus, ArrowRight, Zap, CheckCircle2, Send, FileText
 } from "lucide-react";
 import type { Project, Estimate, Invoice } from "@shared/schema";
 
@@ -256,12 +256,6 @@ export default function Dashboard() {
               <Button variant="outline" className="w-full justify-start" data-testid="button-quick-new-project">
                 <FolderOpen className="w-4 h-4 mr-2" />
                 New Project
-              </Button>
-            </Link>
-            <Link href="/ai-analysis">
-              <Button variant="outline" className="w-full justify-start" data-testid="button-quick-ai-analysis">
-                <ScanLine className="w-4 h-4 mr-2" />
-                AI Drawing Analysis
               </Button>
             </Link>
             <Link href="/estimates">

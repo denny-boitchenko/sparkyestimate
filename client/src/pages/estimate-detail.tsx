@@ -37,10 +37,11 @@ import {
   ChevronDown, Users, Layers, AlertTriangle
 } from "lucide-react";
 import { Combobox } from "@/components/ui/combobox";
+import AiAnalysisPanel from "@/components/ai-analysis-panel";
 import { useLocation } from "wouter";
 import type {
   Estimate, EstimateItem, DeviceAssembly, PanelCircuit,
-  EstimateService, ServiceBundle, WireType, AiAnalysis,
+  EstimateService, ServiceBundle, WireType,
   Employee, Setting, EstimateCrew, JobType
 } from "@shared/schema";
 import { DEVICE_CATEGORIES } from "@shared/schema";
@@ -177,10 +178,6 @@ export default function EstimateDetail() {
 
   const { data: wireTypesData } = useQuery<WireType[]>({
     queryKey: ["/api/wire-types"],
-  });
-
-  const { data: aiAnalyses } = useQuery<AiAnalysis[]>({
-    queryKey: ["/api/ai-analyses"],
   });
 
   const { data: employeesData } = useQuery<Employee[]>({
@@ -3339,101 +3336,7 @@ export default function EstimateDetail() {
         </TabsContent>
 
         <TabsContent value="ai-analysis">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
-              <CardTitle className="text-base font-semibold">AI Drawing Analysis</CardTitle>
-              <Link href="/ai-analysis">
-                <Button size="sm" data-testid="button-go-ai-analysis">
-                  <ScanLine className="w-4 h-4 mr-1" />
-                  Open AI Analysis
-                </Button>
-              </Link>
-            </CardHeader>
-            <CardContent>
-              {(() => {
-                const projectAnalyses = (aiAnalyses || []).filter(a => a.projectId === estimate.projectId);
-                if (projectAnalyses.length === 0) {
-                  return (
-                    <div className="flex flex-col items-center justify-center py-12 text-center">
-                      <div className="flex items-center justify-center w-12 h-12 rounded-md bg-primary/10 dark:bg-primary/20 mb-3">
-                        <ScanLine className="w-6 h-6 text-primary" />
-                      </div>
-                      <p className="text-sm font-medium">No analyses yet</p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Upload electrical drawings or floor plans to auto-detect devices and generate line items
-                      </p>
-                    </div>
-                  );
-                }
-                return (
-                  <div className="space-y-4">
-                    {projectAnalyses.map((analysis) => {
-                      const results = analysis.results as any;
-                      const roomCount = results?.rooms?.length || results?.roomCount || 0;
-                      const deviceCount = results?.devices?.length || results?.deviceCount || results?.rooms?.reduce((s: number, r: any) => s + (r.devices?.length || 0), 0) || 0;
-                      const isPdf = analysis.fileName?.toLowerCase().endsWith(".pdf");
-                      return (
-                        <div key={analysis.id} className="border rounded-lg p-4" data-testid={`card-analysis-${analysis.id}`}>
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="flex items-center gap-3">
-                              <div className="flex items-center justify-center w-10 h-10 rounded-md bg-primary/10">
-                                <FileText className="w-5 h-5 text-primary" />
-                              </div>
-                              <div>
-                                <p className="text-sm font-medium">{analysis.fileName}</p>
-                                <div className="flex items-center gap-2 mt-0.5">
-                                  <Badge variant="secondary" className="text-xs">{analysis.analysisMode}</Badge>
-                                  <Badge
-                                    variant={analysis.status === "completed" ? "default" : "secondary"}
-                                    className="text-xs"
-                                    data-testid={`badge-analysis-status-${analysis.id}`}
-                                  >
-                                    {analysis.status}
-                                  </Badge>
-                                  <span className="text-xs text-muted-foreground">
-                                    {new Date(analysis.createdAt).toLocaleDateString("en-CA")}
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-                            <div className="flex gap-2">
-                              {isPdf && (
-                                <a
-                                  href={`/api/ai-analyses/${analysis.id}/file`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                >
-                                  <Button size="sm" variant="outline" data-testid={`button-view-pdf-${analysis.id}`}>
-                                    <Download className="w-4 h-4 mr-1" />
-                                    View PDF
-                                  </Button>
-                                </a>
-                              )}
-                              <Link href="/ai-analysis">
-                                <Button size="sm" variant="outline" data-testid={`button-view-analysis-${analysis.id}`}>
-                                  View Results
-                                </Button>
-                              </Link>
-                            </div>
-                          </div>
-                          <div className="flex gap-4 mt-3 text-sm">
-                            <div className="flex items-center gap-1">
-                              <span className="text-muted-foreground">Rooms:</span>
-                              <span className="font-medium">{roomCount}</span>
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <span className="text-muted-foreground">Devices:</span>
-                              <span className="font-medium">{deviceCount}</span>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                );
-              })()}
-            </CardContent>
-          </Card>
+          <AiAnalysisPanel projectId={estimate.projectId} estimateId={estimate.id} />
         </TabsContent>
       </Tabs>
 

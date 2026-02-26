@@ -2512,20 +2512,29 @@ VERIFICATION:
       const results = analysis.results as any;
       if (!results?.rooms) return res.status(400).json({ message: "No rooms data in analysis" });
 
-      // Accept user-edited counts and assembly overrides from Review step
+      // Accept user-edited counts, assembly overrides, and optional estimateId
       const body = req.body || {};
       const editedCounts: Record<string, number> = body.editedCounts || {};
       const assemblyOverrides: Record<string, number> = body.assemblyOverrides || {};
+      const existingEstimateId = body.estimateId ? parseInt(body.estimateId, 10) : null;
 
-      const estimate = await storage.createEstimate({
-        projectId: analysis.projectId,
-        name: `AI Generated - ${analysis.fileName}`,
-        overheadPct: 15,
-        profitPct: 10,
-        materialMarkupPct: 0,
-        laborMarkupPct: 0,
-        laborRate: 85,
-      });
+      let estimate;
+      if (existingEstimateId) {
+        // Apply to existing estimate
+        estimate = await storage.getEstimate(existingEstimateId);
+        if (!estimate) return res.status(404).json({ message: "Estimate not found" });
+      } else {
+        // Create new estimate (legacy standalone flow)
+        estimate = await storage.createEstimate({
+          projectId: analysis.projectId,
+          name: `AI Generated - ${analysis.fileName}`,
+          overheadPct: 15,
+          profitPct: 10,
+          materialMarkupPct: 0,
+          laborMarkupPct: 0,
+          laborRate: 85,
+        });
+      }
 
       const assemblies = await storage.getDeviceAssemblies();
 
