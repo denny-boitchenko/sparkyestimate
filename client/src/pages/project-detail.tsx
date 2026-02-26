@@ -215,6 +215,9 @@ export default function ProjectDetail() {
       setEstimateName("");
       navigate(`/estimates/${data.id}`);
     },
+    onError: (err: Error) => {
+      toast({ title: "Error creating estimate", description: err.message, variant: "destructive" });
+    },
   });
 
   const deleteEstimateMutation = useMutation({

@@ -4,16 +4,20 @@ import { Link, useLocation } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue
 } from "@/components/ui/select";
 import {
+  Dialog, DialogContent, DialogHeader, DialogTitle
+} from "@/components/ui/dialog";
+import {
   AlertDialog, AlertDialogAction, AlertDialogCancel,
   AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
   AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger
 } from "@/components/ui/alert-dialog";
-import { Calculator, ArrowRight, FileText, Trash2, Search, ArrowUpDown } from "lucide-react";
+import { Calculator, ArrowRight, FileText, Trash2, Search, ArrowUpDown, Plus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Estimate, Project } from "@shared/schema";
@@ -23,6 +27,9 @@ export default function Estimates() {
   const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<"date_newest" | "date_oldest" | "name" | "project">("date_newest");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newProjectId, setNewProjectId] = useState("");
 
   const { data: estimates, isLoading } = useQuery<Estimate[]>({
     queryKey: ["/api/estimates"],
@@ -43,6 +50,25 @@ export default function Estimates() {
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const createEstimateMutation = useMutation({
+    mutationFn: async ({ name, projectId }: { name: string; projectId: number }) => {
+      const res = await apiRequest("POST", "/api/estimates", { name, projectId });
+      return res.json();
+    },
+    onSuccess: (data: Estimate) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/estimates"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
+      toast({ title: "Estimate created" });
+      setCreateOpen(false);
+      setNewName("");
+      setNewProjectId("");
+      navigate(`/estimates/${data.id}`);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error creating estimate", description: err.message, variant: "destructive" });
     },
   });
 
@@ -87,6 +113,10 @@ export default function Estimates() {
             All estimates across your projects
           </p>
         </div>
+        <Button onClick={() => setCreateOpen(true)} data-testid="button-new-estimate">
+          <Plus className="w-4 h-4 mr-1" />
+          New Estimate
+        </Button>
       </div>
 
       {estimates && estimates.length > 0 && (
@@ -124,14 +154,12 @@ export default function Estimates() {
             </div>
             <p className="text-base font-medium">No estimates yet</p>
             <p className="text-sm text-muted-foreground mt-1 max-w-sm">
-              Create a project first, then add estimates to it
+              Create your first estimate to start building a quote
             </p>
-            <Link href="/projects">
-              <Button variant="outline" className="mt-4" data-testid="button-go-to-projects">
-                Go to Projects
-                <ArrowRight className="w-4 h-4 ml-1" />
-              </Button>
-            </Link>
+            <Button className="mt-4" onClick={() => setCreateOpen(true)} data-testid="button-create-first-estimate">
+              <Plus className="w-4 h-4 mr-1" />
+              New Estimate
+            </Button>
           </CardContent>
         </Card>
       ) : sorted.length === 0 ? (
@@ -206,6 +234,49 @@ export default function Estimates() {
           ))}
         </div>
       )}
+
+      {/* New Estimate Dialog */}
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>New Estimate</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Project</Label>
+              <Select value={newProjectId} onValueChange={setNewProjectId}>
+                <SelectTrigger data-testid="select-estimate-project">
+                  <SelectValue placeholder="Select a project..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {(projects || []).map(p => (
+                    <SelectItem key={p.id} value={p.id.toString()}>{p.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Estimate Name</Label>
+              <Input
+                placeholder="e.g., Main Quote"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                data-testid="input-estimate-name"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
+              <Button
+                disabled={!newProjectId || !newName.trim() || createEstimateMutation.isPending}
+                onClick={() => createEstimateMutation.mutate({ name: newName.trim(), projectId: parseInt(newProjectId) })}
+                data-testid="button-create-estimate"
+              >
+                {createEstimateMutation.isPending ? "Creating..." : "Create Estimate"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
