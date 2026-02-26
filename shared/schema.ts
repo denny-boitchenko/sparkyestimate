@@ -57,6 +57,7 @@ export const estimates = pgTable("estimates", {
   wasteFactor: real("waste_factor").notNull().default(15),
   spoolOverrides: jsonb("spool_overrides"),
   wireFootageOverrides: jsonb("wire_footage_overrides"),
+  bomOverrides: jsonb("bom_overrides"), // { qtyOverrides: {partId: qty}, removed: [partId], added: [{name,category,unitCost,qty}] }
   permitFee: real("permit_fee"),
   permitFeeOverride: real("permit_fee_override"),
   includePermit: boolean("include_permit").notNull().default(false),

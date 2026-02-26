@@ -132,6 +132,7 @@ export default function EstimateDetail() {
   const [addItemOpen, setAddItemOpen] = useState(false);
   const [addCircuitOpen, setAddCircuitOpen] = useState(false);
   const [addSubpanelOpen, setAddSubpanelOpen] = useState(false);
+  const [addBomMaterialOpen, setAddBomMaterialOpen] = useState(false);
   const [addServiceOpen, setAddServiceOpen] = useState(false);
   const [createDeviceOpen, setCreateDeviceOpen] = useState(false);
   const [pendingDeviceItemId, setPendingDeviceItemId] = useState<number | null>(null);
@@ -234,6 +235,10 @@ export default function EstimateDetail() {
   const { data: bomData } = useQuery<BomData>({
     queryKey: ["/api/estimates", estimateId, "bom"],
     enabled: estimateId > 0,
+  });
+
+  const { data: partsCatalogData } = useQuery<Array<{ id: number; name: string; category: string; unitCost: number }>>({
+    queryKey: ["/api/parts-catalog"],
   });
 
   type ComplianceResults = {
@@ -1594,7 +1599,7 @@ export default function EstimateDetail() {
                     Export BOM
                   </Button>
                 )}
-                <Button size="sm" onClick={() => setAddItemOpen(true)} data-testid="button-add-material">
+                <Button size="sm" onClick={() => setAddBomMaterialOpen(true)} data-testid="button-add-material">
                   <Plus className="w-4 h-4 mr-1" />
                   Add Material
                 </Button>
@@ -1617,21 +1622,76 @@ export default function EstimateDetail() {
                 };
                 const CATEGORY_ORDER = ["device", "box", "cover_plate", "connector", "wire_nut", "mounting", "breaker", "panel_component", "misc"];
 
-                // BOM view — group parts by category
+                // BOM view — group parts by category with editable overrides
                 if (bomData && bomData.parts.length > 0) {
+                  const overrides: { qtyOverrides?: Record<string, number>; removed?: number[]; added?: Array<{ name: string; category: string; unitCost: number; qty: number }> } =
+                    (estimate?.bomOverrides as any) || {};
+                  const removedSet = new Set(overrides.removed || []);
+                  const qtyOverrides = overrides.qtyOverrides || {};
+                  const addedParts = overrides.added || [];
+
+                  // Apply overrides: filter removed, apply qty overrides
+                  const effectiveParts: BomPart[] = bomData.parts
+                    .filter(p => !removedSet.has(p.partId))
+                    .map(p => {
+                      const overrideQty = qtyOverrides[p.partId.toString()];
+                      if (overrideQty !== undefined) {
+                        return { ...p, totalQuantity: overrideQty, totalCost: Math.round(p.unitCost * overrideQty * 100) / 100 };
+                      }
+                      return p;
+                    });
+
+                  // Add manually-added parts
+                  for (let i = 0; i < addedParts.length; i++) {
+                    const ap = addedParts[i];
+                    effectiveParts.push({
+                      partId: -(i + 1), // negative IDs for added parts
+                      partName: ap.name,
+                      category: ap.category,
+                      unitCost: ap.unitCost,
+                      totalQuantity: ap.qty,
+                      totalCost: Math.round(ap.unitCost * ap.qty * 100) / 100,
+                      supplier: null,
+                      partNumber: null,
+                      usedInItems: [],
+                    });
+                  }
+
                   const byCategory = new Map<string, BomPart[]>();
-                  for (const p of bomData.parts) {
+                  for (const p of effectiveParts) {
                     const arr = byCategory.get(p.category) || [];
                     arr.push(p);
                     byCategory.set(p.category, arr);
                   }
                   const sortedCategories = CATEGORY_ORDER.filter(c => byCategory.has(c));
-                  // Include any categories not in the predefined order
                   for (const c of Array.from(byCategory.keys())) {
                     if (!sortedCategories.includes(c)) sortedCategories.push(c);
                   }
 
                   const unmatchedTotal = bomData.unmatchedItems.reduce((s, u) => s + u.materialCost * u.quantity, 0);
+                  const effectivePartsCost = effectiveParts.reduce((s, p) => s + p.totalCost, 0);
+
+                  const saveBomOverrides = (newOverrides: typeof overrides) => {
+                    updateEstimateMutation.mutate({ bomOverrides: newOverrides } as any);
+                  };
+
+                  const handleQtyChange = (partId: number, newQty: number) => {
+                    const newQtyOverrides = { ...qtyOverrides, [partId.toString()]: newQty };
+                    saveBomOverrides({ ...overrides, qtyOverrides: newQtyOverrides });
+                  };
+
+                  const handleRemovePart = (partId: number) => {
+                    if (partId < 0) {
+                      // Remove an added part (negative ID = index)
+                      const idx = -(partId + 1);
+                      const newAdded = [...addedParts];
+                      newAdded.splice(idx, 1);
+                      saveBomOverrides({ ...overrides, added: newAdded });
+                    } else {
+                      const newRemoved = [...(overrides.removed || []), partId];
+                      saveBomOverrides({ ...overrides, removed: newRemoved });
+                    }
+                  };
 
                   return (
                     <>
@@ -1655,36 +1715,64 @@ export default function EstimateDetail() {
                                   <TableHeader>
                                     <TableRow>
                                       <TableHead className="pl-10">Part Name</TableHead>
-                                      <TableHead className="w-32">Part #</TableHead>
-                                      <TableHead className="w-32">Supplier</TableHead>
                                       <TableHead className="text-right w-24">Unit Cost</TableHead>
-                                      <TableHead className="text-right w-20">Qty</TableHead>
+                                      <TableHead className="text-right w-24">Qty</TableHead>
                                       <TableHead className="text-right w-28">Total</TableHead>
+                                      <TableHead className="w-10"></TableHead>
                                     </TableRow>
                                   </TableHeader>
                                   <TableBody>
-                                    {parts.map(p => (
-                                      <TableRow key={p.partId}>
-                                        <TableCell className="pl-10">
-                                          <span className="text-sm">{p.partName}</span>
-                                        </TableCell>
-                                        <TableCell>
-                                          <span className="text-xs text-muted-foreground">{p.partNumber || "—"}</span>
-                                        </TableCell>
-                                        <TableCell>
-                                          <span className="text-xs text-muted-foreground">{p.supplier || "—"}</span>
-                                        </TableCell>
-                                        <TableCell className="text-right">
-                                          <span className="text-sm">${p.unitCost.toFixed(2)}</span>
-                                        </TableCell>
-                                        <TableCell className="text-right">
-                                          <span className="text-sm">{p.totalQuantity}</span>
-                                        </TableCell>
-                                        <TableCell className="text-right">
-                                          <span className="text-sm font-medium">${p.totalCost.toFixed(2)}</span>
-                                        </TableCell>
-                                      </TableRow>
-                                    ))}
+                                    {parts.map(p => {
+                                      const isOverridden = qtyOverrides[p.partId.toString()] !== undefined;
+                                      const isAdded = p.partId < 0;
+                                      return (
+                                        <TableRow key={p.partId} className={isAdded ? "bg-blue-50/50" : ""}>
+                                          <TableCell className="pl-10">
+                                            <span className="text-sm">{p.partName}</span>
+                                            {isAdded && <Badge variant="outline" className="ml-2 text-[10px]">Added</Badge>}
+                                          </TableCell>
+                                          <TableCell className="text-right">
+                                            <span className="text-sm">${p.unitCost.toFixed(2)}</span>
+                                          </TableCell>
+                                          <TableCell className="text-right">
+                                            <Input
+                                              type="number"
+                                              className={`w-16 h-7 text-right text-sm ml-auto ${isOverridden ? "font-bold text-blue-600" : ""}`}
+                                              defaultValue={p.totalQuantity}
+                                              onBlur={(e) => {
+                                                const v = parseInt(e.target.value) || 0;
+                                                if (v !== p.totalQuantity || isOverridden) {
+                                                  if (isAdded) {
+                                                    const idx = -(p.partId + 1);
+                                                    const newAdded = [...addedParts];
+                                                    newAdded[idx] = { ...newAdded[idx], qty: v };
+                                                    saveBomOverrides({ ...overrides, added: newAdded });
+                                                  } else {
+                                                    handleQtyChange(p.partId, v);
+                                                  }
+                                                }
+                                              }}
+                                              min={0}
+                                              title={isOverridden ? "Qty overridden (edit to change)" : "Edit to override"}
+                                            />
+                                          </TableCell>
+                                          <TableCell className="text-right">
+                                            <span className="text-sm font-medium">${p.totalCost.toFixed(2)}</span>
+                                          </TableCell>
+                                          <TableCell>
+                                            <Button
+                                              size="icon"
+                                              variant="ghost"
+                                              className="h-7 w-7"
+                                              onClick={() => handleRemovePart(p.partId)}
+                                              title="Remove from BOM"
+                                            >
+                                              <Trash2 className="w-3.5 h-3.5" />
+                                            </Button>
+                                          </TableCell>
+                                        </TableRow>
+                                      );
+                                    })}
                                   </TableBody>
                                 </Table>
                               </AccordionContent>
@@ -1724,10 +1812,23 @@ export default function EstimateDetail() {
                         </div>
                       )}
 
+                      {(overrides.removed?.length || 0) > 0 && (
+                        <div className="px-6 py-2 border-t">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-xs text-muted-foreground"
+                            onClick={() => saveBomOverrides({ ...overrides, removed: [] })}
+                          >
+                            Restore {overrides.removed!.length} removed item{overrides.removed!.length !== 1 ? "s" : ""}
+                          </Button>
+                        </div>
+                      )}
+
                       <div className="px-6 border-t pt-4 pb-4 space-y-1">
                         <div className="flex justify-between gap-4 text-sm">
                           <span className="text-muted-foreground">Parts Total:</span>
-                          <span>${bomData.totalPartsCost.toFixed(2)}</span>
+                          <span>${effectivePartsCost.toFixed(2)}</span>
                         </div>
                         {unmatchedTotal > 0 && (
                           <div className="flex justify-between gap-4 text-sm">
@@ -1737,7 +1838,7 @@ export default function EstimateDetail() {
                         )}
                         <div className="flex justify-between gap-4 text-sm font-bold pt-1 border-t">
                           <span>Total Material Cost:</span>
-                          <span data-testid="text-materials-grand-total">${(bomData.totalPartsCost + unmatchedTotal).toFixed(2)}</span>
+                          <span data-testid="text-materials-grand-total">${(effectivePartsCost + unmatchedTotal).toFixed(2)}</span>
                         </div>
                       </div>
                     </>
@@ -3369,6 +3470,17 @@ export default function EstimateDetail() {
         })()}
       />
 
+      <AddBomMaterialDialog
+        open={addBomMaterialOpen}
+        onOpenChange={setAddBomMaterialOpen}
+        partsCatalog={(partsCatalogData || []).map(p => ({ name: p.name, category: p.category, unitCost: p.unitCost }))}
+        onAdd={(data) => {
+          const overrides: any = (estimate?.bomOverrides as any) || {};
+          const added = [...(overrides.added || []), data];
+          updateEstimateMutation.mutate({ bomOverrides: { ...overrides, added } } as any);
+        }}
+      />
+
       <AddServiceDialog
         open={addServiceOpen}
         onOpenChange={setAddServiceOpen}
@@ -3744,6 +3856,108 @@ function AddCircuitDialog({ open, onOpenChange, onAdd, isPending, existingCount,
             </Button>
           </div>
         </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AddBomMaterialDialog({ open, onOpenChange, onAdd, partsCatalog }: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onAdd: (data: { name: string; category: string; unitCost: number; qty: number }) => void;
+  partsCatalog: Array<{ name: string; category: string; unitCost: number }>;
+}) {
+  const [name, setName] = useState("");
+  const [category, setCategory] = useState("device");
+  const [unitCost, setUnitCost] = useState(0);
+  const [qty, setQty] = useState(1);
+  const [search, setSearch] = useState("");
+
+  const filteredParts = partsCatalog.filter(p =>
+    p.name.toLowerCase().includes(search.toLowerCase())
+  ).slice(0, 10);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Add Material to BOM</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label>Search Parts Catalog</Label>
+            <Input
+              placeholder="Type to search..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            {search.length > 1 && filteredParts.length > 0 && (
+              <div className="border rounded-md max-h-40 overflow-y-auto">
+                {filteredParts.map(p => (
+                  <button
+                    key={p.name}
+                    className="w-full text-left px-3 py-1.5 text-sm hover:bg-muted flex justify-between"
+                    onClick={() => {
+                      setName(p.name);
+                      setCategory(p.category);
+                      setUnitCost(p.unitCost);
+                      setSearch("");
+                    }}
+                  >
+                    <span>{p.name}</span>
+                    <span className="text-muted-foreground">${p.unitCost.toFixed(2)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="space-y-2">
+            <Label>Part Name</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} required />
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="space-y-2">
+              <Label>Category</Label>
+              <Select value={category} onValueChange={setCategory}>
+                <SelectTrigger className="h-9 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="device">Device</SelectItem>
+                  <SelectItem value="box">Box</SelectItem>
+                  <SelectItem value="cover_plate">Cover Plate</SelectItem>
+                  <SelectItem value="connector">Connector</SelectItem>
+                  <SelectItem value="breaker">Breaker</SelectItem>
+                  <SelectItem value="panel_component">Panel</SelectItem>
+                  <SelectItem value="wire_nut">Wire Nut</SelectItem>
+                  <SelectItem value="mounting">Mounting</SelectItem>
+                  <SelectItem value="misc">Misc</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Unit Cost</Label>
+              <Input type="number" step="0.01" min={0} value={unitCost} onChange={(e) => setUnitCost(parseFloat(e.target.value) || 0)} />
+            </div>
+            <div className="space-y-2">
+              <Label>Qty</Label>
+              <Input type="number" min={1} value={qty} onChange={(e) => setQty(parseInt(e.target.value) || 1)} />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+            <Button
+              disabled={!name.trim()}
+              onClick={() => {
+                onAdd({ name: name.trim(), category, unitCost, qty });
+                setName(""); setSearch(""); setUnitCost(0); setQty(1);
+                onOpenChange(false);
+              }}
+            >
+              Add Material
+            </Button>
+          </div>
+        </div>
       </DialogContent>
     </Dialog>
   );

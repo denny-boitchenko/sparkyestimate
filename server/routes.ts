@@ -1365,6 +1365,78 @@ export async function registerRoutes(
   });
 
   // Bill of Materials (BOM) for estimate
+  // Explicit mapping: assembly symbolType → parts catalog names with quantities
+  // Based on real Horizon quote material breakdown + Material List pricing
+  const ASSEMBLY_PARTS_MAP: Record<string, Array<{ part: string; qty: number }>> = {
+    // Receptacles
+    duplex_receptacle:        [{ part: "15A Outlet", qty: 1 }, { part: "1 Gang Device Box", qty: 1 }, { part: "1 Gang Plate", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }, { part: "1/2\" NM Connector (Pop-in)", qty: 1 }],
+    duplex_receptacle_20a:    [{ part: "20A Outlet", qty: 1 }, { part: "1 Gang Device Box", qty: 1 }, { part: "1 Gang Plate", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }, { part: "1/2\" NM Connector (Pop-in)", qty: 1 }],
+    gfci_receptacle_15a:      [{ part: "15A GFCI Outlet", qty: 1 }, { part: "1 Gang Device Box", qty: 1 }, { part: "1 Gang Plate", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }, { part: "1/2\" NM Connector (Pop-in)", qty: 1 }],
+    gfci_receptacle:          [{ part: "20A GFCI Outlet", qty: 1 }, { part: "1 Gang Device Box", qty: 1 }, { part: "1 Gang Plate", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }, { part: "1/2\" NM Connector (Pop-in)", qty: 1 }],
+    weather_resistant_receptacle: [{ part: "20A GFCI Outlet", qty: 1 }, { part: "FD PVC Box", qty: 1 }, { part: "Weather Proof In-Use Cover", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }, { part: "1/2\" NM Connector (Pop-in)", qty: 1 }],
+    split_receptacle:         [{ part: "15A Outlet", qty: 1 }, { part: "1 Gang Device Box", qty: 1 }, { part: "1 Gang Plate", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }, { part: "1/2\" NM Connector (Pop-in)", qty: 1 }],
+    dedicated_receptacle:     [{ part: "15A Outlet", qty: 1 }, { part: "1 Gang Device Box", qty: 1 }, { part: "1 Gang Plate", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }, { part: "1/2\" NM Connector (Pop-in)", qty: 1 }],
+    dryer_outlet:             [{ part: "30A 240V Dryer Outlet", qty: 1 }, { part: "4x4 Metal Box", qty: 1 }, { part: "4x4 Blank Plate", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }, { part: "3/4\" NM Connector (Pop-in)", qty: 1 }],
+    range_outlet:             [{ part: "50A 240V Range Outlet", qty: 1 }, { part: "4x4 Metal Box", qty: 1 }, { part: "4x4 Blank Plate", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }, { part: "3/4\" NM Connector (Pop-in)", qty: 1 }],
+    ev_charger_outlet:        [{ part: "50A 240V Range Outlet", qty: 1 }, { part: "4x4 Metal Box", qty: 1 }, { part: "4x4 Blank Plate", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }, { part: "3/4\" NM Connector (Pop-in)", qty: 1 }],
+    outdoor_receptacle:       [{ part: "15A GFCI Outlet", qty: 1 }, { part: "FD PVC Box", qty: 1 }, { part: "Weather Proof In-Use Cover", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }, { part: "1/2\" NM Connector (Pop-in)", qty: 1 }],
+    switched_soffit_outlet:   [{ part: "15A Outlet", qty: 1 }, { part: "FD PVC Box", qty: 1 }, { part: "Weather Proof In-Use Cover", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }, { part: "1/2\" NM Connector (Pop-in)", qty: 1 }],
+    rv_outlet:                [{ part: "30A RV Outlet", qty: 1 }, { part: "FD PVC Box", qty: 1 }, { part: "RV Cover", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }, { part: "1/2\" NM Connector (Pop-in)", qty: 1 }],
+    outlet_240v_15a:          [{ part: "15A 240V Outlet", qty: 1 }, { part: "1 Gang Device Box", qty: 1 }, { part: "1 Gang Plate", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }, { part: "1/2\" NM Connector (Pop-in)", qty: 1 }],
+    outlet_240v_20a:          [{ part: "20A 240V Outlet", qty: 1 }, { part: "1 Gang Device Box", qty: 1 }, { part: "1 Gang Plate", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }, { part: "1/2\" NM Connector (Pop-in)", qty: 1 }],
+    // Switches
+    single_pole_switch:       [{ part: "Single Pole Switch", qty: 1 }, { part: "1 Gang Device Box", qty: 1 }, { part: "1 Gang Plate", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }, { part: "1/2\" NM Connector (Pop-in)", qty: 1 }],
+    three_way_switch:         [{ part: "3 Way Switch", qty: 1 }, { part: "1 Gang Device Box", qty: 1 }, { part: "1 Gang Plate", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }, { part: "1/2\" NM Connector (Pop-in)", qty: 1 }],
+    four_way_switch:          [{ part: "4 Way Switch", qty: 1 }, { part: "1 Gang Device Box", qty: 1 }, { part: "1 Gang Plate", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }, { part: "1/2\" NM Connector (Pop-in)", qty: 1 }],
+    dimmer_switch:            [{ part: "Dimmer Switch", qty: 1 }, { part: "1 Gang Device Box", qty: 1 }, { part: "1 Gang Plate", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }, { part: "1/2\" NM Connector (Pop-in)", qty: 1 }],
+    motion_sensor:            [{ part: "Motion Switch", qty: 1 }, { part: "1 Gang Device Box", qty: 1 }, { part: "1 Gang Plate", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 2 }],
+    bath_timer_switch:        [{ part: "Bath Timer Switch", qty: 1 }, { part: "1 Gang Device Box", qty: 1 }, { part: "1 Gang Plate", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }, { part: "1/2\" NM Connector (Pop-in)", qty: 1 }],
+    timer_switch_24hr:        [{ part: "Timer Switch 24hr", qty: 1 }, { part: "1 Gang Device Box", qty: 1 }, { part: "1 Gang Plate", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }, { part: "1/2\" NM Connector (Pop-in)", qty: 1 }],
+    // Lighting
+    recessed_light:           [{ part: "4\" Wafer/Can Light", qty: 1 }, { part: "Vapour Barrier Boot (Vapo Boot)", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 2 }],
+    pot_light:                [{ part: "6\" Wafer/Can Light", qty: 1 }, { part: "Vapour Barrier Boot (Vapo Boot)", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 2 }],
+    gimbal_light:             [{ part: "4\" Gimbal Light", qty: 1 }, { part: "Vapour Barrier Boot (Vapo Boot)", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 2 }],
+    surface_mount_light:      [{ part: "Octagon Plastic Box (no nail)", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 2 }],
+    pendant_light:            [{ part: "Octagon Plastic Box (no nail)", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 2 }],
+    wall_sconce:              [{ part: "Octagon Plastic Box (no nail)", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 2 }],
+    exterior_light:           [{ part: "Octagon Metal Box", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 2 }, { part: "1/2\" NM Connector (Pop-in)", qty: 1 }],
+    step_motion_light:        [{ part: "Step Motion Light", qty: 1 }, { part: "1 Gang Device Box", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 2 }],
+    ceiling_fan:              [{ part: "Ceiling Fan Metal Box", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }],
+    track_light:              [{ part: "Octagon Plastic Box (no nail)", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 2 }],
+    fluorescent_light:        [{ part: "Bright Stick / Light Bulb", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 2 }],
+    led_panel_light:          [{ part: "Marrettes (Wire Nuts)", qty: 2 }],
+    under_cabinet_light:      [{ part: "Marrettes (Wire Nuts)", qty: 2 }],
+    // Exhaust / Ventilation
+    exhaust_fan:              [{ part: "Bath Fan Dual Speed", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }],
+    range_hood_fan:           [{ part: "Marrettes (Wire Nuts)", qty: 2 }, { part: "1/2\" NM Connector (Pop-in)", qty: 1 }],
+    // Safety
+    smoke_detector:           [{ part: "Regular Smoke Detector", qty: 1 }, { part: "Octagon Plastic Box (no nail)", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }],
+    co_detector:              [{ part: "Regular Smoke Detector", qty: 1 }, { part: "Octagon Plastic Box (no nail)", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }],
+    smoke_co_combo:           [{ part: "CO Smoke Detector (Combo)", qty: 1 }, { part: "Octagon Plastic Box (no nail)", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }],
+    // Data/Comm
+    data_outlet:              [{ part: "CED 130 Data Insert", qty: 1 }, { part: "Tel/Tv Nail-on Box", qty: 1 }, { part: "1 Gang Plate", qty: 1 }],
+    tv_outlet:                [{ part: "Tel/Tv Nail-on Box", qty: 1 }, { part: "1 Gang Plate", qty: 1 }],
+    phone_outlet:             [{ part: "Tel/Tv Nail-on Box", qty: 1 }, { part: "1 Gang Plate", qty: 1 }],
+    // Specialty
+    doorbell:                 [{ part: "Doorbell (Transformer + Chime + Button)", qty: 1 }],
+    thermostat:               [{ part: "Marrettes (Wire Nuts)", qty: 2 }],
+    occupancy_sensor:         [{ part: "Motion Switch", qty: 1 }, { part: "Octagon Plastic Box (no nail)", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 2 }],
+    panel_board:              [{ part: "200A Panel 40/80 (60/120)", qty: 1 }, { part: "Bonding Clamp (Gas/Pipe)", qty: 1 }, { part: "Duct Seal", qty: 1 }],
+    subpanel:                 [{ part: "100A Panel 30/60 (40/80)", qty: 1 }],
+    junction_box:             [{ part: "4x4 Metal Box", qty: 1 }, { part: "4x4 Blank Plate", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }],
+    ac_disconnect:            [{ part: "AC Disconnect (60A)", qty: 1 }, { part: "AC Whip", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }],
+    mini_split:               [{ part: "AC Disconnect (60A)", qty: 1 }, { part: "AC Whip", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }, { part: "LiquidTight 1/2\"", qty: 3 }],
+    furnace_disconnect:       [{ part: "Furnace Red Plate", qty: 1 }, { part: "1 Gang Device Box", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }, { part: "1/2\" NM Connector (Pop-in)", qty: 1 }],
+    floor_heat:               [{ part: "20A GFCI Outlet", qty: 1 }, { part: "1 Gang Device Box", qty: 1 }, { part: "1 Gang Plate", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }],
+    baseboard_heater:         [{ part: "BB Heat Wall Thermostat", qty: 1 }, { part: "BB Heat 1500W", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }],
+    baseboard_heater_builtin: [{ part: "BB Heat Built-in Thermostat", qty: 1 }, { part: "BB Heat 1500W", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }],
+    sauna_heater:             [{ part: "Marrettes (Wire Nuts)", qty: 3 }],
+    led_strip_light:          [{ part: "LED Strip 24V (per meter)", qty: 3 }, { part: "AL Channel (per meter)", qty: 3 }, { part: "LED Driver 60W", qty: 1 }, { part: "LED Strip Connectors", qty: 2 }, { part: "Marrettes (Wire Nuts)", qty: 2 }],
+    gas_bond:                 [{ part: "Bonding Clamp (Gas/Pipe)", qty: 1 }],
+    water_meter_bond:         [{ part: "Bonding Clamp (Gas/Pipe)", qty: 2 }],
+    hot_tub:                  [{ part: "50A 2-Pole Breaker", qty: 1 }, { part: "AC Disconnect (60A)", qty: 1 }, { part: "Marrettes (Wire Nuts)", qty: 3 }],
+  };
+
   app.get("/api/estimates/:id/bom", async (req, res) => {
     const id = parseId(req.params.id);
     if (!id) return res.status(400).json({ message: "Invalid estimate ID" });
@@ -1374,38 +1446,9 @@ export async function registerRoutes(
       const allParts = await storage.getPartsCatalog();
       const circuits = await storage.getPanelCircuits(id);
 
-      // Build assembly lookup by ID
+      // Build lookups
       const assemblyById = new Map(allAssemblies.map(a => [a.id, a]));
-
-      // Build parts lookup by normalized name for fuzzy matching
-      const partsByName = new Map(allParts.map(p => [p.name.toLowerCase(), p]));
-
-      // Fuzzy match assembly text field → parts catalog entry
-      const findPart = (text: string): typeof allParts[0] | undefined => {
-        if (!text) return undefined;
-        const lower = text.toLowerCase().trim();
-        // 1. Exact match
-        const exact = partsByName.get(lower);
-        if (exact) return exact;
-        // 2. Assembly text contains part name or vice versa
-        for (const p of allParts) {
-          const pLower = p.name.toLowerCase();
-          if (lower.includes(pLower) || pLower.includes(lower)) return p;
-        }
-        // 3. Keyword match — look for key terms
-        const keywords = lower.split(/[\s,/]+/).filter(w => w.length > 2);
-        let bestMatch: typeof allParts[0] | undefined;
-        let bestScore = 0;
-        for (const p of allParts) {
-          const pLower = p.name.toLowerCase();
-          const score = keywords.filter(k => pLower.includes(k)).length;
-          if (score > bestScore && score >= 2) {
-            bestScore = score;
-            bestMatch = p;
-          }
-        }
-        return bestMatch;
-      };
+      const partsByName = new Map(allParts.map(p => [p.name, p]));
 
       const partsMap = new Map<number, { part: any; totalQuantity: number; usedInItems: any[] }>();
       const unmatchedItems: any[] = [];
@@ -1425,48 +1468,54 @@ export async function registerRoutes(
         }
       };
 
+      // Build symbolType lookup from assemblies for items without assemblyId
+      const assemblyBySymbol = new Map(allAssemblies.filter(a => a.symbolType).map(a => [a.symbolType!, a]));
+
       for (const item of items) {
-        if (!item.assemblyId) {
+        let assembly = item.assemblyId ? assemblyById.get(item.assemblyId) : undefined;
+
+        // If no assemblyId, try to find assembly by deviceType → snake_case symbolType
+        if (!assembly && item.deviceType) {
+          const snakeType = item.deviceType.toLowerCase().replace(/[\s-]+/g, "_").replace(/[()]/g, "");
+          assembly = assemblyBySymbol.get(snakeType);
+          // Also check ASSEMBLY_PARTS_MAP directly with the snake_case key
+          if (!assembly && ASSEMBLY_PARTS_MAP[snakeType]) {
+            // Use map directly without assembly
+            const partsForType = ASSEMBLY_PARTS_MAP[snakeType];
+            let matched = false;
+            for (const { part: partName, qty: partQty } of partsForType) {
+              const catalogPart = partsByName.get(partName);
+              if (catalogPart) {
+                addPartToMap(catalogPart, partQty * item.quantity, item.room || "", item.deviceType || "", item.quantity);
+                matched = true;
+              }
+            }
+            if (matched) continue;
+          }
+        }
+
+        if (!assembly) {
           unmatchedItems.push({ deviceType: item.deviceType, room: item.room, quantity: item.quantity, materialCost: item.materialCost });
           continue;
         }
-        const linkedParts = await storage.getAssemblyParts(item.assemblyId);
-        if (linkedParts.length > 0) {
-          // Use linked assembly_parts (existing behavior)
-          for (const ap of linkedParts) {
-            addPartToMap(ap.part, ap.quantity * item.quantity, item.room || "", item.deviceType || "", item.quantity);
-          }
-        } else {
-          // Fallback: generate virtual BOM from assembly metadata fields
-          const assembly = assemblyById.get(item.assemblyId);
-          if (!assembly) {
-            unmatchedItems.push({ deviceType: item.deviceType, room: item.room, quantity: item.quantity, materialCost: item.materialCost });
-            continue;
-          }
-          let matched = false;
-          // Match device field
-          if (assembly.device) {
-            const part = findPart(assembly.device);
-            if (part) { addPartToMap(part, item.quantity, item.room || "", item.deviceType || "", item.quantity); matched = true; }
-          }
-          // Match box type
-          if (assembly.boxType) {
-            const part = findPart(assembly.boxType);
-            if (part) { addPartToMap(part, item.quantity, item.room || "", item.deviceType || "", item.quantity); matched = true; }
-          }
-          // Match cover plate
-          if (assembly.coverPlate) {
-            const part = findPart(assembly.coverPlate);
-            if (part) { addPartToMap(part, item.quantity, item.room || "", item.deviceType || "", item.quantity); matched = true; }
-          }
-          // Match misc parts (comma-separated)
-          if (assembly.miscParts) {
-            for (const mp of assembly.miscParts.split(",").map(s => s.trim()).filter(Boolean)) {
-              const part = findPart(mp);
-              if (part) { addPartToMap(part, item.quantity, item.room || "", item.deviceType || "", item.quantity); matched = true; }
+
+        // Look up explicit parts mapping by symbolType
+        const partsForAssembly = assembly.symbolType ? ASSEMBLY_PARTS_MAP[assembly.symbolType] : undefined;
+        if (partsForAssembly) {
+          for (const { part: partName, qty: partQty } of partsForAssembly) {
+            const catalogPart = partsByName.get(partName);
+            if (catalogPart) {
+              addPartToMap(catalogPart, partQty * item.quantity, item.room || "", item.deviceType || "", item.quantity);
             }
           }
-          if (!matched) {
+        } else {
+          // No explicit mapping — fall back to assembly_parts junction table
+          const linkedParts = await storage.getAssemblyParts(assembly.id);
+          if (linkedParts.length > 0) {
+            for (const ap of linkedParts) {
+              addPartToMap(ap.part, ap.quantity * item.quantity, item.room || "", item.deviceType || "", item.quantity);
+            }
+          } else {
             unmatchedItems.push({ deviceType: item.deviceType, room: item.room, quantity: item.quantity, materialCost: item.materialCost });
           }
         }
@@ -1493,8 +1542,8 @@ export async function registerRoutes(
           breakerCounts.set(breakerName, { name: breakerName, count: 1, descriptions: [c.description] });
         }
       }
-      for (const [breakerName, data] of Array.from(breakerCounts.entries())) {
-        const part = findPart(breakerName);
+      for (const [, data] of Array.from(breakerCounts.entries())) {
+        const part = partsByName.get(data.name);
         if (part) {
           addPartToMap(part, data.count, "Panel", `Breakers (${data.descriptions.slice(0, 3).join(", ")}${data.descriptions.length > 3 ? "..." : ""})`, data.count);
         }
