@@ -17,7 +17,7 @@ import {
   AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
   AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger
 } from "@/components/ui/alert-dialog";
-import { Calculator, ArrowRight, FileText, Trash2, Search, ArrowUpDown, Plus } from "lucide-react";
+import { Calculator, ArrowRight, FileText, Trash2, Search, ArrowUpDown, Plus, FolderOpen } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Estimate, Project } from "@shared/schema";
@@ -30,6 +30,9 @@ export default function Estimates() {
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newProjectId, setNewProjectId] = useState("");
+  const [showNewProject, setShowNewProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectAddress, setNewProjectAddress] = useState("");
 
   const { data: estimates, isLoading } = useQuery<Estimate[]>({
     queryKey: ["/api/estimates"],
@@ -53,6 +56,29 @@ export default function Estimates() {
     },
   });
 
+  const createProjectMutation = useMutation({
+    mutationFn: async ({ name, address }: { name: string; address?: string }) => {
+      const res = await apiRequest("POST", "/api/projects", {
+        name,
+        clientName: name,
+        address: address || null,
+        dwellingType: "single",
+      });
+      return res.json();
+    },
+    onSuccess: (project: Project) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
+      setNewProjectId(project.id.toString());
+      setShowNewProject(false);
+      setNewProjectName("");
+      setNewProjectAddress("");
+      toast({ title: "Project created" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error creating project", description: err.message, variant: "destructive" });
+    },
+  });
+
   const createEstimateMutation = useMutation({
     mutationFn: async ({ name, projectId }: { name: string; projectId: number }) => {
       const res = await apiRequest("POST", "/api/estimates", { name, projectId });
@@ -65,6 +91,7 @@ export default function Estimates() {
       setCreateOpen(false);
       setNewName("");
       setNewProjectId("");
+      setShowNewProject(false);
       navigate(`/estimates/${data.id}`);
     },
     onError: (err: Error) => {
@@ -244,16 +271,71 @@ export default function Estimates() {
           <div className="space-y-4">
             <div className="space-y-2">
               <Label>Project</Label>
-              <Select value={newProjectId} onValueChange={setNewProjectId}>
-                <SelectTrigger data-testid="select-estimate-project">
-                  <SelectValue placeholder="Select a project..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {(projects || []).map(p => (
-                    <SelectItem key={p.id} value={p.id.toString()}>{p.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {!showNewProject ? (
+                <div className="space-y-2">
+                  <Select value={newProjectId} onValueChange={(val) => {
+                    if (val === "__new__") {
+                      setShowNewProject(true);
+                      setNewProjectId("");
+                    } else {
+                      setNewProjectId(val);
+                    }
+                  }}>
+                    <SelectTrigger data-testid="select-estimate-project">
+                      <SelectValue placeholder="Select a project..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__new__">
+                        <div className="flex items-center gap-2 text-primary">
+                          <Plus className="w-3 h-3" />
+                          Create New Project
+                        </div>
+                      </SelectItem>
+                      {(projects || []).map(p => (
+                        <SelectItem key={p.id} value={p.id.toString()}>
+                          <div className="flex items-center gap-2">
+                            <FolderOpen className="w-3 h-3" />
+                            {p.name}
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : (
+                <div className="space-y-2 p-3 rounded-md border bg-muted/30">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-medium">New Project</p>
+                    <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setShowNewProject(false)}>
+                      Cancel
+                    </Button>
+                  </div>
+                  <Input
+                    placeholder="Project name"
+                    value={newProjectName}
+                    onChange={(e) => setNewProjectName(e.target.value)}
+                    data-testid="input-new-project-name"
+                  />
+                  <Input
+                    placeholder="Address (optional)"
+                    value={newProjectAddress}
+                    onChange={(e) => setNewProjectAddress(e.target.value)}
+                    data-testid="input-new-project-address"
+                  />
+                  <Button
+                    size="sm"
+                    className="w-full"
+                    disabled={!newProjectName.trim() || createProjectMutation.isPending}
+                    onClick={() => createProjectMutation.mutate({
+                      name: newProjectName.trim(),
+                      address: newProjectAddress.trim() || undefined,
+                    })}
+                    data-testid="button-save-new-project"
+                  >
+                    {createProjectMutation.isPending ? "Creating..." : "Save Project"}
+                  </Button>
+                </div>
+              )}
             </div>
             <div className="space-y-2">
               <Label>Estimate Name</Label>
@@ -265,7 +347,7 @@ export default function Estimates() {
               />
             </div>
             <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
+              <Button variant="outline" onClick={() => { setCreateOpen(false); setShowNewProject(false); }}>Cancel</Button>
               <Button
                 disabled={!newProjectId || !newName.trim() || createEstimateMutation.isPending}
                 onClick={() => createEstimateMutation.mutate({ name: newName.trim(), projectId: parseInt(newProjectId) })}
