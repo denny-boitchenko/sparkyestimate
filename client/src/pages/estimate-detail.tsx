@@ -31,7 +31,7 @@ import {
   Accordion, AccordionContent, AccordionItem, AccordionTrigger
 } from "@/components/ui/accordion";
 import {
-  ArrowLeft, Plus, Trash2, DollarSign, Clock, Cable,
+  ArrowLeft, ArrowRight, Plus, Trash2, DollarSign, Clock, Cable,
   Package, Zap, ShieldCheck, Wrench, RefreshCw, Play,
   Download, FileText, FileSpreadsheet, ScanLine, FileOutput,
   ChevronDown, Users, Layers, AlertTriangle
@@ -131,6 +131,7 @@ export default function EstimateDetail() {
   const { toast } = useToast();
   const [addItemOpen, setAddItemOpen] = useState(false);
   const [addCircuitOpen, setAddCircuitOpen] = useState(false);
+  const [addSubpanelOpen, setAddSubpanelOpen] = useState(false);
   const [addServiceOpen, setAddServiceOpen] = useState(false);
   const [createDeviceOpen, setCreateDeviceOpen] = useState(false);
   const [pendingDeviceItemId, setPendingDeviceItemId] = useState<number | null>(null);
@@ -311,6 +312,42 @@ export default function EstimateDetail() {
       queryClient.invalidateQueries({ queryKey: ["/api/estimates", estimateId, "panel-circuits"] });
       toast({ title: "Circuit added" });
       setAddCircuitOpen(false);
+    },
+  });
+
+  const addSubpanelMutation = useMutation({
+    mutationFn: async ({ name, amps }: { name: string; amps: number }) => {
+      // Create feeder circuit in Main Panel
+      await apiRequest("POST", "/api/panel-circuits", {
+        estimateId,
+        circuitNumber: (circuits?.length || 0) + 1,
+        amps,
+        poles: 2,
+        description: `${name} Feeder`,
+        wireType: amps <= 60 ? "6/3 NMD-90" : "3/3 NMD-90",
+        panelName: "Main Panel",
+        isGfci: false,
+        isAfci: false,
+        outletCount: 0,
+      });
+      // Create first spare circuit in the new subpanel so it appears
+      await apiRequest("POST", "/api/panel-circuits", {
+        estimateId,
+        circuitNumber: 1,
+        amps: 15,
+        poles: 1,
+        description: "Spare",
+        wireType: "14/2 NMD-90",
+        panelName: name,
+        isGfci: false,
+        isAfci: false,
+        outletCount: 0,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/estimates", estimateId, "panel-circuits"] });
+      toast({ title: "Subpanel added" });
+      setAddSubpanelOpen(false);
     },
   });
 
@@ -2596,6 +2633,10 @@ export default function EstimateDetail() {
                   <Plus className="w-4 h-4 mr-1" />
                   Add Circuit
                 </Button>
+                <Button size="sm" variant="outline" onClick={() => setAddSubpanelOpen(true)} data-testid="button-add-subpanel">
+                  <Plus className="w-4 h-4 mr-1" />
+                  Add Subpanel
+                </Button>
               </div>
             </CardHeader>
             <CardContent>
@@ -2614,11 +2655,14 @@ export default function EstimateDetail() {
                   {(() => {
                     // Group circuits by panelName
                     const panelGroups = new Map<string, typeof circuits>();
+                    const allPanelNames = new Set<string>(["Main Panel"]);
                     for (const circuit of circuits!) {
                       const panel = (circuit as any).panelName || "Main Panel";
+                      allPanelNames.add(panel);
                       if (!panelGroups.has(panel)) panelGroups.set(panel, []);
                       panelGroups.get(panel)!.push(circuit);
                     }
+                    const panelNamesList = Array.from(allPanelNames);
                     return Array.from(panelGroups.entries()).map(([panelName, panelCircuits]) => {
                       const totalAmps = panelCircuits.reduce((s, c) => s + (c.amps * c.poles), 0);
                       return (
@@ -2715,14 +2759,31 @@ export default function EstimateDetail() {
                                       </Badge>
                                     </TableCell>
                                     <TableCell>
-                                      <Button
-                                        size="icon"
-                                        variant="ghost"
-                                        onClick={() => setDeleteTarget({ type: "circuit", ids: [circuit.id], label: `Circuit #${circuit.circuitNumber} (${circuit.description})` })}
-                                        data-testid={`button-delete-circuit-${circuit.id}`}
-                                      >
-                                        <Trash2 className="w-4 h-4" />
-                                      </Button>
+                                      <div className="flex items-center gap-1">
+                                        {panelNamesList.length > 1 && (
+                                          <Select
+                                            value={panelName}
+                                            onValueChange={(v) => updateCircuitMutation.mutate({ id: circuit.id, panelName: v } as any)}
+                                          >
+                                            <SelectTrigger className="h-7 w-7 p-0 [&>svg]:hidden" title="Move to panel">
+                                              <ArrowRight className="w-3.5 h-3.5" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                              {panelNamesList.filter(n => n !== panelName).map(n => (
+                                                <SelectItem key={n} value={n}>Move to {n}</SelectItem>
+                                              ))}
+                                            </SelectContent>
+                                          </Select>
+                                        )}
+                                        <Button
+                                          size="icon"
+                                          variant="ghost"
+                                          onClick={() => setDeleteTarget({ type: "circuit", ids: [circuit.id], label: `Circuit #${circuit.circuitNumber} (${circuit.description})` })}
+                                          data-testid={`button-delete-circuit-${circuit.id}`}
+                                        >
+                                          <Trash2 className="w-4 h-4" />
+                                        </Button>
+                                      </div>
                                     </TableCell>
                                   </TableRow>
                                 ))}
@@ -3289,6 +3350,23 @@ export default function EstimateDetail() {
         onAdd={(data) => addCircuitMutation.mutate(data)}
         isPending={addCircuitMutation.isPending}
         existingCount={circuits?.length || 0}
+        panelNames={(() => {
+          const names = new Set<string>(["Main Panel"]);
+          circuits?.forEach(c => names.add((c as any).panelName || "Main Panel"));
+          return Array.from(names);
+        })()}
+      />
+
+      <AddSubpanelDialog
+        open={addSubpanelOpen}
+        onOpenChange={setAddSubpanelOpen}
+        onAdd={(data) => addSubpanelMutation.mutate(data)}
+        isPending={addSubpanelMutation.isPending}
+        existingPanels={(() => {
+          const names = new Set<string>(["Main Panel"]);
+          circuits?.forEach(c => names.add((c as any).panelName || "Main Panel"));
+          return Array.from(names);
+        })()}
       />
 
       <AddServiceDialog
@@ -3540,12 +3618,13 @@ function AddItemDialog({ open, onOpenChange, assemblies, onAdd, isPending }: {
   );
 }
 
-function AddCircuitDialog({ open, onOpenChange, onAdd, isPending, existingCount }: {
+function AddCircuitDialog({ open, onOpenChange, onAdd, isPending, existingCount, panelNames }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   onAdd: (data: any) => void;
   isPending: boolean;
   existingCount: number;
+  panelNames: string[];
 }) {
   const [form, setForm] = useState({
     circuitNumber: existingCount + 1,
@@ -3553,6 +3632,7 @@ function AddCircuitDialog({ open, onOpenChange, onAdd, isPending, existingCount 
     poles: 1,
     description: "",
     wireType: "14/2 NMD-90",
+    panelName: "Main Panel",
     isGfci: false,
     isAfci: false,
   });
@@ -3611,13 +3691,31 @@ function AddCircuitDialog({ open, onOpenChange, onAdd, isPending, existingCount 
               data-testid="input-new-circuit-desc"
             />
           </div>
-          <div className="space-y-2">
-            <Label>Wire Type</Label>
-            <Input
-              value={form.wireType}
-              onChange={(e) => setForm(p => ({ ...p, wireType: e.target.value }))}
-              data-testid="input-new-circuit-wire"
-            />
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <Label>Wire Type</Label>
+              <Input
+                value={form.wireType}
+                onChange={(e) => setForm(p => ({ ...p, wireType: e.target.value }))}
+                data-testid="input-new-circuit-wire"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Panel</Label>
+              <Select
+                value={form.panelName}
+                onValueChange={(v) => setForm(p => ({ ...p, panelName: v }))}
+              >
+                <SelectTrigger className="h-9 text-sm" data-testid="select-new-circuit-panel">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {panelNames.map(name => (
+                    <SelectItem key={name} value={name}>{name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
           <div className="flex gap-6">
             <div className="flex items-center gap-2">
@@ -3643,6 +3741,74 @@ function AddCircuitDialog({ open, onOpenChange, onAdd, isPending, existingCount 
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
             <Button type="submit" disabled={isPending} data-testid="button-submit-circuit">
               {isPending ? "Adding..." : "Add Circuit"}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AddSubpanelDialog({ open, onOpenChange, onAdd, isPending, existingPanels }: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onAdd: (data: { name: string; amps: number }) => void;
+  isPending: boolean;
+  existingPanels: string[];
+}) {
+  const [name, setName] = useState("");
+  const [amps, setAmps] = useState(60);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const panelName = name.trim() || `Sub-Panel ${existingPanels.length}`;
+    if (existingPanels.includes(panelName)) {
+      return;
+    }
+    onAdd({ name: panelName, amps });
+    setName("");
+    setAmps(60);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Add Subpanel</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label>Panel Name</Label>
+            <Input
+              placeholder="e.g., Garage Sub-Panel"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              data-testid="input-subpanel-name"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Amperage</Label>
+            <Select value={amps.toString()} onValueChange={(v) => setAmps(parseInt(v))}>
+              <SelectTrigger className="h-9 text-sm" data-testid="select-subpanel-amps">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="30">30A</SelectItem>
+                <SelectItem value="60">60A</SelectItem>
+                <SelectItem value="100">100A</SelectItem>
+                <SelectItem value="125">125A</SelectItem>
+                <SelectItem value="200">200A</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            A {amps}A 2-pole feeder circuit will be added to the Main Panel automatically.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+            <Button type="submit" disabled={isPending} data-testid="button-submit-subpanel">
+              {isPending ? "Adding..." : "Add Subpanel"}
             </Button>
           </div>
         </form>
