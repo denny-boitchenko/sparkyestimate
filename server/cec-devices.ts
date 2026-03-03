@@ -975,25 +975,7 @@ export function generateDevicesForRoom(room: DetectedRoom, dwellingContext?: Dwe
     }
   }
 
-  // ── Suite / Multi-Unit Panel ──
-  if (dwellingContext) {
-    const isSuiteRoom = (
-      dwellingContext.dwellingType === "single" &&
-      dwellingContext.hasLegalSuite &&
-      (room.room_type === "basement_finished" ||
-       room.room_name.toUpperCase().includes("SUITE") ||
-       room.room_name.toUpperCase().startsWith("S.") ||
-       room.room_name.toUpperCase().startsWith("S "))
-    );
-
-    if (isSuiteRoom) {
-      devices.push({
-        type: "subpanel",
-        count: 1,
-        note: "CEC 26-256 — 60A minimum sub-panel for secondary suite. Requires dedicated feeder from main panel.",
-      });
-    }
-  }
+  // Sub-panel is added once per suite in generateWholeHouseDevices(), not per room
 
   return devices;
 }
@@ -1026,6 +1008,7 @@ export function generateWholeHouseDevices(rooms: DetectedRoom[], dwellingContext
   // ── Suite / Multi-Unit Extras ──
   if (dwellingContext) {
     if (dwellingContext.dwellingType === "single" && dwellingContext.hasLegalSuite) {
+      devices.push({ type: "subpanel", count: 1, note: "CEC 26-256 — 60A minimum sub-panel for secondary suite. Requires dedicated feeder from main panel." });
       devices.push({ type: "smoke_co_combo", count: 2, note: "CEC 32-110 — Smoke/CO alarms for secondary suite (bedroom + hallway)" });
       devices.push({ type: "doorbell", count: 1, note: "Standard — Suite separate entrance doorbell" });
       devices.push({ type: "thermostat", count: 1, note: "Standard — Suite separate HVAC thermostat" });
