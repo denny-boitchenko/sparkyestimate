@@ -705,7 +705,7 @@ export default function AiAnalysisPage() {
     if (!analysisResults?.rooms) return;
     const rows: string[][] = [["Device Type", "Room", "Floor", "Count", "CEC Reference"]];
     analysisResults.rooms.forEach((room, roomIdx) => {
-      room.devices.forEach((device, devIdx) => {
+      (room.devices || []).forEach((device, devIdx) => {
         const count = getDeviceCount(roomIdx, devIdx, device.count);
         const escape = (s: string) => `"${(s || "").replace(/"/g, '""')}"`;
         rows.push([
@@ -1340,7 +1340,7 @@ export default function AiAnalysisPage() {
                         return filteredFloors.map(([floor, rooms]) => {
                           const floorExpanded = expandedFloors.has(floor);
                           const floorDeviceCount = rooms.reduce((sum: number, { room, roomIdx }: RoomEntry) =>
-                            sum + room.devices.reduce((s: number, d: RoomData["devices"][0], di: number) => s + getDeviceCount(roomIdx, di, d.count), 0), 0
+                            sum + (room.devices || []).reduce((s: number, d: RoomData["devices"][0], di: number) => s + getDeviceCount(roomIdx, di, d.count), 0), 0
                           );
 
                           return (
@@ -1370,7 +1370,7 @@ export default function AiAnalysisPage() {
                                 <div className="divide-y">
                                   {rooms.map(({ roomIdx, room }: RoomEntry) => {
                                     const roomExpanded = expandedRooms.has(roomIdx) || !!roomSearch;
-                                    const roomDeviceCount = room.devices.reduce(
+                                    const roomDeviceCount = (room.devices || []).reduce(
                                       (s: number, d: RoomData["devices"][0], di: number) => s + getDeviceCount(roomIdx, di, d.count), 0
                                     );
                                     return (
@@ -1443,7 +1443,7 @@ export default function AiAnalysisPage() {
                                                 </TableRow>
                                               </TableHeader>
                                               <TableBody>
-                                                {room.devices.map((device, devIdx) => {
+                                                {(room.devices || []).map((device, devIdx) => {
                                                   const Icon = getDeviceIcon(device.type);
                                                   const count = getDeviceCount(roomIdx, devIdx, device.count);
                                                   const isEdited = editedCounts[`${roomIdx}-${devIdx}`] !== undefined;

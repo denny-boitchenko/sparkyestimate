@@ -74,6 +74,13 @@ const DEFAULT_ASSEMBLIES = [
   { name: "30A RV Outlet", symbolType: "rv_outlet", category: "receptacles", device: "30A RV outlet, NEMA TT-30", boxType: "Weatherproof box", coverPlate: "RV cover", miscParts: "Wire nuts, WP connector", wireType: "10/2 NMD-90", wireFootage: 30, laborHours: 0.40, materialCost: 37.00 },
   { name: "15A 240V Outlet", symbolType: "outlet_240v_15a", category: "receptacles", device: "15A 240V outlet", boxType: "Single-gang device box, NM", coverPlate: "Single-gang cover", miscParts: "Wire nuts, ground pigtail, box connector", wireType: "14/2 NMD-90", wireFootage: 20, laborHours: 0.30, materialCost: 16.44 },
   { name: "20A 240V Outlet", symbolType: "outlet_240v_20a", category: "receptacles", device: "20A 240V outlet", boxType: "Single-gang device box, NM", coverPlate: "Single-gang cover", miscParts: "Wire nuts, ground pigtail, box connector", wireType: "12/2 NMD-90", wireFootage: 20, laborHours: 0.30, materialCost: 20.44 },
+  // Infrastructure circuits — room-type intelligence (kitchen, laundry, mechanical)
+  { name: "HRV/ERV Circuit", symbolType: "hrv", category: "specialty", device: "HRV/ERV wiring connection", boxType: "Junction box", coverPlate: "N/A", miscParts: "Wire nuts, cable connectors, disconnect switch", wireType: "14/2 NMD-90", wireFootage: 25, laborHours: 0.50, materialCost: 35.00 },
+  { name: "Washer Receptacle (20A)", symbolType: "washer", category: "receptacles", device: "20A dedicated washer receptacle", boxType: "Single-gang device box, NM", coverPlate: "Single-gang duplex cover", miscParts: "Wire nuts, ground pigtail, box connector", wireType: "12/2 NMD-90", wireFootage: 20, laborHours: 0.25, materialCost: 15.00 },
+  { name: "Dishwasher Circuit", symbolType: "dishwasher", category: "specialty", device: "Dishwasher wiring connection", boxType: "Junction box", coverPlate: "N/A", miscParts: "Wire nuts, cable connectors, box connector", wireType: "14/2 NMD-90", wireFootage: 30, laborHours: 0.25, materialCost: 15.00 },
+  { name: "Hot Water Tank Circuit", symbolType: "hwt", category: "specialty", device: "Hot water tank wiring connection", boxType: "Junction box", coverPlate: "N/A", miscParts: "Wire nuts, cable connectors, disconnect switch", wireType: "14/2 NMD-90", wireFootage: 25, laborHours: 0.75, materialCost: 30.00 },
+  { name: "Microwave Receptacle (20A)", symbolType: "microwave", category: "receptacles", device: "20A dedicated microwave receptacle", boxType: "Single-gang device box, NM", coverPlate: "Single-gang duplex cover", miscParts: "Wire nuts, ground pigtail, box connector", wireType: "12/2 NMD-90", wireFootage: 25, laborHours: 0.25, materialCost: 15.00 },
+  { name: "Garburator Circuit", symbolType: "garburator", category: "specialty", device: "Garburator wiring connection", boxType: "Junction box", coverPlate: "N/A", miscParts: "Wire nuts, cable connectors, switch", wireType: "14/2 NMD-90", wireFootage: 30, laborHours: 0.30, materialCost: 15.00 },
 ];
 
 export async function seedDatabase() {
@@ -84,6 +91,16 @@ export async function seedDatabase() {
       await db.insert(deviceAssemblies).values({ ...assembly, isDefault: true });
     }
     console.log(`Seeded ${DEFAULT_ASSEMBLIES.length} device assemblies`);
+  } else {
+    // Additive seeding: insert any new assemblies missing from existing DB
+    const existingSymbolTypes = new Set(existingAssemblies.map(a => a.symbolType));
+    const missing = DEFAULT_ASSEMBLIES.filter(a => !existingSymbolTypes.has(a.symbolType));
+    if (missing.length > 0) {
+      for (const assembly of missing) {
+        await db.insert(deviceAssemblies).values({ ...assembly, isDefault: true });
+      }
+      console.log(`Added ${missing.length} new assemblies: ${missing.map(a => a.symbolType).join(", ")}`);
+    }
   }
 
   const existingProjects = await db.select().from(projects);

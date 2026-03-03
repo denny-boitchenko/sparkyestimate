@@ -62,6 +62,7 @@ export interface IStorage {
   createEstimateItem(data: InsertEstimateItem): Promise<EstimateItem>;
   updateEstimateItem(id: number, data: Partial<InsertEstimateItem>): Promise<EstimateItem | undefined>;
   deleteEstimateItem(id: number): Promise<void>;
+  deleteEstimateItemsByEstimate(estimateId: number): Promise<number>;
 
   getInvoices(): Promise<Invoice[]>;
   getInvoice(id: number): Promise<Invoice | undefined>;
@@ -284,6 +285,11 @@ export class DatabaseStorage implements IStorage {
 
   async deleteEstimateItem(id: number): Promise<void> {
     await db.delete(estimateItems).where(eq(estimateItems.id, id));
+  }
+
+  async deleteEstimateItemsByEstimate(estimateId: number): Promise<number> {
+    const deleted = await db.delete(estimateItems).where(eq(estimateItems.estimateId, estimateId)).returning();
+    return deleted.length;
   }
 
   async getInvoices(): Promise<Invoice[]> {

@@ -145,12 +145,12 @@ export interface DeviceAmpPattern {
 export const DEVICE_AMP_PATTERNS: DeviceAmpPattern[] = [
   {
     pattern: /\b(range|oven|stove|cooktop)\b/i,
-    amps: 40,
+    amps: 50,
     poles: 2,
     dedicated: true,
     gfci: false,
     afci: false,
-    wireType: "6/3 NMD-90",
+    wireType: "8/3 NMD-90",
     label: "Range/Oven",
   },
   {
@@ -175,12 +175,12 @@ export const DEVICE_AMP_PATTERNS: DeviceAmpPattern[] = [
   },
   {
     pattern: /\b(ev\s*charger|car\s*charger|level\s*2)\b/i,
-    amps: 40,
+    amps: 50,
     poles: 2,
     dedicated: true,
     gfci: false,
     afci: false,
-    wireType: "6/3 NMD-90",
+    wireType: "8/3 NMD-90",
     label: "EV Charger",
   },
   {
@@ -289,31 +289,186 @@ export function getWireTypeForAmps(
   return CEC_WIRE_SIZING[amps] || "14/2 NMD-90";
 }
 
+// ---------------------------------------------------------------------------
+// CEC Rule 8-200 Demand Load Calculation (Floor Area Method)
+// ---------------------------------------------------------------------------
+
+/** Standard nameplate wattages for common appliances (CEC Table 62 + typical) */
+export const APPLIANCE_NAMEPLATE_WATTS: Record<string, number> = {
+  "range":       12000,  // 12 kW nameplate → CEC Table 62 demand = 6000W for 1 unit
+  "oven":        12000,
+  "stove":       12000,
+  "cooktop":     12000,
+  "dryer":        6000,  // CEC default when nameplate not available
+  "a/c":          3600,  // 30A × 120V or 15A × 240V typical
+  "heat pump":    3600,
+  "condenser":    3600,
+  "ev charger":  10000,  // 50A × 200V typical Level 2
+  "hot tub":      9600,  // 40A × 240V
+  "pool pump":    2400,  // 20A × 120V
+  "baseboard":    1500,  // Per unit typical
+  "heater":       1500,
+  "furnace":      1800,  // 15A × 120V
+  "fridge":        600,  // Typical modern fridge
+  "refrigerator":  600,
+  "dishwasher":   1800,  // 15A × 120V
+  "garburator":    600,  // 1/2 HP typical
+  "disposal":      600,
+  "microwave":    1800,  // 20A × 120V typical
+  "hwt":          4500,  // Hot water tank (240V)
+  "water heater": 4500,
+  "hrv":           300,  // Heat recovery ventilator
+};
+
 /**
- * Calculate demand load per CEC Rule 8-200.
+ * CEC Table 62 — Range demand factor.
+ * For 1 range: 6,000W demand (regardless of nameplate up to 12 kW).
+ * For 2+ ranges: add per CEC Table 62 column B.
+ */
+export function rangeDemandWatts(count: number): number {
+  if (count <= 0) return 0;
+  if (count === 1) return 6000;
+  if (count === 2) return 9000;   // 2 ranges
+  return 9000 + (count - 2) * 2500; // 3+
+}
+
+/** Appliance description match for heating loads */
+const HEATING_PATTERN = /\b(baseboard|electric\s*heat|heater|furnace|infloor|radiant|boiler)\b/i;
+/** Appliance description match for cooling loads */
+const COOLING_PATTERN = /\b(a\/c|air\s*condition|heat\s*pump|condenser|cooling)\b/i;
+/** Appliance description match for ranges (CEC Table 62) */
+const RANGE_PATTERN = /\b(range|oven|stove|cooktop)\b/i;
+
+/**
+ * Describes an appliance for demand calculation purposes.
+ */
+export interface ApplianceLoad {
+  description: string;
+  watts: number;
+  quantity: number;
+}
+
+/**
+ * Result of a CEC 8-200 demand calculation with full breakdown.
+ */
+export interface DemandResult {
+  /** Floor area in ft² used for basic load */
+  squareFootage: number;
+  /** Basic load per CEC 8-200(1)(b)(i): 5,000W first 90m² + 1,000W/90m² */
+  basicLoadWatts: number;
+  /** First 5,000W of basic at 100% */
+  basicFirst5000: number;
+  /** Remainder of basic at 25% */
+  basicRemainder25: number;
+  /** Total basic demand (first5000 + remainder25) */
+  basicDemand: number;
+  /** Range demand per CEC Table 62 */
+  rangeDemand: number;
+  /** Heating load total (nameplate) */
+  heatingLoad: number;
+  /** Cooling load total (nameplate) */
+  coolingLoad: number;
+  /** Larger of heating/cooling (interlock rule) */
+  heatingCoolingDemand: number;
+  /** Other large appliance demand (dryer, EV, hot tub, etc.) at 100% nameplate */
+  otherApplianceDemand: number;
+  /** Total demand in watts */
+  totalDemandWatts: number;
+  /** Total demand in amps @ 240V */
+  totalDemandAmps: number;
+}
+
+/**
+ * Calculate demand load per CEC Rule 8-200(1)(b) (single dwelling).
  *
- * First 5000 W at 100%, remainder at 25%, plus large appliances at 100%.
+ * Steps:
+ * 1. Basic load per CEC 8-200(1)(b)(i): 5,000W for first 90 m², +1,000W per additional 90 m²
+ * 2. Apply demand factor (Table 14): first 5,000W @ 100%, remainder @ 25%
+ * 3. Add range demand per CEC Table 62
+ * 4. Heating/cooling interlock: use larger of the two, not both (8-200(1)(b)(ii))
+ * 5. Add all other appliances at 100% nameplate (8-200(1)(b)(iv))
  *
- * @param basicLoadWatts - Total basic load (lighting + receptacles) in watts
- * @param largeApplianceWatts - Total large appliance load (range, dryer, A/C, etc.)
- * @returns Demand load in watts, rounded up to the nearest whole number
+ * @param squareFootage - Total heated floor area in ft²
+ * @param appliances - Array of appliance loads from the panel schedule
+ * @returns Full demand breakdown
+ */
+export function calculateDemandCEC8200(
+  squareFootage: number,
+  appliances: ApplianceLoad[],
+): DemandResult {
+  // 1. Basic load per CEC 8-200(1)(b)(i):
+  //    5,000W for first 90 m², +1,000W for each additional 90 m² (or portion)
+  const sqm = squareFootage * 0.0929;
+  const basicLoadWatts = sqm <= 0 ? 0 : 5000 + Math.ceil(Math.max(0, sqm - 90) / 90) * 1000;
+
+  // 2. Apply demand factor (CEC Table 14) to basic load
+  const basicFirst5000 = Math.min(basicLoadWatts, 5000);
+  const basicRemainder25 = Math.max(0, basicLoadWatts - 5000) * 0.25;
+  const basicDemand = basicFirst5000 + basicRemainder25;
+
+  // Classify appliances
+  let rangeCount = 0;
+  let heatingLoad = 0;
+  let coolingLoad = 0;
+  let otherApplianceDemand = 0;
+
+  for (const app of appliances) {
+    const desc = app.description.toLowerCase();
+
+    if (RANGE_PATTERN.test(desc)) {
+      rangeCount += app.quantity;
+    } else if (HEATING_PATTERN.test(desc)) {
+      heatingLoad += app.watts * app.quantity;
+    } else if (COOLING_PATTERN.test(desc)) {
+      coolingLoad += app.watts * app.quantity;
+    } else {
+      // All other dedicated appliances at 100% nameplate
+      otherApplianceDemand += app.watts * app.quantity;
+    }
+  }
+
+  // 3. Range demand per CEC Table 62
+  const rangeDemand = rangeDemandWatts(rangeCount);
+
+  // 4. Heating/cooling interlock — use the larger, not both
+  const heatingCoolingDemand = Math.max(heatingLoad, coolingLoad);
+
+  // 5. Sum it all up
+  const totalDemandWatts = Math.ceil(
+    basicDemand + rangeDemand + heatingCoolingDemand + otherApplianceDemand
+  );
+  const totalDemandAmps = Math.ceil(totalDemandWatts / 240);
+
+  return {
+    squareFootage,
+    basicLoadWatts,
+    basicFirst5000,
+    basicRemainder25,
+    basicDemand,
+    rangeDemand,
+    heatingLoad,
+    coolingLoad,
+    heatingCoolingDemand,
+    otherApplianceDemand,
+    totalDemandWatts,
+    totalDemandAmps,
+  };
+}
+
+/**
+ * @deprecated Use calculateDemandCEC8200 instead. Kept for backward compatibility.
  */
 export function calculateDemandLoad(
   basicLoadWatts: number,
   largeApplianceWatts: number,
 ): number {
   let demand = 0;
-
-  // Basic load: first 5000 W at 100%, remainder at 25%
   if (basicLoadWatts <= 5000) {
     demand += basicLoadWatts;
   } else {
     demand += 5000 + (basicLoadWatts - 5000) * 0.25;
   }
-
-  // Large appliances at 100%
   demand += largeApplianceWatts;
-
   return Math.ceil(demand);
 }
 

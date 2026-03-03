@@ -378,7 +378,10 @@ export default function AiAnalysisPanel({ projectId, estimateId }: AiAnalysisPan
       queryClient.invalidateQueries({ queryKey: [`/api/estimates/${estimateId}`] });
       queryClient.invalidateQueries({ queryKey: [`/api/estimates/${estimateId}/items`] });
       queryClient.invalidateQueries({ queryKey: ["/api/estimates"] });
-      toast({ title: "Line items applied", description: `Added ${data.itemsCreated || 0} line items to this estimate` });
+      const msg = data.deletedCount > 0
+        ? `Replaced ${data.deletedCount} old items with ${data.itemsCreated || 0} new line items`
+        : `Added ${data.itemsCreated || 0} line items to this estimate`;
+      toast({ title: "Line items applied", description: msg });
       setWizardStep("upload");
       setCurrentAnalysisId(null);
     },
@@ -1543,7 +1546,7 @@ export default function AiAnalysisPanel({ projectId, estimateId }: AiAnalysisPan
             )}
             <Button
               onClick={() => applyToEstimateMutation.mutate()}
-              disabled={applyToEstimateMutation.isPending || currentAnalysis?.status === "estimate_generated"}
+              disabled={applyToEstimateMutation.isPending}
               data-testid="button-apply-to-estimate"
             >
               {applyToEstimateMutation.isPending ? (
@@ -1553,8 +1556,8 @@ export default function AiAnalysisPanel({ projectId, estimateId }: AiAnalysisPan
                 </>
               ) : currentAnalysis?.status === "estimate_generated" ? (
                 <>
-                  <CheckCircle2 className="w-4 h-4 mr-2" />
-                  Already Applied
+                  <RefreshCw className="w-4 h-4 mr-2" />
+                  Re-apply to Estimate
                 </>
               ) : (
                 <>

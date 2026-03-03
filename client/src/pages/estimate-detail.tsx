@@ -660,9 +660,17 @@ export default function EstimateDetail() {
       if (estimate?.includePermit && permitFeeData?.fee) {
         pdfPermitFee = permitFeeData.fee;
         serviceRows.push([
-          { content: "Electrical Permit", styles: { fontStyle: "normal" as const, fontSize: 9 } },
+          { content: "Electrical Permit (TSBC)", styles: { fontStyle: "normal" as const, fontSize: 9 } },
           { content: `$${pdfPermitFee.toFixed(2)}`, styles: { halign: "right" as const, fontSize: 9 } }
         ]);
+      }
+      const pdfHandlingFee = estimate?.includePermit ? ((estimate as any)?.permitHandlingFee || 0) : 0;
+      if (pdfHandlingFee > 0) {
+        serviceRows.push([
+          { content: "Permit Handling Fee", styles: { fontStyle: "normal" as const, fontSize: 9 } },
+          { content: `$${pdfHandlingFee.toFixed(2)}`, styles: { halign: "right" as const, fontSize: 9 } }
+        ]);
+        pdfPermitFee += pdfHandlingFee;
       }
 
       if (serviceRows.length > 0) {
@@ -1186,7 +1194,9 @@ export default function EstimateDetail() {
   const overhead = subtotal * (estimate.overheadPct / 100);
   const subtotalWithOverhead = subtotal + overhead;
   const profit = subtotalWithOverhead * (estimate.profitPct / 100);
-  const permitFee = estimate.includePermit ? (permitFeeData?.fee || 0) : 0;
+  const tsbcPermitFee = estimate.includePermit ? (permitFeeData?.fee || 0) : 0;
+  const permitHandlingFee = estimate.includePermit ? ((estimate as any)?.permitHandlingFee || 0) : 0;
+  const permitFee = tsbcPermitFee + permitHandlingFee;
   const grandTotal = subtotalWithOverhead + profit + permitFee;
 
   const totalCircuitAmps = (circuits || []).reduce((sum, c) => sum + c.amps * c.poles, 0);
@@ -1301,10 +1311,10 @@ export default function EstimateDetail() {
               <label htmlFor="include-permit" className="text-xs text-muted-foreground cursor-pointer">Permit Fee</label>
             </div>
             <p className="text-lg font-bold" data-testid="text-permit-fee">
-              ${estimate.includePermit ? (permitFeeData?.fee || 0).toFixed(2) : "0.00"}
+              ${estimate.includePermit ? permitFee.toFixed(2) : "0.00"}
             </p>
             {estimate.includePermit && permitFeeData?.label && (
-              <p className="text-xs text-muted-foreground truncate">{permitFeeData.label}</p>
+              <p className="text-xs text-muted-foreground truncate">{permitFeeData.label}{permitHandlingFee > 0 ? ` + $${permitHandlingFee} handling` : ""}</p>
             )}
           </CardContent>
         </Card>
@@ -1708,12 +1718,18 @@ export default function EstimateDetail() {
                   <span className="text-muted-foreground">Profit ({estimate.profitPct}%)</span>
                   <span>${profit.toFixed(2)}</span>
                 </div>
-                {estimate.includePermit && permitFee > 0 && (
+                {estimate.includePermit && tsbcPermitFee > 0 && (
                   <div className="flex justify-between gap-4 text-sm">
                     <span className="text-muted-foreground">
                       TSBC Permit Fee{permitFeeData?.label ? ` (${permitFeeData.label})` : ""}
                     </span>
-                    <span>${permitFee.toFixed(2)}</span>
+                    <span>${tsbcPermitFee.toFixed(2)}</span>
+                  </div>
+                )}
+                {estimate.includePermit && permitHandlingFee > 0 && (
+                  <div className="flex justify-between gap-4 text-sm">
+                    <span className="text-muted-foreground">Permit Handling Fee</span>
+                    <span>${permitHandlingFee.toFixed(2)}</span>
                   </div>
                 )}
                 <div className="border-t pt-2 flex justify-between gap-4 text-lg font-bold">
@@ -3637,6 +3653,40 @@ export default function EstimateDetail() {
                             </Button>
                           )}
                         </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Handling fee */}
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm">Permit Handling Fee</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-3">
+                        <p className="text-xs text-muted-foreground">
+                          Your fee for handling the permit application, inspections, and coordination. Added on top of the TSBC fee.
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm">$</span>
+                          <Input
+                            type="number"
+                            step="50"
+                            placeholder="0"
+                            value={(estimate as any)?.permitHandlingFee || ""}
+                            onChange={(e) => {
+                              const val = e.target.value === "" ? 0 : parseFloat(e.target.value);
+                              updateEstimateMutation.mutate({ permitHandlingFee: val } as any);
+                            }}
+                            className="w-40"
+                          />
+                        </div>
+                        {((estimate as any)?.permitHandlingFee || 0) > 0 && (
+                          <div className="flex justify-between text-sm font-medium border-t pt-2">
+                            <span>Total Permit Cost</span>
+                            <span>${((permitFeeData?.fee || 0) + ((estimate as any)?.permitHandlingFee || 0)).toFixed(2)}</span>
+                          </div>
+                        )}
                       </div>
                     </CardContent>
                   </Card>

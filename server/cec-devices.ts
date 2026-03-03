@@ -661,9 +661,12 @@ export function generateDevicesForRoom(room: DetectedRoom, dwellingContext?: Dwe
     devices.push({ type: "duplex_receptacle", count: 1, note: "Island 20A receptacle" });
     // Counter outlets: 4 KCP 20A (no counter GFI — only island has GFI)
     devices.push({ type: "duplex_receptacle", count: 4, note: "CEC 26-712(a) — Counter 20A receptacles (KCP)" });
-    // Dedicated circuits: range, DW, fridge
+    // Dedicated circuits: range, DW, fridge, microwave, garburator
     devices.push({ type: "range_outlet", count: 1, note: "CEC 26-744 — 240V range outlet" });
-    devices.push({ type: "dedicated_receptacle", count: 2, note: "Dedicated circuits: dishwasher, refrigerator" });
+    devices.push({ type: "dedicated_receptacle", count: 1, note: "Dedicated circuit: refrigerator" });
+    devices.push({ type: "dishwasher", count: 1, note: "Dedicated circuit: dishwasher (14/2)" });
+    devices.push({ type: "microwave", count: 1, note: "Dedicated 20A circuit: microwave (12/2)" });
+    devices.push({ type: "garburator", count: 1, note: "Dedicated circuit: garburator (14/2)" });
     devices.push({ type: "range_hood_fan", count: 1, note: "CEC 26-656(d) — Range hood exhaust" });
     // Switches: 4 single-pole (dining light, island pendants, kitchen pots, living/other)
     devices.push({ type: "single_pole_switch", count: 4, note: "Switches for dining light, island pendants, kitchen potlights, living/other" });
@@ -827,7 +830,7 @@ export function generateDevicesForRoom(room: DetectedRoom, dwellingContext?: Dwe
   // ══════════════════════════════════════════════════════════════
   } else if (room.room_type === "laundry_room") {
     devices.push({ type: "surface_mount_light", count: 1, note: "CEC 30-200 — Laundry ceiling light" });
-    devices.push({ type: "duplex_receptacle", count: 1, note: "CEC 26-654(b) — Washer dedicated receptacle" });
+    devices.push({ type: "washer", count: 1, note: "CEC 26-654(b) — 20A dedicated washer receptacle (12/2)" });
     devices.push({ type: "dryer_outlet", count: 1, note: "CEC 26-744(2) — Dryer NEMA 14-30 dedicated circuit" });
     devices.push({ type: "gfci_receptacle", count: 1, note: "CEC 26-720(e) — Additional GFI receptacle" });
     devices.push({ type: "single_pole_switch", count: 1, note: "Switch for light" });
@@ -884,6 +887,10 @@ export function generateDevicesForRoom(room: DetectedRoom, dwellingContext?: Dwe
     devices.push({ type: "duplex_receptacle", count: 3, note: "CEC 26-720(e)(iii) — Receptacles for mechanical room" });
     devices.push({ type: "single_pole_switch", count: 1, note: "Switch for light" });
     devices.push({ type: "panel_board", count: 1, note: "CEC 26-400 — 200A main panel, clear working space required" });
+    // Infrastructure: every new build mechanical room has furnace, HRV, HWT
+    devices.push({ type: "furnace_disconnect", count: 1, note: "Gas furnace wiring with disconnect switch" });
+    devices.push({ type: "hrv", count: 1, note: "HRV/ERV wiring connection" });
+    devices.push({ type: "hwt", count: 1, note: "Hot water tank wiring connection" });
 
   // ══════════════════════════════════════════════════════════════
   // WALK-IN CLOSET — ALWAYS 1 flush, 0 outlets (verified all 4 projects)
@@ -1009,6 +1016,10 @@ export function generateWholeHouseDevices(rooms: DetectedRoom[], dwellingContext
   const extraSmoke = Math.max(hallwayCount, 1) + (hasBasement ? 1 : 0);
   devices.push({ type: "smoke_co_combo", count: extraSmoke, note: "CEC 32-110(3) — Smoke/CO on each storey + hallways" });
 
+  // ── Bonding (house-level, not room-specific) ──
+  devices.push({ type: "gas_bond", count: 1, note: "CEC 10-406 — Gas piping bonding connection" });
+  devices.push({ type: "water_meter_bond", count: 1, note: "CEC 10-606 — Water meter bonding jumper" });
+
   // ── Suite / Multi-Unit Extras ──
   if (dwellingContext) {
     if (dwellingContext.dwellingType === "single" && dwellingContext.hasLegalSuite) {
@@ -1016,6 +1027,11 @@ export function generateWholeHouseDevices(rooms: DetectedRoom[], dwellingContext
       devices.push({ type: "doorbell", count: 1, note: "Standard — Suite separate entrance doorbell" });
       devices.push({ type: "thermostat", count: 1, note: "Standard — Suite separate HVAC thermostat" });
       devices.push({ type: "exterior_light", count: 1, note: "CEC 30-200 — Suite entrance exterior light" });
+      // Suite infrastructure duplicates — suite has its own furnace, HWT, DW, washer
+      devices.push({ type: "furnace_disconnect", count: 1, note: "Suite furnace wiring with disconnect" });
+      devices.push({ type: "hwt", count: 1, note: "Suite hot water tank wiring" });
+      devices.push({ type: "dishwasher", count: 1, note: "Suite dishwasher dedicated circuit" });
+      devices.push({ type: "washer", count: 1, note: "Suite 20A dedicated washer receptacle" });
     }
 
     if (["duplex", "triplex", "fourplex"].includes(dwellingContext.dwellingType)) {

@@ -444,6 +444,9 @@ export async function registerRoutes(
     };
     const circuits: CircuitData[] = [];
 
+    // Global smoke/CO collection — CEC requires ALL detectors on ONE interconnected circuit
+    const allSmokeItems: Array<{ room: string; item: typeof items[0] }> = [];
+
     // Group items by panel for multi-panel support (e.g., Main Panel + Suite Sub-Panel)
     const panelItemGroups = new Map<string, typeof items>();
     for (const item of items) {
@@ -537,7 +540,7 @@ export async function registerRoutes(
     const evChargers: Array<{ room: string; item: typeof items[0] }> = [];
     const furnaces: Array<{ room: string; item: typeof items[0] }> = [];
     const otherDedicated: Array<{ room: string; item: typeof items[0]; pattern: typeof cecRules.DEVICE_AMP_PATTERNS[0] }> = [];
-    const smokeItems: Array<{ room: string; item: typeof items[0] }> = [];
+    // (smokeItems collected globally in allSmokeItems above)
 
     // General room buckets
     const garageReceps: typeof items = [];
@@ -557,8 +560,8 @@ export async function registerRoutes(
       const exhaustItems: typeof items = [];
 
       for (const item of roomItemList) {
-        // Skip panel board / service entrance / meter items
-        if (/panel\s*board|service\s*entrance|meter|load\s*center/i.test(item.deviceType)) continue;
+        // Skip panel board / sub-panel / service entrance / meter items
+        if (/panel\s*board|sub.?panel|service\s*entrance|meter|load\s*center/i.test(item.deviceType)) continue;
 
         // Skip low-voltage items (Cat6, TV, doorbell, thermostat, etc.)
         if (cecRules.isLowVoltage(item.deviceType, item.description || undefined)) continue;
@@ -584,7 +587,7 @@ export async function registerRoutes(
           } else if (/furnace/i.test(match.label)) {
             furnaces.push({ room: normRoom, item });
           } else if (/smoke|co/i.test(match.label)) {
-            smokeItems.push({ room: normRoom, item });
+            allSmokeItems.push({ room: normRoom, item });
           } else if (isKitchenRoom(normRoom) && /fridge|refrigerator|dishwasher|garburator|microwave/i.test(match.label)) {
             kitchenDedicated.push({ item, label: match.label, room: normRoom });
           } else {
@@ -662,7 +665,6 @@ export async function registerRoutes(
     // =====================================================================
     if (allKitchenReceps.length > 0) {
       const count = totalOutlets(allKitchenReceps);
-      const desc = itemDesc(allKitchenReceps);
       // CEC requires minimum 2 split circuits; if >12 outlets per circuit, add more pairs
       const outletsPerSplit = Math.ceil(count / 2);
       const pairsNeeded = Math.max(1, Math.ceil(outletsPerSplit / cecRules.MAX_OUTLETS_PER_CIRCUIT));
@@ -670,14 +672,14 @@ export async function registerRoutes(
         const pairOutlets = Math.min(count - p * 24, 24); // 24 = 12 per split x 2
         circuits.push({
           priority: 1,
-          description: `Kitchen - Split Receptacles Ckt ${p * 2 + 1} (${desc})`,
+          description: `Kitchen Split Recep. Ckt ${p * 2 + 1}`,
           wireType: cecRules.getWireTypeForAmps(20, true), // 12/3 NMD-90
           isGfci: true, isAfci: false, amps: 20, poles: 1,
           roomType: "kitchen", outletCount: Math.ceil(pairOutlets / 2),
         });
         circuits.push({
           priority: 1,
-          description: `Kitchen - Split Receptacles Ckt ${p * 2 + 2}`,
+          description: `Kitchen Split Recep. Ckt ${p * 2 + 2}`,
           wireType: cecRules.getWireTypeForAmps(20, true), // 12/3 NMD-90
           isGfci: true, isAfci: false, amps: 20, poles: 1,
           roomType: "kitchen", outletCount: Math.floor(pairOutlets / 2),
@@ -736,10 +738,9 @@ export async function registerRoutes(
     if (allKitchenLighting.length > 0 || allKitchenSwitches.length > 0) {
       const kitLightAll = [...allKitchenLighting, ...allKitchenSwitches];
       const count = totalOutlets(kitLightAll);
-      const desc = itemDesc(allKitchenLighting);
       circuits.push({
         priority: 2,
-        description: `Kitchen - Lighting & Range Hood (${desc})`,
+        description: `Kitchen Ltg. & Range Hood`,
         wireType: cecRules.getWireTypeForAmps(15),
         isGfci: false, isAfci: false, amps: 15, poles: 1,
         roomType: "kitchen", outletCount: count,
@@ -763,17 +764,10 @@ export async function registerRoutes(
       }
       const bathRecepGroups = cecRules.splitIntoCircuits(allBathReceps);
       for (const group of bathRecepGroups) {
-        const roomDevices: Record<string, Record<string, number>> = {};
-        for (const { room, item } of group) {
-          if (!roomDevices[room]) roomDevices[room] = {};
-          roomDevices[room][item.deviceType] = (roomDevices[room][item.deviceType] || 0) + 1;
-        }
-        const desc = Object.entries(roomDevices)
-          .map(([r, devs]) => `${r}: ${Object.entries(devs).map(([d, c]) => `${c}x ${d}`).join(", ")}`)
-          .join("; ");
+        const rooms = Array.from(new Set(group.map(g => g.room)));
         circuits.push({
           priority: 3,
-          description: `Bathroom GFCI Receptacles (${desc})`,
+          description: `Bathroom GFCI Recep. — ${rooms.join(", ")}`,
           wireType: cecRules.getWireTypeForAmps(20),
           isGfci: true, isAfci: false, amps: 20, poles: 1,
           roomType: "bathroom", outletCount: group.length,
@@ -791,17 +785,10 @@ export async function registerRoutes(
       if (allBathLights.length > 0) {
         const bathLightGroups = cecRules.splitIntoCircuits(allBathLights);
         for (const group of bathLightGroups) {
-          const roomDevices: Record<string, Record<string, number>> = {};
-          for (const { room, item } of group) {
-            if (!roomDevices[room]) roomDevices[room] = {};
-            roomDevices[room][item.deviceType] = (roomDevices[room][item.deviceType] || 0) + 1;
-          }
-          const desc = Object.entries(roomDevices)
-            .map(([r, devs]) => `${r}: ${Object.entries(devs).map(([d, c]) => `${c}x ${d}`).join(", ")}`)
-            .join("; ");
+          const rooms = Array.from(new Set(group.map(g => g.room)));
           circuits.push({
             priority: 3,
-            description: `Bathroom Lighting (${desc})`,
+            description: `Bathroom Ltg. — ${rooms.join(", ")}`,
             wireType: cecRules.getWireTypeForAmps(15),
             isGfci: false, isAfci: false, amps: 15, poles: 1,
             roomType: "bathroom", outletCount: group.length,
@@ -815,10 +802,9 @@ export async function registerRoutes(
     // =====================================================================
     if (allLaundryReceps.length > 0) {
       const count = totalOutlets(allLaundryReceps);
-      const desc = itemDesc(allLaundryReceps);
       circuits.push({
         priority: 4,
-        description: `Laundry - Receptacle (${desc})`,
+        description: `Laundry Recep.`,
         wireType: cecRules.getWireTypeForAmps(20),
         isGfci: true, isAfci: false, amps: 20, poles: 1,
         roomType: "laundry", outletCount: count,
@@ -848,8 +834,8 @@ export async function registerRoutes(
       circuits.push({
         priority: 5,
         description: `${room} - Range/Oven`,
-        wireType: "6/3 NMD-90",
-        isGfci: false, isAfci: false, amps: 40, poles: 2,
+        wireType: "8/3 NMD-90",
+        isGfci: false, isAfci: false, amps: 50, poles: 2,
         roomType: "kitchen", outletCount: 1,
       });
     }
@@ -874,7 +860,7 @@ export async function registerRoutes(
       const qty = item.quantity;
       circuits.push({
         priority: 7,
-        description: `${room} - Electric Heater (${qty}x ${item.deviceType})`,
+        description: `${room} — Electric Heat`,
         wireType: "12/2 NMD-90",
         isGfci: false, isAfci: false, amps: 20, poles: 2,
         roomType: "heating", outletCount: qty,
@@ -892,8 +878,8 @@ export async function registerRoutes(
       circuits.push({
         priority: 8,
         description: `${room} - EV Charger`,
-        wireType: "6/3 NMD-90",
-        isGfci: false, isAfci: false, amps: 40, poles: 2,
+        wireType: "8/3 NMD-90",
+        isGfci: false, isAfci: false, amps: 50, poles: 2,
         roomType: "garage", outletCount: 1,
       });
     }
@@ -903,14 +889,13 @@ export async function registerRoutes(
     // =====================================================================
     if (garageReceps.length > 0) {
       const count = totalOutlets(garageReceps);
-      const desc = itemDesc(garageReceps);
       const groups = cecRules.splitIntoCircuits(
         Array.from({ length: count }, (_, i) => i),
       );
       groups.forEach((group, idx) => {
         circuits.push({
           priority: 9,
-          description: `Garage - GFCI Receptacles${groups.length > 1 ? ` Ckt ${idx + 1}` : ""} (${desc})`,
+          description: `Garage GFCI Recep.${groups.length > 1 ? ` Ckt ${idx + 1}` : ""}`,
           wireType: cecRules.getWireTypeForAmps(20),
           isGfci: true, isAfci: true, amps: 20, poles: 1,
           roomType: "garage", outletCount: group.length,
@@ -923,14 +908,13 @@ export async function registerRoutes(
     // =====================================================================
     if (outdoorReceps.length > 0) {
       const count = totalOutlets(outdoorReceps);
-      const desc = itemDesc(outdoorReceps);
       const groups = cecRules.splitIntoCircuits(
         Array.from({ length: count }, (_, i) => i),
       );
       groups.forEach((group, idx) => {
         circuits.push({
           priority: 10,
-          description: `Outdoor - GFCI Receptacles${groups.length > 1 ? ` Ckt ${idx + 1}` : ""} (${desc})`,
+          description: `Outdoor GFCI Recep.${groups.length > 1 ? ` Ckt ${idx + 1}` : ""}`,
           wireType: cecRules.getWireTypeForAmps(20),
           isGfci: true, isAfci: false, amps: 20, poles: 1,
           roomType: "outdoor", outletCount: group.length,
@@ -938,20 +922,7 @@ export async function registerRoutes(
       });
     }
 
-    // =====================================================================
-    // PRIORITY 11: Smoke / CO detectors (whole house, one circuit)
-    // CEC 32-110: interconnected, 14/3 NMD-90
-    // =====================================================================
-    if (smokeItems.length > 0) {
-      const totalQty = smokeItems.reduce((s, d) => s + d.item.quantity, 0);
-      circuits.push({
-        priority: 11,
-        description: `Smoke/CO Detectors (${totalQty} units)`,
-        wireType: "14/3 NMD-90",
-        isGfci: false, isAfci: false, amps: 15, poles: 1,
-        roomType: "safety", outletCount: totalQty,
-      });
-    }
+    // (Smoke/CO detectors handled globally after all panels — CEC requires ONE circuit)
 
     // =====================================================================
     // PRIORITY 12: Furnace
@@ -986,17 +957,10 @@ export async function registerRoutes(
       }
       const lightGroups = cecRules.splitIntoCircuits(allLightItems);
       for (const group of lightGroups) {
-        const roomDevices: Record<string, Record<string, number>> = {};
-        for (const { room, item } of group) {
-          if (!roomDevices[room]) roomDevices[room] = {};
-          roomDevices[room][item.deviceType] = (roomDevices[room][item.deviceType] || 0) + 1;
-        }
-        const desc = Object.entries(roomDevices)
-          .map(([r, devs]) => `${r}: ${Object.entries(devs).map(([d, c]) => `${c}x ${d}`).join(", ")}`)
-          .join("; ");
+        const rooms = Array.from(new Set(group.map(g => g.room)));
         circuits.push({
           priority: 13,
-          description: `General Lighting (${desc})`,
+          description: `General Ltg. — ${rooms.join(", ")}`,
           wireType: cecRules.getWireTypeForAmps(15),
           isGfci: false, isAfci: true, amps: 15, poles: 1,
           roomType: "lighting", outletCount: group.length,
@@ -1019,17 +983,10 @@ export async function registerRoutes(
       }
       const bedGroups = cecRules.splitIntoCircuits(allBedReceps);
       for (const group of bedGroups) {
-        const roomDevices: Record<string, Record<string, number>> = {};
-        for (const { room, item } of group) {
-          if (!roomDevices[room]) roomDevices[room] = {};
-          roomDevices[room][item.deviceType] = (roomDevices[room][item.deviceType] || 0) + 1;
-        }
-        const desc = Object.entries(roomDevices)
-          .map(([r, devs]) => `${r}: ${Object.entries(devs).map(([d, c]) => `${c}x ${d}`).join(", ")}`)
-          .join("; ");
+        const rooms = Array.from(new Set(group.map(g => g.room)));
         circuits.push({
           priority: 14,
-          description: `Bedroom Receptacles (${desc})`,
+          description: `Bedroom Recep. — ${rooms.join(", ")}`,
           wireType: cecRules.getWireTypeForAmps(15),
           isGfci: false, isAfci: true, amps: 15, poles: 1,
           roomType: "bedroom", outletCount: group.length,
@@ -1052,17 +1009,10 @@ export async function registerRoutes(
       }
       const genGroups = cecRules.splitIntoCircuits(allGenReceps);
       for (const group of genGroups) {
-        const roomDevices: Record<string, Record<string, number>> = {};
-        for (const { room, item } of group) {
-          if (!roomDevices[room]) roomDevices[room] = {};
-          roomDevices[room][item.deviceType] = (roomDevices[room][item.deviceType] || 0) + 1;
-        }
-        const desc = Object.entries(roomDevices)
-          .map(([r, devs]) => `${r}: ${Object.entries(devs).map(([d, c]) => `${c}x ${d}`).join(", ")}`)
-          .join("; ");
+        const rooms = Array.from(new Set(group.map(g => g.room)));
         circuits.push({
           priority: 15,
-          description: `General Receptacles (${desc})`,
+          description: `General Recep. — ${rooms.join(", ")}`,
           wireType: cecRules.getWireTypeForAmps(15),
           isGfci: false, isAfci: true, amps: 15, poles: 1,
           roomType: "general", outletCount: group.length,
@@ -1120,6 +1070,40 @@ export async function registerRoutes(
 
     } // end of panelItemGroups loop
 
+    // =====================================================================
+    // POST-LOOP: Consolidated smoke/CO detectors — CEC 32-110
+    // ALL detectors in the dwelling on ONE interconnected circuit
+    // =====================================================================
+    if (allSmokeItems.length > 0) {
+      const totalQty = allSmokeItems.reduce((s, d) => s + d.item.quantity, 0);
+      circuits.push({
+        priority: 11,
+        description: `Smoke/CO Detectors (${totalQty} units, whole house)`,
+        wireType: "14/3 NMD-90",
+        isGfci: false, isAfci: false, amps: 15, poles: 1,
+        roomType: "safety", outletCount: totalQty,
+        panelName: "Main Panel",
+      });
+    }
+
+    // =====================================================================
+    // POST-LOOP: Sub-panel feeder breakers
+    // Each sub-panel needs a 2-pole feeder breaker on the Main Panel
+    // =====================================================================
+    for (const [pn] of Array.from(panelItemGroups.entries())) {
+      if (pn === "Main Panel") continue;
+      const subPanelSize = 100; // Default sub-panel amperage
+      circuits.push({
+        priority: 0, // Highest priority — feeder breakers first
+        description: `${pn} Feed (${subPanelSize}A)`,
+        wireType: "3 AWG NMD-90",
+        isGfci: false, isAfci: false,
+        amps: subPanelSize, poles: 2,
+        roomType: "service", outletCount: 0,
+        panelName: "Main Panel",
+      });
+    }
+
     // --- Persist to DB (per-panel circuit numbering) ----------------------
     const created: any[] = [];
     const circuitsByPanel = new Map<string, CircuitData[]>();
@@ -1130,6 +1114,8 @@ export async function registerRoutes(
     }
 
     for (const [pn, panelCircuitList] of Array.from(circuitsByPanel.entries())) {
+      // Sort by priority (feeder breakers first, then by description)
+      panelCircuitList.sort((a, b) => a.priority - b.priority || a.description.localeCompare(b.description));
       let circuitNumber = 1;
       for (const data of panelCircuitList) {
         const circuit = await storage.createPanelCircuit({
@@ -1549,7 +1535,9 @@ export async function registerRoutes(
         }
       }
 
-      const parts = Array.from(partsMap.values()).map(p => ({
+      const parts = Array.from(partsMap.values())
+        .filter(p => p.part.name !== "N/A" && p.part.name.trim() !== "") // Skip placeholder parts
+        .map(p => ({
         partId: p.part.id,
         partName: p.part.name,
         category: p.part.category,
@@ -1979,6 +1967,12 @@ STANDARDIZED SYMBOL NAMES (use these exactly):
 - floor_heat (240V GFI in-floor radiant heating)
 - baseboard_heater (240V baseboard heater with thermostat)
 - sauna_heater (240V dedicated sauna heater)
+- dishwasher (dedicated dishwasher circuit)
+- microwave (dedicated 20A microwave circuit)
+- garburator (dedicated garburator/garbage disposal circuit)
+- hrv (HRV/ERV ventilation circuit)
+- hwt (hot water tank circuit)
+- washer (dedicated 20A washer receptacle)
 
 COUNTING METHODOLOGY:
 - Look for a SYMBOL LEGEND on the page first — if found, use it to identify non-standard or custom symbols
@@ -2010,6 +2004,18 @@ REAL-WORLD BC RESIDENTIAL PATTERNS (verified from 4 BC projects — Bayliss, 173
 - Baseboard Heat: 240V with thermostat (suite/basement rooms)
 - Sauna Heater: 240V dedicated + LV thermostat
 
+COMMONLY MISSED SYMBOLS — look carefully for these:
+- FLOOR HEAT: zigzag/wavy line pattern near bathroom floors, often labeled "FH" or "FLOOR HEAT". Found in luxury ensuites. Use type: floor_heat
+- BASEBOARD HEATER: zigzag/wavy line along walls, labeled "BB" or "BASEBOARD". Common in suites/basements. Use type: baseboard_heater
+- DISHWASHER: "DW" label near kitchen sink area. Often a small circle or text annotation. Use type: dishwasher
+- 20A RECEPTACLES: look for horizontal T-slot symbol (differs from standard 15A). Kitchen counter/island outlets are 20A
+- 20A GFCI: "GFI" or "GFCI" label on 20A receptacles. Island GFI is different from counter 20A
+- HOOD FAN / RANGE HOOD: rectangle or fan symbol above range/stove area, labeled "HOOD" or "RH". Use type: range_hood_fan
+- MICROWAVE: "MW" or "MICRO" label, usually above range area or in upper cabinet. Use type: microwave
+- GARBURATOR: "GARB" label near kitchen sink. Use type: garburator
+- HRV/ERV: "HRV" or "ERV" label, usually in mechanical room. Use type: hrv
+- HOT WATER TANK: "HWT" label in mechanical room. Use type: hwt
+
 Also determine:
 - Is this page an electrical plan? (true/false)
 - What type of page is this? (electrical, architectural, mechanical, plumbing, cover, schedule, detail, other)
@@ -2037,7 +2043,18 @@ If this is NOT an electrical page, return:
 VERIFICATION:
 - COUNT CAREFULLY. Double-check your counts by going room-by-room a second time.
 - Mark confidence lower if symbols are unclear, overlapping, or in dense areas.
-- Sanity check: For a typical residential floor, total receptacles should roughly equal perimeter_ft / 6 (CEC 1.8m wall spacing rule).`;
+- Sanity check: For a typical residential floor, total receptacles should roughly equal perimeter_ft / 6 (CEC 1.8m wall spacing rule).
+
+FINAL CHECKLIST — before returning, verify you checked for:
+[ ] Floor heat in bathrooms/ensuites (zigzag pattern)
+[ ] Baseboard heaters along walls (zigzag, "BB")
+[ ] Dishwasher "DW" near kitchen sink
+[ ] Range hood above stove
+[ ] 20A vs 15A outlet distinction in kitchen
+[ ] HRV/ERV in or near mechanical room
+[ ] Hot water tank "HWT" label
+[ ] Microwave "MW" label in kitchen area
+[ ] Garburator "GARB" near kitchen sink`;
 
   app.post("/api/ai-analyze", upload.single("file"), async (req, res) => {
     const sessionId = (req.body?.sessionId as string) || null;
@@ -2299,6 +2316,7 @@ VERIFICATION:
           const garageRoom = allRooms.find((r: any) => r.type === "garage");
           const utilRoom = allRooms.find((r: any) => r.type === "utility_room");
           const targetRoom = mechRoom || garageRoom || utilRoom || allRooms[0];
+          targetRoom.devices = targetRoom.devices || [];
           targetRoom.devices.push({
             type: "Panel Board",
             count: 1,
@@ -2309,7 +2327,7 @@ VERIFICATION:
 
         const deviceTotals: Record<string, { count: number; rooms: string[]; note: string }> = {};
         for (const room of allRooms) {
-          for (const d of room.devices) {
+          for (const d of (room.devices || [])) {
             if (!deviceTotals[d.type]) deviceTotals[d.type] = { count: 0, rooms: [], note: d.notes || "" };
             deviceTotals[d.type].count += d.count;
             if (!deviceTotals[d.type].rooms.includes(room.name)) {
@@ -2519,10 +2537,12 @@ VERIFICATION:
       const existingEstimateId = body.estimateId ? parseInt(body.estimateId, 10) : null;
 
       let estimate;
+      let deletedCount = 0;
       if (existingEstimateId) {
-        // Apply to existing estimate
+        // Apply to existing estimate — clear old line items first
         estimate = await storage.getEstimate(existingEstimateId);
         if (!estimate) return res.status(404).json({ message: "Estimate not found" });
+        deletedCount = await storage.deleteEstimateItemsByEstimate(existingEstimateId);
       } else {
         // Create new estimate (legacy standalone flow)
         estimate = await storage.createEstimate({
@@ -2579,7 +2599,7 @@ VERIFICATION:
 
       const classifyDeviceForWire = (symbolType: string, assemblyName?: string): string => {
         const s = (symbolType + " " + (assemblyName || "")).toLowerCase();
-        if (/range|oven|stove|dryer|dishwasher|garburator|microwave|fridge|freezer|ac_disconnect|ev_charger|hot_tub|sauna|furnace|baseboard|floor_heat|hot_water|well_pump|sump_pump|hot_tub/i.test(s)) return "dedicated";
+        if (/range|oven|stove|dryer|dishwasher|garburator|microwave|fridge|freezer|ac_disconnect|ev_charger|hot_tub|sauna|furnace|baseboard|floor_heat|hot_water|well_pump|sump_pump|hrv|erv|hwt|washer/i.test(s)) return "dedicated";
         if (/switch|dimmer|occupancy_sensor|motion_sensor/i.test(s)) return "switch";
         if (/light|fixture|pot|luminaire|sconce|pendant|flush|ceiling_fan|exhaust|range_hood|led|fan/i.test(s)) return "lighting";
         return "receptacle";
@@ -2687,16 +2707,27 @@ VERIFICATION:
                 "spa_disconnect": "hot_tub",
                 "furnace_connection": "furnace_disconnect",
                 "furnace": "furnace_disconnect",
-                "dishwasher_connection": "dedicated_receptacle",
-                "dishwasher": "dedicated_receptacle",
-                "garburator_connection": "dedicated_receptacle",
-                "garburator": "dedicated_receptacle",
-                "microwave_receptacle": "dedicated_receptacle",
-                "microwave": "dedicated_receptacle",
+                "dishwasher_connection": "dishwasher",
+                "dishwasher": "dishwasher",
+                "dw": "dishwasher",
+                "garburator_connection": "garburator",
+                "garburator": "garburator",
+                "garbage_disposal": "garburator",
+                "garb": "garburator",
+                "microwave_receptacle": "microwave",
+                "microwave": "microwave",
+                "mw": "microwave",
                 "fridge_receptacle": "dedicated_receptacle",
                 "fridge": "dedicated_receptacle",
                 "refrigerator": "dedicated_receptacle",
-                "hot_water_tank": "dedicated_receptacle",
+                "hot_water_tank": "hwt",
+                "hwt": "hwt",
+                "hot_water_heater": "hwt",
+                "hrv": "hrv",
+                "erv": "hrv",
+                "hrv_erv": "hrv",
+                "washer": "washer",
+                "washing_machine": "washer",
               };
               const snakeType = symbolType.toLowerCase().replace(/\s+/g, "_");
               const aliasType = aliasMap[snakeType];
@@ -2731,14 +2762,18 @@ VERIFICATION:
         const baseWireDistance = WIRE_DISTANCE_MAP[item.roomType] || 30;
         const assembly = item.assembly;
 
-        // Circuit-aware wire: dedicated devices get full panel run,
-        // shared devices (lighting/receptacles) split wire across circuits
+        // Wire footage per device:
+        // - Dedicated devices (range, dryer, etc.): full run from panel = room distance
+        // - Switches: 0 (share lighting circuit wire)
+        // - Shared circuits (lighting/receptacles): use assembly default footage
+        //   Assembly defaults are calibrated from real BC projects (Horizon takeoff)
+        //   and account for cross-room circuit sharing (avg ~12-15 ft per device)
         const deviceCategory = classifyDeviceForWire(item.symbolType, assembly?.name);
         const estimatedWireFootage = deviceCategory === "dedicated"
           ? baseWireDistance  // 1 device = 1 circuit = full run from panel
           : deviceCategory === "switch"
             ? 0  // switches share lighting circuit wire
-            : calculateCircuitWireFootage(item.count, baseWireDistance, deviceCategory);
+            : assembly?.wireFootage || 15; // use calibrated assembly default
 
         await storage.createEstimateItem({
           estimateId: estimate.id,
@@ -2759,9 +2794,9 @@ VERIFICATION:
         itemsCreated++;
       }
 
-      await storage.updateAiAnalysis(id, { status: "estimated" });
+      await storage.updateAiAnalysis(id, { status: "estimate_generated" });
 
-      res.json({ estimateId: estimate.id, itemsCreated, message: "Estimate generated" });
+      res.json({ estimateId: estimate.id, itemsCreated, deletedCount, message: deletedCount > 0 ? "Line items replaced" : "Estimate generated" });
     } catch (err: any) {
       console.error("Generate estimate error:", err);
       res.status(500).json({ message: err.message || "Failed to generate estimate" });
@@ -3009,11 +3044,12 @@ VERIFICATION:
         }
         if (!panelBoardAdded && allRooms.length > 0) {
           const targetRoom = allRooms.find((r: any) => r.type === "mechanical_room") || allRooms.find((r: any) => r.type === "garage") || allRooms.find((r: any) => r.type === "utility_room") || allRooms[0];
+          targetRoom.devices = targetRoom.devices || [];
           targetRoom.devices.push({ type: "Panel Board", count: 1, confidence: 0.95, notes: "CEC 26-400 — Main panel board (200A typical residential)" });
         }
         const deviceTotals: Record<string, { count: number; rooms: string[]; note: string }> = {};
         for (const room of allRooms) {
-          for (const d of room.devices) {
+          for (const d of (room.devices || [])) {
             if (!deviceTotals[d.type]) deviceTotals[d.type] = { count: 0, rooms: [], note: d.notes || "" };
             deviceTotals[d.type].count += d.count;
             if (!deviceTotals[d.type].rooms.includes(room.name)) deviceTotals[d.type].rooms.push(room.name);

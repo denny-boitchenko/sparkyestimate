@@ -62,6 +62,7 @@ export const estimates = pgTable("estimates", {
   squareFootage: integer("square_footage"),
   permitFee: real("permit_fee"),
   permitFeeOverride: real("permit_fee_override"),
+  permitHandlingFee: real("permit_handling_fee").notNull().default(0),
   includePermit: boolean("include_permit").notNull().default(false),
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
