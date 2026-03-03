@@ -2239,6 +2239,13 @@ FINAL CHECKLIST — before returning, verify you checked for:
         let totalSqFt = 0;
         let panelBoardAdded = false;
 
+        // Pre-scan to determine total sqft for tier detection
+        for (const pr of allPageResults) { totalSqFt += pr.total_sqft || 0; }
+        // Auto-detect tier: luxury >= 3000 SF, premium >= 2000 SF, else standard
+        const autoTier: 'standard' | 'premium' | 'luxury' =
+          totalSqFt >= 3000 ? 'luxury' : totalSqFt >= 2000 ? 'premium' : 'standard';
+
+        totalSqFt = 0; // reset for accurate per-page accumulation
         for (const pageResult of allPageResults) {
           const floorLevel = pageResult.floor_level || "";
           totalSqFt += pageResult.total_sqft || 0;
@@ -2257,7 +2264,7 @@ FINAL CHECKLIST — before returning, verify you checked for:
               location: room.location || [],
             };
             const unitIdentifier = detectedRoom.room_name.match(/^(Unit\s+[A-Z0-9]+)/i)?.[1] || undefined;
-            const roomDwellingCtx: import("./cec-devices").DwellingContext = { dwellingType, hasLegalSuite, unitIdentifier };
+            const roomDwellingCtx: import("./cec-devices").DwellingContext = { dwellingType, hasLegalSuite, unitIdentifier, tier: autoTier };
             const deviceArr = cecDevices.generateDevicesForRoom(detectedRoom, roomDwellingCtx);
             const deviceList = deviceArr.map(d => ({
               type: d.type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
@@ -2993,6 +3000,12 @@ FINAL CHECKLIST — before returning, verify you checked for:
         let totalSqFt = 0;
         let panelBoardAdded = false;
 
+        // Pre-scan for tier detection
+        for (const pr of allPageResults) { totalSqFt += pr.total_sqft || 0; }
+        const reAutoTier: 'standard' | 'premium' | 'luxury' =
+          totalSqFt >= 3000 ? 'luxury' : totalSqFt >= 2000 ? 'premium' : 'standard';
+
+        totalSqFt = 0;
         for (const pageResult of allPageResults) {
           const floorLevel = pageResult.floor_level || "";
           totalSqFt += pageResult.total_sqft || 0;
@@ -3006,7 +3019,7 @@ FINAL CHECKLIST — before returning, verify you checked for:
               wall_count: room.wall_count || 4, confidence: room.confidence || 0.9, location: room.location || [],
             };
             const reUnitId = detectedRoom.room_name.match(/^(Unit\s+[A-Z0-9]+)/i)?.[1] || undefined;
-            const reRoomDwellingCtx: import("./cec-devices").DwellingContext = { dwellingType, hasLegalSuite, unitIdentifier: reUnitId };
+            const reRoomDwellingCtx: import("./cec-devices").DwellingContext = { dwellingType, hasLegalSuite, unitIdentifier: reUnitId, tier: reAutoTier };
             const deviceArr = cecDevices.generateDevicesForRoom(detectedRoom, reRoomDwellingCtx);
             const deviceList = deviceArr.map(d => ({
               type: d.type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()),

@@ -980,7 +980,10 @@ export function generateDevicesForRoom(room: DetectedRoom, dwellingContext?: Dwe
     const isSuiteRoom = (
       dwellingContext.dwellingType === "single" &&
       dwellingContext.hasLegalSuite &&
-      (room.room_type === "basement_finished" || room.room_name.toUpperCase().includes("SUITE"))
+      (room.room_type === "basement_finished" ||
+       room.room_name.toUpperCase().includes("SUITE") ||
+       room.room_name.toUpperCase().startsWith("S.") ||
+       room.room_name.toUpperCase().startsWith("S "))
     );
 
     if (isSuiteRoom) {

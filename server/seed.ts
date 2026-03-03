@@ -5,29 +5,31 @@ import { eq } from "drizzle-orm";
 const DEFAULT_ASSEMBLIES = [
   // Receptacles — prices from Material List (2026, 12% tax included)
   // materialCost = device + box + cover plate + misc parts (wire handled separately)
-  { name: "Duplex Receptacle (15A)", symbolType: "duplex_receptacle", category: "receptacles", device: "15A duplex receptacle, TR", boxType: "Single-gang device box, NM", coverPlate: "Single-gang duplex cover", miscParts: "Wire nuts, ground pigtail, box connector", wireType: "14/2 NMD-90", wireFootage: 15, laborHours: 0.18, materialCost: 6.74 },
-  { name: "Duplex Receptacle (20A)", symbolType: "duplex_receptacle_20a", category: "receptacles", device: "20A duplex receptacle, TR", boxType: "Single-gang device box, NM", coverPlate: "Single-gang duplex cover", miscParts: "Wire nuts, ground pigtail, box connector", wireType: "12/2 NMD-90", wireFootage: 15, laborHours: 0.20, materialCost: 11.44 },
-  { name: "GFCI Receptacle (15A)", symbolType: "gfci_receptacle_15a", category: "receptacles", device: "15A GFCI receptacle, TR, WR", boxType: "Single-gang device box, NM", coverPlate: "Single-gang GFCI cover", miscParts: "Wire nuts, ground pigtail, box connector", wireType: "14/2 NMD-90", wireFootage: 15, laborHours: 0.25, materialCost: 34.44 },
-  { name: "GFCI Receptacle (20A)", symbolType: "gfci_receptacle", category: "receptacles", device: "20A GFCI receptacle, TR, WR", boxType: "Single-gang device box, NM", coverPlate: "Single-gang GFCI cover", miscParts: "Wire nuts, ground pigtail, box connector", wireType: "12/2 NMD-90", wireFootage: 25, laborHours: 0.25, materialCost: 37.44 },
-  { name: "Weather-Resistant Receptacle", symbolType: "weather_resistant_receptacle", category: "receptacles", device: "20A WR receptacle, TR", boxType: "Weatherproof box", coverPlate: "In-use weatherproof cover", miscParts: "Wire nuts, WP connector, gasket", wireType: "12/2 NMD-90", wireFootage: 30, laborHours: 0.30, materialCost: 38.00 },
-  { name: "Split Receptacle (Kitchen)", symbolType: "split_receptacle", category: "receptacles", device: "15A split duplex receptacle", boxType: "Single-gang device box, NM", coverPlate: "Single-gang duplex cover", miscParts: "Wire nuts, ground pigtail, box connector, red tape", wireType: "14/3 NMD-90", wireFootage: 20, laborHours: 0.30, materialCost: 7.04 },
-  { name: "Dedicated Receptacle (Fridge)", symbolType: "dedicated_receptacle", category: "receptacles", device: "15A single receptacle, dedicated", boxType: "Single-gang device box, NM", coverPlate: "Single-gang single cover", miscParts: "Wire nuts, ground pigtail, box connector", wireType: "14/2 NMD-90", wireFootage: 25, laborHours: 0.25, materialCost: 6.74 },
-  { name: "Dryer Receptacle (30A)", symbolType: "dryer_outlet", category: "receptacles", device: "30A dryer receptacle, NEMA 14-30", boxType: "Single-gang surface mount box", coverPlate: "Dryer cover plate", miscParts: "Wire nuts, box connector", wireType: "10/3 NMD-90", wireFootage: 30, laborHours: 0.50, materialCost: 17.00 },
-  { name: "Range Receptacle (50A)", symbolType: "range_outlet", category: "receptacles", device: "50A range receptacle, NEMA 14-50", boxType: "Single-gang surface mount box", coverPlate: "Range cover plate", miscParts: "Wire nuts, box connector", wireType: "6/3 NMD-90", wireFootage: 25, laborHours: 0.60, materialCost: 17.00 },
-  { name: "EV Charger Receptacle (50A)", symbolType: "ev_charger_outlet", category: "receptacles", device: "50A NEMA 14-50 for EV charging", boxType: "Single-gang surface mount box", coverPlate: "NEMA 14-50 cover", miscParts: "Wire nuts, box connector", wireType: "6/3 NMD-90", wireFootage: 40, laborHours: 1.25, materialCost: 26.50 },
-  { name: "Outdoor Receptacle (WP)", symbolType: "outdoor_receptacle", category: "receptacles", device: "15A GFCI receptacle, WP box", boxType: "Weatherproof in-use box", coverPlate: "In-use WP cover", miscParts: "Wire nuts, WP connector, gasket", wireType: "14/2 NMD-90", wireFootage: 25, laborHours: 0.35, materialCost: 61.00 },
+  // laborHours = FULL time (rough-in box + wire pull + staple + device install + panel termination)
+  // Calibrated from Horizon 4232 SF luxury: 140 hrs / 263 devices = 0.53 avg
+  { name: "Duplex Receptacle (15A)", symbolType: "duplex_receptacle", category: "receptacles", device: "15A duplex receptacle, TR", boxType: "Single-gang device box, NM", coverPlate: "Single-gang duplex cover", miscParts: "Wire nuts, ground pigtail, box connector", wireType: "14/2 NMD-90", wireFootage: 15, laborHours: 0.35, materialCost: 6.74 },
+  { name: "Duplex Receptacle (20A)", symbolType: "duplex_receptacle_20a", category: "receptacles", device: "20A duplex receptacle, TR", boxType: "Single-gang device box, NM", coverPlate: "Single-gang duplex cover", miscParts: "Wire nuts, ground pigtail, box connector", wireType: "12/2 NMD-90", wireFootage: 15, laborHours: 0.40, materialCost: 11.44 },
+  { name: "GFCI Receptacle (15A)", symbolType: "gfci_receptacle_15a", category: "receptacles", device: "15A GFCI receptacle, TR, WR", boxType: "Single-gang device box, NM", coverPlate: "Single-gang GFCI cover", miscParts: "Wire nuts, ground pigtail, box connector", wireType: "14/2 NMD-90", wireFootage: 15, laborHours: 0.40, materialCost: 34.44 },
+  { name: "GFCI Receptacle (20A)", symbolType: "gfci_receptacle", category: "receptacles", device: "20A GFCI receptacle, TR, WR", boxType: "Single-gang device box, NM", coverPlate: "Single-gang GFCI cover", miscParts: "Wire nuts, ground pigtail, box connector", wireType: "12/2 NMD-90", wireFootage: 25, laborHours: 0.40, materialCost: 37.44 },
+  { name: "Weather-Resistant Receptacle", symbolType: "weather_resistant_receptacle", category: "receptacles", device: "20A WR receptacle, TR", boxType: "Weatherproof box", coverPlate: "In-use weatherproof cover", miscParts: "Wire nuts, WP connector, gasket", wireType: "12/2 NMD-90", wireFootage: 30, laborHours: 0.50, materialCost: 38.00 },
+  { name: "Split Receptacle (Kitchen)", symbolType: "split_receptacle", category: "receptacles", device: "15A split duplex receptacle", boxType: "Single-gang device box, NM", coverPlate: "Single-gang duplex cover", miscParts: "Wire nuts, ground pigtail, box connector, red tape", wireType: "14/3 NMD-90", wireFootage: 20, laborHours: 0.45, materialCost: 7.04 },
+  { name: "Dedicated Receptacle (Fridge)", symbolType: "dedicated_receptacle", category: "receptacles", device: "15A single receptacle, dedicated", boxType: "Single-gang device box, NM", coverPlate: "Single-gang single cover", miscParts: "Wire nuts, ground pigtail, box connector", wireType: "14/2 NMD-90", wireFootage: 25, laborHours: 0.40, materialCost: 6.74 },
+  { name: "Dryer Receptacle (30A)", symbolType: "dryer_outlet", category: "receptacles", device: "30A dryer receptacle, NEMA 14-30", boxType: "Single-gang surface mount box", coverPlate: "Dryer cover plate", miscParts: "Wire nuts, box connector", wireType: "10/3 NMD-90", wireFootage: 30, laborHours: 0.75, materialCost: 17.00 },
+  { name: "Range Receptacle (50A)", symbolType: "range_outlet", category: "receptacles", device: "50A range receptacle, NEMA 14-50", boxType: "Single-gang surface mount box", coverPlate: "Range cover plate", miscParts: "Wire nuts, box connector", wireType: "6/3 NMD-90", wireFootage: 25, laborHours: 1.00, materialCost: 17.00 },
+  { name: "EV Charger Receptacle (50A)", symbolType: "ev_charger_outlet", category: "receptacles", device: "50A NEMA 14-50 for EV charging", boxType: "Single-gang surface mount box", coverPlate: "NEMA 14-50 cover", miscParts: "Wire nuts, box connector", wireType: "6/3 NMD-90", wireFootage: 40, laborHours: 1.50, materialCost: 26.50 },
+  { name: "Outdoor Receptacle (WP)", symbolType: "outdoor_receptacle", category: "receptacles", device: "15A GFCI receptacle, WP box", boxType: "Weatherproof in-use box", coverPlate: "In-use WP cover", miscParts: "Wire nuts, WP connector, gasket", wireType: "14/2 NMD-90", wireFootage: 25, laborHours: 0.50, materialCost: 61.00 },
   // Switches — prices from Material List (2026)
-  { name: "Single-Pole Switch", symbolType: "single_pole_switch", category: "switches", device: "15A single-pole switch", boxType: "Single-gang device box, NM", coverPlate: "Single-gang toggle cover", miscParts: "Wire nuts, ground pigtail, box connector", wireType: "14/2 NMD-90", wireFootage: 15, laborHours: 0.15, materialCost: 6.64 },
-  { name: "3-Way Switch", symbolType: "three_way_switch", category: "switches", device: "15A 3-way switch", boxType: "Single-gang device box, NM", coverPlate: "Single-gang toggle cover", miscParts: "Wire nuts, ground pigtail, box connector", wireType: "14/3 NMD-90", wireFootage: 30, laborHours: 0.25, materialCost: 8.44 },
-  { name: "4-Way Switch", symbolType: "four_way_switch", category: "switches", device: "15A 4-way switch", boxType: "Single-gang device box, NM", coverPlate: "Single-gang toggle cover", miscParts: "Wire nuts, ground pigtail, box connector", wireType: "14/3 NMD-90", wireFootage: 30, laborHours: 0.30, materialCost: 26.84 },
-  { name: "Dimmer Switch", symbolType: "dimmer_switch", category: "switches", device: "600W dimmer switch", boxType: "Single-gang device box, NM", coverPlate: "Single-gang dimmer cover", miscParts: "Wire nuts, ground pigtail, box connector", wireType: "14/2 NMD-90", wireFootage: 15, laborHours: 0.20, materialCost: 49.44 },
+  { name: "Single-Pole Switch", symbolType: "single_pole_switch", category: "switches", device: "15A single-pole switch", boxType: "Single-gang device box, NM", coverPlate: "Single-gang toggle cover", miscParts: "Wire nuts, ground pigtail, box connector", wireType: "14/2 NMD-90", wireFootage: 15, laborHours: 0.30, materialCost: 6.64 },
+  { name: "3-Way Switch", symbolType: "three_way_switch", category: "switches", device: "15A 3-way switch", boxType: "Single-gang device box, NM", coverPlate: "Single-gang toggle cover", miscParts: "Wire nuts, ground pigtail, box connector", wireType: "14/3 NMD-90", wireFootage: 30, laborHours: 0.40, materialCost: 8.44 },
+  { name: "4-Way Switch", symbolType: "four_way_switch", category: "switches", device: "15A 4-way switch", boxType: "Single-gang device box, NM", coverPlate: "Single-gang toggle cover", miscParts: "Wire nuts, ground pigtail, box connector", wireType: "14/3 NMD-90", wireFootage: 30, laborHours: 0.45, materialCost: 26.84 },
+  { name: "Dimmer Switch", symbolType: "dimmer_switch", category: "switches", device: "600W dimmer switch", boxType: "Single-gang device box, NM", coverPlate: "Single-gang dimmer cover", miscParts: "Wire nuts, ground pigtail, box connector", wireType: "14/2 NMD-90", wireFootage: 15, laborHours: 0.35, materialCost: 49.44 },
   // Lighting — potlight prices from Material List (4" wafer ~$25, 6" ~$36, vapo boot $9)
-  { name: "Recessed Light (4\")", symbolType: "recessed_light", category: "lighting", device: "4\" LED wafer light, IC rated", boxType: "Vapour barrier boot", coverPlate: "Trim ring included", miscParts: "Wire nuts, box connector", wireType: "14/2 NMD-90", wireFootage: 8, laborHours: 0.35, materialCost: 34.65 },
-  { name: "Recessed Light (6\")", symbolType: "pot_light", category: "lighting", device: "6\" LED recessed light, IC rated", boxType: "Vapour barrier boot", coverPlate: "Trim ring included", miscParts: "Wire nuts, box connector", wireType: "14/2 NMD-90", wireFootage: 8, laborHours: 0.35, materialCost: 45.65 },
-  { name: "Gimbal Light (4\")", symbolType: "gimbal_light", category: "lighting", device: "4\" LED gimbal adjustable, IC rated", boxType: "Vapour barrier boot", coverPlate: "Trim ring included", miscParts: "Wire nuts, box connector", wireType: "14/2 NMD-90", wireFootage: 8, laborHours: 0.35, materialCost: 34.65 },
-  { name: "Ceiling Light Fixture", symbolType: "surface_mount_light", category: "lighting", device: "LED ceiling mount fixture (customer supplied)", boxType: "Octagon ceiling box", coverPlate: "Canopy included", miscParts: "Wire nuts, mounting hardware", wireType: "14/2 NMD-90", wireFootage: 15, laborHours: 0.40, materialCost: 11.65 },
-  { name: "Pendant Light", symbolType: "pendant_light", category: "lighting", device: "Pendant light fixture (customer supplied)", boxType: "Octagon ceiling box", coverPlate: "Canopy included", miscParts: "Wire nuts, mounting hardware, chain/cord", wireType: "14/2 NMD-90", wireFootage: 15, laborHours: 0.50, materialCost: 11.65 },
-  { name: "Wall Sconce", symbolType: "wall_sconce", category: "lighting", device: "Wall sconce fixture (customer supplied)", boxType: "Octagon box, NM", coverPlate: "N/A", miscParts: "Wire nuts, mounting hardware", wireType: "14/2 NMD-90", wireFootage: 15, laborHours: 0.40, materialCost: 11.65 },
+  { name: "Recessed Light (4\")", symbolType: "recessed_light", category: "lighting", device: "4\" LED wafer light, IC rated", boxType: "Vapour barrier boot", coverPlate: "Trim ring included", miscParts: "Wire nuts, box connector", wireType: "14/2 NMD-90", wireFootage: 8, laborHours: 0.50, materialCost: 34.65 },
+  { name: "Recessed Light (6\")", symbolType: "pot_light", category: "lighting", device: "6\" LED recessed light, IC rated", boxType: "Vapour barrier boot", coverPlate: "Trim ring included", miscParts: "Wire nuts, box connector", wireType: "14/2 NMD-90", wireFootage: 8, laborHours: 0.50, materialCost: 45.65 },
+  { name: "Gimbal Light (4\")", symbolType: "gimbal_light", category: "lighting", device: "4\" LED gimbal adjustable, IC rated", boxType: "Vapour barrier boot", coverPlate: "Trim ring included", miscParts: "Wire nuts, box connector", wireType: "14/2 NMD-90", wireFootage: 8, laborHours: 0.50, materialCost: 34.65 },
+  { name: "Ceiling Light Fixture", symbolType: "surface_mount_light", category: "lighting", device: "LED ceiling mount fixture (customer supplied)", boxType: "Octagon ceiling box", coverPlate: "Canopy included", miscParts: "Wire nuts, mounting hardware", wireType: "14/2 NMD-90", wireFootage: 15, laborHours: 0.55, materialCost: 11.65 },
+  { name: "Pendant Light", symbolType: "pendant_light", category: "lighting", device: "Pendant light fixture (customer supplied)", boxType: "Octagon ceiling box", coverPlate: "Canopy included", miscParts: "Wire nuts, mounting hardware, chain/cord", wireType: "14/2 NMD-90", wireFootage: 15, laborHours: 0.65, materialCost: 11.65 },
+  { name: "Wall Sconce", symbolType: "wall_sconce", category: "lighting", device: "Wall sconce fixture (customer supplied)", boxType: "Octagon box, NM", coverPlate: "N/A", miscParts: "Wire nuts, mounting hardware", wireType: "14/2 NMD-90", wireFootage: 15, laborHours: 0.55, materialCost: 11.65 },
   { name: "Track Light (4-head)", symbolType: "track_light", category: "lighting", device: "4-head LED track light kit", boxType: "Octagon ceiling box", coverPlate: "Canopy included", miscParts: "Wire nuts, mounting hardware, track", wireType: "14/2 NMD-90", wireFootage: 15, laborHours: 0.60, materialCost: 120.00 },
   { name: "Fluorescent / LED Batten", symbolType: "fluorescent_light", category: "lighting", device: "4ft LED batten fixture", boxType: "Integrated junction box", coverPlate: "N/A", miscParts: "Wire nuts, mounting hardware", wireType: "14/2 NMD-90", wireFootage: 10, laborHours: 0.45, materialCost: 40.00 },
   { name: "LED Panel Light", symbolType: "led_panel_light", category: "lighting", device: "2x2 LED flat panel", boxType: "Integrated junction box", coverPlate: "N/A", miscParts: "Wire nuts, mounting hardware", wireType: "14/2 NMD-90", wireFootage: 8, laborHours: 0.40, materialCost: 55.00 },
@@ -37,9 +39,9 @@ const DEFAULT_ASSEMBLIES = [
   { name: "Bathroom Exhaust Fan", symbolType: "exhaust_fan", category: "lighting", device: "150 CFM bathroom exhaust fan, dual speed", boxType: "Integrated housing", coverPlate: "Grille included", miscParts: "Wire nuts, duct connector, clamps", wireType: "14/2 NMD-90", wireFootage: 15, laborHours: 0.75, materialCost: 152.00 },
   { name: "Range Hood", symbolType: "range_hood_fan", category: "lighting", device: "30\" range hood (customer supplied)", boxType: "Junction box", coverPlate: "N/A", miscParts: "Wire nuts, cable connectors, duct", wireType: "14/2 NMD-90", wireFootage: 15, laborHours: 0.60, materialCost: 8.00 },
   // Safety — prices from Material List (CO Smoke $80.34, Regular Smoke $21)
-  { name: "Smoke Detector (Hardwired)", symbolType: "smoke_detector", category: "safety", device: "Hardwired smoke detector with battery backup", boxType: "Octagon ceiling box", coverPlate: "Mounting plate included", miscParts: "Wire nuts, interconnect wire", wireType: "14/3 NMD-90", wireFootage: 20, laborHours: 0.25, materialCost: 28.65 },
-  { name: "CO Detector (Hardwired)", symbolType: "co_detector", category: "safety", device: "Hardwired CO detector with battery backup", boxType: "Octagon ceiling box", coverPlate: "Mounting plate included", miscParts: "Wire nuts, interconnect wire", wireType: "14/3 NMD-90", wireFootage: 20, laborHours: 0.25, materialCost: 47.65 },
-  { name: "Combination Smoke/CO Detector", symbolType: "smoke_co_combo", category: "safety", device: "Hardwired combo smoke/CO with backup", boxType: "Octagon ceiling box", coverPlate: "Mounting plate included", miscParts: "Wire nuts, interconnect wire", wireType: "14/3 NMD-90", wireFootage: 20, laborHours: 0.25, materialCost: 88.00 },
+  { name: "Smoke Detector (Hardwired)", symbolType: "smoke_detector", category: "safety", device: "Hardwired smoke detector with battery backup", boxType: "Octagon ceiling box", coverPlate: "Mounting plate included", miscParts: "Wire nuts, interconnect wire", wireType: "14/3 NMD-90", wireFootage: 20, laborHours: 0.40, materialCost: 28.65 },
+  { name: "CO Detector (Hardwired)", symbolType: "co_detector", category: "safety", device: "Hardwired CO detector with battery backup", boxType: "Octagon ceiling box", coverPlate: "Mounting plate included", miscParts: "Wire nuts, interconnect wire", wireType: "14/3 NMD-90", wireFootage: 20, laborHours: 0.40, materialCost: 47.65 },
+  { name: "Combination Smoke/CO Detector", symbolType: "smoke_co_combo", category: "safety", device: "Hardwired combo smoke/CO with backup", boxType: "Octagon ceiling box", coverPlate: "Mounting plate included", miscParts: "Wire nuts, interconnect wire", wireType: "14/3 NMD-90", wireFootage: 20, laborHours: 0.40, materialCost: 88.00 },
   // Data/Comm — prices from Material List (Data Insert $7.50)
   { name: "Data Outlet (Cat6)", symbolType: "data_outlet", category: "data_comm", device: "Cat6 RJ45 data outlet", boxType: "Single-gang low-voltage bracket", coverPlate: "Single-gang data cover", miscParts: "Cat6 jack, patch panel connection", wireType: "Cat6", wireFootage: 50, laborHours: 0.30, materialCost: 12.50 },
   { name: "Coax Outlet", symbolType: "tv_outlet", category: "data_comm", device: "F-connector coax outlet", boxType: "Single-gang low-voltage bracket", coverPlate: "Single-gang F-connector cover", miscParts: "F-connector, compression fitting", wireType: "RG6 Coax", wireFootage: 50, laborHours: 0.25, materialCost: 10.00 },
@@ -100,6 +102,22 @@ export async function seedDatabase() {
         await db.insert(deviceAssemblies).values({ ...assembly, isDefault: true });
       }
       console.log(`Added ${missing.length} new assemblies: ${missing.map(a => a.symbolType).join(", ")}`);
+    }
+
+    // Update labour hours for existing default assemblies (calibration sync)
+    const existingBySymbol = new Map(existingAssemblies.map(a => [a.symbolType, a]));
+    let updatedCount = 0;
+    for (const def of DEFAULT_ASSEMBLIES) {
+      const existing = existingBySymbol.get(def.symbolType);
+      if (existing && existing.isDefault && existing.laborHours !== def.laborHours) {
+        await db.update(deviceAssemblies)
+          .set({ laborHours: def.laborHours })
+          .where(eq(deviceAssemblies.id, existing.id));
+        updatedCount++;
+      }
+    }
+    if (updatedCount > 0) {
+      console.log(`Updated labour hours for ${updatedCount} assemblies (calibration sync)`);
     }
   }
 
@@ -556,6 +574,46 @@ export async function seedDatabase() {
       }
     }
     console.log(`Created ${linkCount} assembly-part links`);
+  } else {
+    // Additive parts linking: link new assemblies that have no parts yet
+    const allAssemblies = await db.select().from(deviceAssemblies);
+    const existingLinks = await db.select().from(assemblyParts);
+    const linkedAssemblyIds = new Set(existingLinks.map(l => l.assemblyId));
+    const unlinkedAssemblies = allAssemblies.filter(a => !linkedAssemblyIds.has(a.id));
+
+    if (unlinkedAssemblies.length > 0) {
+      const partIdMap = new Map(existingParts.map(p => [p.name, p.id]));
+      let linkCount = 0;
+      for (const a of unlinkedAssemblies) {
+        const partsForAssembly: string[] = [];
+        if (a.device) partsForAssembly.push(a.device);
+        if (a.boxType && a.boxType !== "N/A") partsForAssembly.push(a.boxType);
+        if (a.coverPlate && a.coverPlate !== "N/A") partsForAssembly.push(a.coverPlate);
+        if (a.miscParts) {
+          partsForAssembly.push(...a.miscParts.split(",").map(s => s.trim()).filter(Boolean));
+        }
+
+        for (const partName of partsForAssembly) {
+          let partId = partIdMap.get(partName);
+          if (!partId) {
+            for (const [name, id] of Array.from(partIdMap.entries())) {
+              if (name.toLowerCase().includes(partName.toLowerCase().slice(0, 10)) ||
+                  partName.toLowerCase().includes(name.toLowerCase().slice(0, 10))) {
+                partId = id;
+                break;
+              }
+            }
+          }
+          if (partId) {
+            await db.insert(assemblyParts).values({ assemblyId: a.id, partId, quantity: 1 });
+            linkCount++;
+          }
+        }
+      }
+      if (linkCount > 0) {
+        console.log(`Linked ${linkCount} parts to ${unlinkedAssemblies.length} new assemblies`);
+      }
+    }
   }
 
   // Seed TSBC Permit Fee Schedules
