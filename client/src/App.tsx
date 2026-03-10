@@ -13,6 +13,7 @@ import ProjectDetail from "@/pages/project-detail";
 import Estimates from "@/pages/estimates";
 import EstimateDetail from "@/pages/estimate-detail";
 import Customers from "@/pages/customers";
+import CustomerDetail from "@/pages/customer-detail";
 import SettingsPage from "@/pages/settings-page";
 import Invoices from "@/pages/invoices";
 import InvoiceDetail from "@/pages/invoice-detail";
@@ -32,6 +33,7 @@ function Router() {
       <Route path="/invoices" component={Invoices} />
       <Route path="/invoices/:id" component={InvoiceDetail} />
       <Route path="/customers" component={Customers} />
+      <Route path="/customers/:id" component={CustomerDetail} />
       <Route path="/employees" component={Employees} />
       <Route path="/photos" component={Photos} />
       <Route path="/settings" component={SettingsPage} />

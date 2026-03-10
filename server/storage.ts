@@ -3,7 +3,7 @@ import {
   deviceAssemblies, aiAnalyses, settings,
   wireTypes, serviceBundles, panelCircuits, estimateServices, estimateCrew, complianceDocuments,
   supplierImports, jobTypes, partsCatalog, assemblyParts, roomPanelAssignments,
-  permitFeeSchedules, projectPhotos, projectAssignments,
+  permitFeeSchedules, projectPhotos, projectAssignments, timeEntries,
   type Customer, type InsertCustomer,
   type Employee, type InsertEmployee,
   type Project, type InsertProject,
@@ -28,9 +28,12 @@ import {
   type PermitFeeSchedule, type InsertPermitFeeSchedule,
   type ProjectPhoto, type InsertProjectPhoto,
   type ProjectAssignment, type InsertProjectAssignment,
+  type TimeEntry, type InsertTimeEntry,
+  receipts,
+  type Receipt, type InsertReceipt,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, ilike, sql, and } from "drizzle-orm";
+import { eq, desc, ilike, sql, and, gte, lte } from "drizzle-orm";
 
 export interface IStorage {
   getCustomers(): Promise<Customer[]>;
@@ -111,6 +114,7 @@ export interface IStorage {
 
   getEstimateServices(estimateId: number): Promise<EstimateService[]>;
   createEstimateService(data: InsertEstimateService): Promise<EstimateService>;
+  updateEstimateService(id: number, data: Partial<InsertEstimateService>): Promise<EstimateService>;
   deleteEstimateService(id: number): Promise<void>;
 
   getEstimateCrew(estimateId: number): Promise<EstimateCrew[]>;
@@ -162,7 +166,9 @@ export interface IStorage {
 
   // Project Photos
   getProjectPhotos(projectId: number, phase?: string): Promise<ProjectPhoto[]>;
+  getProjectPhoto(id: number): Promise<ProjectPhoto | undefined>;
   createProjectPhoto(data: InsertProjectPhoto): Promise<ProjectPhoto>;
+  updateProjectPhoto(id: number, data: Partial<InsertProjectPhoto>): Promise<ProjectPhoto | undefined>;
   deleteProjectPhoto(id: number): Promise<void>;
 
   // Project Assignments
@@ -170,6 +176,20 @@ export interface IStorage {
   getEmployeeProjects(employeeId: number): Promise<ProjectAssignment[]>;
   createProjectAssignment(data: InsertProjectAssignment): Promise<ProjectAssignment>;
   deleteProjectAssignment(id: number): Promise<void>;
+
+  // Time Entries
+  getTimeEntries(filters?: { employeeId?: number; projectId?: number; startDate?: string; endDate?: string }): Promise<TimeEntry[]>;
+  createTimeEntry(entry: InsertTimeEntry): Promise<TimeEntry>;
+  updateTimeEntry(id: number, data: Partial<InsertTimeEntry>): Promise<TimeEntry | undefined>;
+  upsertTimeEntry(data: InsertTimeEntry): Promise<TimeEntry>;
+  deleteTimeEntry(id: number): Promise<void>;
+  getEmployeeProjectSummary(employeeId: number): Promise<{ projectId: number; totalHours: number }[]>;
+  getProjectTimeSummary(projectId: number): Promise<{ employeeId: number; totalHours: number; phase: string }[]>;
+
+  // Receipts
+  getReceiptByInvoiceId(invoiceId: number): Promise<Receipt | undefined>;
+  countReceipts(): Promise<number>;
+  createReceipt(data: InsertReceipt): Promise<Receipt>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -471,6 +491,11 @@ export class DatabaseStorage implements IStorage {
     return es;
   }
 
+  async updateEstimateService(id: number, data: Partial<InsertEstimateService>): Promise<EstimateService> {
+    const [updated] = await db.update(estimateServices).set(data).where(eq(estimateServices.id, id)).returning();
+    return updated;
+  }
+
   async deleteEstimateService(id: number): Promise<void> {
     await db.delete(estimateServices).where(eq(estimateServices.id, id));
   }
@@ -684,8 +709,18 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(projectPhotos.createdAt));
   }
 
+  async getProjectPhoto(id: number): Promise<ProjectPhoto | undefined> {
+    const [photo] = await db.select().from(projectPhotos).where(eq(projectPhotos.id, id));
+    return photo;
+  }
+
   async createProjectPhoto(data: InsertProjectPhoto): Promise<ProjectPhoto> {
     const [photo] = await db.insert(projectPhotos).values(data).returning();
+    return photo;
+  }
+
+  async updateProjectPhoto(id: number, data: Partial<InsertProjectPhoto>): Promise<ProjectPhoto | undefined> {
+    const [photo] = await db.update(projectPhotos).set(data).where(eq(projectPhotos.id, id)).returning();
     return photo;
   }
 
@@ -709,6 +744,95 @@ export class DatabaseStorage implements IStorage {
 
   async deleteProjectAssignment(id: number): Promise<void> {
     await db.delete(projectAssignments).where(eq(projectAssignments.id, id));
+  }
+
+  // Time Entries
+  async getTimeEntries(filters?: { employeeId?: number; projectId?: number; startDate?: string; endDate?: string }): Promise<TimeEntry[]> {
+    const conditions = [];
+    if (filters?.employeeId) conditions.push(eq(timeEntries.employeeId, filters.employeeId));
+    if (filters?.projectId) conditions.push(eq(timeEntries.projectId, filters.projectId));
+    if (filters?.startDate) conditions.push(gte(timeEntries.date, filters.startDate));
+    if (filters?.endDate) conditions.push(lte(timeEntries.date, filters.endDate));
+
+    if (conditions.length > 0) {
+      return db.select().from(timeEntries).where(and(...conditions)).orderBy(desc(timeEntries.date));
+    }
+    return db.select().from(timeEntries).orderBy(desc(timeEntries.date));
+  }
+
+  async createTimeEntry(entry: InsertTimeEntry): Promise<TimeEntry> {
+    const [te] = await db.insert(timeEntries).values(entry).returning();
+    return te;
+  }
+
+  async updateTimeEntry(id: number, data: Partial<InsertTimeEntry>): Promise<TimeEntry | undefined> {
+    const [te] = await db.update(timeEntries).set(data).where(eq(timeEntries.id, id)).returning();
+    return te;
+  }
+
+  async upsertTimeEntry(data: InsertTimeEntry): Promise<TimeEntry> {
+    // Find existing entry with same employeeId + projectId + date + phase
+    const conditions = [
+      eq(timeEntries.employeeId, data.employeeId),
+      eq(timeEntries.projectId, data.projectId),
+      eq(timeEntries.date, data.date),
+    ];
+    if (data.phase) {
+      conditions.push(eq(timeEntries.phase, data.phase));
+    }
+    const existing = await db.select().from(timeEntries).where(and(...conditions));
+    if (existing.length > 0) {
+      const [updated] = await db.update(timeEntries)
+        .set({ hours: data.hours, notes: data.notes })
+        .where(eq(timeEntries.id, existing[0].id))
+        .returning();
+      return updated;
+    }
+    const [created] = await db.insert(timeEntries).values(data).returning();
+    return created;
+  }
+
+  async deleteTimeEntry(id: number): Promise<void> {
+    await db.delete(timeEntries).where(eq(timeEntries.id, id));
+  }
+
+  async getEmployeeProjectSummary(employeeId: number): Promise<{ projectId: number; totalHours: number }[]> {
+    const rows = await db.select({
+      projectId: timeEntries.projectId,
+      totalHours: sql<number>`COALESCE(SUM(${timeEntries.hours}), 0)`,
+    })
+    .from(timeEntries)
+    .where(eq(timeEntries.employeeId, employeeId))
+    .groupBy(timeEntries.projectId);
+    return rows.map(r => ({ projectId: r.projectId, totalHours: Number(r.totalHours) }));
+  }
+
+  async getProjectTimeSummary(projectId: number): Promise<{ employeeId: number; totalHours: number; phase: string }[]> {
+    const rows = await db.select({
+      employeeId: timeEntries.employeeId,
+      totalHours: sql<number>`COALESCE(SUM(${timeEntries.hours}), 0)`,
+      phase: timeEntries.phase,
+    })
+    .from(timeEntries)
+    .where(eq(timeEntries.projectId, projectId))
+    .groupBy(timeEntries.employeeId, timeEntries.phase);
+    return rows.map(r => ({ employeeId: r.employeeId, totalHours: Number(r.totalHours), phase: r.phase || "unassigned" }));
+  }
+
+  // Receipts
+  async getReceiptByInvoiceId(invoiceId: number): Promise<Receipt | undefined> {
+    const [receipt] = await db.select().from(receipts).where(eq(receipts.invoiceId, invoiceId));
+    return receipt;
+  }
+
+  async countReceipts(): Promise<number> {
+    const [result] = await db.select({ count: sql<number>`count(*)::int` }).from(receipts);
+    return result?.count ?? 0;
+  }
+
+  async createReceipt(data: InsertReceipt): Promise<Receipt> {
+    const [receipt] = await db.insert(receipts).values(data).returning();
+    return receipt;
   }
 }
 

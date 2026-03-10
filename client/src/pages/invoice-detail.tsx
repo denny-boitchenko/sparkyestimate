@@ -25,9 +25,10 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
   ArrowLeft, Plus, Trash2, Send, DollarSign, Download,
-  FileText, FileSpreadsheet, Calendar, User, Pencil, ExternalLink, Loader2
+  FileText, FileSpreadsheet, Calendar, User, Pencil, ExternalLink, Loader2, CreditCard, Receipt
 } from "lucide-react";
 import type { Invoice, InvoiceItem, Project, Customer, Estimate } from "@shared/schema";
+import { PAYMENT_METHODS } from "@shared/schema";
 
 function InvoiceStatusBadge({ status }: { status: string }) {
   switch (status) {
@@ -90,7 +91,7 @@ async function exportInvoicePdf(invoiceId: number) {
   const infoBoxX = pw - margin - 72;
   const infoBoxW = 72;
 
-  doc.setFillColor(70, 70, 70);
+  doc.setFillColor(30, 64, 120);
   doc.rect(infoBoxX, 15, infoBoxW, 7, "F");
 
   doc.setFontSize(7.5);
@@ -99,8 +100,8 @@ async function exportInvoicePdf(invoiceId: number) {
   doc.text("INVOICE", infoBoxX + 4, 20);
   doc.text(`#${data.invoice?.invoiceNumber || invoiceId}`, infoBoxX + infoBoxW - 4, 20, { align: "right" });
 
-  doc.setDrawColor(200, 200, 200);
-  doc.setFillColor(250, 250, 250);
+  doc.setDrawColor(180, 205, 235);
+  doc.setFillColor(235, 243, 255);
   doc.rect(infoBoxX, 22, infoBoxW, 7, "F");
   doc.line(infoBoxX, 22, infoBoxX + infoBoxW, 22);
   doc.setTextColor(60, 60, 60);
@@ -112,7 +113,7 @@ async function exportInvoicePdf(invoiceId: number) {
 
   let infoBoxH = 14;
   if (dueDate) {
-    doc.setFillColor(250, 250, 250);
+    doc.setFillColor(235, 243, 255);
     doc.rect(infoBoxX, 29, infoBoxW, 7, "F");
     doc.line(infoBoxX, 29, infoBoxX + infoBoxW, 29);
     doc.setFont("helvetica", "bold");
@@ -122,7 +123,7 @@ async function exportInvoicePdf(invoiceId: number) {
     infoBoxH = 21;
   }
 
-  doc.setFillColor(250, 250, 250);
+  doc.setFillColor(235, 243, 255);
   doc.rect(infoBoxX, 15 + infoBoxH, infoBoxW, 7, "F");
   doc.line(infoBoxX, 15 + infoBoxH, infoBoxX + infoBoxW, 15 + infoBoxH);
   doc.setFont("helvetica", "bold");
@@ -130,7 +131,7 @@ async function exportInvoicePdf(invoiceId: number) {
   doc.setFontSize(9);
   doc.text(`$${(data.invoice?.total || 0).toFixed(2)}`, infoBoxX + infoBoxW - 4, 15 + infoBoxH + 5, { align: "right" });
 
-  doc.setDrawColor(200, 200, 200);
+  doc.setDrawColor(180, 205, 235);
   doc.rect(infoBoxX, 15, infoBoxW, infoBoxH + 7, "S");
 
   let cy = 32;
@@ -184,7 +185,7 @@ async function exportInvoicePdf(invoiceId: number) {
   doc.text("INVOICE", margin, startY + 4);
   startY += 10;
 
-  const headerColor = [100, 100, 100]; // Grey
+  const headerColor = [44, 82, 130]; // Blue
   const itemRows: any[] = [];
 
   if (data.items && data.items.length > 0) {
@@ -233,8 +234,8 @@ async function exportInvoicePdf(invoiceId: number) {
   const valX = pw - margin;
   const labelX = summaryBoxX;
 
-  doc.setDrawColor(220, 220, 220);
-  doc.setFillColor(250, 250, 250);
+  doc.setDrawColor(180, 205, 235);
+  doc.setFillColor(235, 243, 255);
   doc.rect(summaryBoxX, finalY - 4, summaryBoxW, 8, "F");
   doc.line(summaryBoxX, finalY - 4, summaryBoxX + summaryBoxW, finalY - 4);
   doc.line(summaryBoxX, finalY + 4, summaryBoxX + summaryBoxW, finalY + 4);
@@ -273,7 +274,7 @@ async function exportInvoicePdf(invoiceId: number) {
     finalY += 5;
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8);
-    doc.setTextColor(100, 100, 100);
+    doc.setTextColor(44, 82, 130);
     const noteLines = doc.splitTextToSize(data.invoice.notes, contentW);
     doc.text(noteLines, margin, finalY);
     finalY += noteLines.length * 4;
@@ -289,7 +290,7 @@ async function exportInvoicePdf(invoiceId: number) {
     finalY += 5;
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8);
-    doc.setTextColor(100, 100, 100);
+    doc.setTextColor(44, 82, 130);
     const termLines = doc.splitTextToSize(data.invoice.terms, contentW);
     doc.text(termLines, margin, finalY);
   }
@@ -313,7 +314,20 @@ async function exportInvoicePdf(invoiceId: number) {
   doc.save(`Invoice-${data.invoice?.invoiceNumber || invoiceId}.pdf`);
 }
 
-async function exportMaterialExcel(invoiceId: number) {
+async function exportMaterialExcel(invoiceId: number, estimateId: number | null) {
+  if (estimateId) {
+    // Download actual material breakdown from source estimate
+    const res = await apiRequest("GET", `/api/estimates/${estimateId}/export/material-excel`);
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Material-List-Invoice-${invoiceId}.xlsx`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+    return;
+  }
+  // Fallback: export invoice items as material list
   const res = await apiRequest("GET", `/api/invoices/${invoiceId}/export`);
   const data = await res.json();
   const XLSX = await import("xlsx");
@@ -332,7 +346,20 @@ async function exportMaterialExcel(invoiceId: number) {
   XLSX.writeFile(wb, `Invoice-${data.invoice?.invoiceNumber || invoiceId}-Materials.xlsx`);
 }
 
-async function exportLabourExcel(invoiceId: number) {
+async function exportLabourExcel(invoiceId: number, estimateId: number | null) {
+  if (estimateId) {
+    // Download actual labour breakdown from source estimate
+    const res = await apiRequest("GET", `/api/estimates/${estimateId}/export/labor-excel`);
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Labour-Breakdown-Invoice-${invoiceId}.xlsx`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+    return;
+  }
+  // Fallback: export invoice items as labour list
   const res = await apiRequest("GET", `/api/invoices/${invoiceId}/export`);
   const data = await res.json();
   const XLSX = await import("xlsx");
@@ -373,12 +400,148 @@ async function exportLabourExcel(invoiceId: number) {
   XLSX.writeFile(wb, `Invoice-${data.invoice?.invoiceNumber || invoiceId}-Labour.xlsx`);
 }
 
+async function exportReceiptPdf(invoiceId: number, receipt: any) {
+  const res = await apiRequest("GET", `/api/invoices/${invoiceId}/export`);
+  const data = await res.json();
+
+  const { default: jsPDF } = await import("jspdf");
+
+  const doc = new jsPDF();
+  const pw = doc.internal.pageSize.getWidth();
+  const margin = 20;
+
+  const settingsRes = await apiRequest("GET", "/api/settings");
+  const settingsArr = await settingsRes.json();
+  const sm: Record<string, string> = {};
+  (settingsArr || []).forEach((s: any) => { sm[s.key] = s.value; });
+
+  const companyName = sm.companyName || data.company?.name || "";
+  const companyPhone = sm.companyPhone || data.company?.phone || "";
+  const companyEmail = sm.companyEmail || data.company?.email || "";
+  const companyAddress = sm.companyAddress || "";
+  const logoData = sm.companyLogoData || data.company?.logoData || null;
+
+  let cy = 20;
+
+  if (logoData) {
+    try {
+      doc.addImage(logoData, "PNG", margin, 12, 50, 20);
+      cy = 36;
+    } catch (_) {}
+  } else if (companyName) {
+    doc.setTextColor(30, 30, 30);
+    doc.setFontSize(18);
+    doc.setFont("helvetica", "bold");
+    doc.text(companyName, margin, 24);
+    cy = 30;
+  }
+
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(80, 80, 80);
+  if (companyAddress) { doc.text(companyAddress, margin, cy); cy += 5; }
+  if (companyPhone) { doc.text(companyPhone, margin, cy); cy += 5; }
+  if (companyEmail) { doc.text(companyEmail, margin, cy); cy += 5; }
+
+  cy += 10;
+
+  // Receipt header — light blue theme
+  doc.setFillColor(21, 101, 192);
+  doc.rect(margin, cy, pw - margin * 2, 12, "F");
+  doc.setFontSize(14);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(255, 255, 255);
+  doc.text("PAYMENT RECEIPT", pw / 2, cy + 8, { align: "center" });
+  cy += 20;
+
+  // Receipt details
+  doc.setFontSize(10);
+  doc.setTextColor(30, 30, 30);
+  doc.setFont("helvetica", "bold");
+  doc.text("Receipt #:", margin, cy);
+  doc.setFont("helvetica", "normal");
+  doc.text(receipt.receiptNumber, margin + 40, cy);
+  cy += 7;
+
+  doc.setFont("helvetica", "bold");
+  doc.text("Date:", margin, cy);
+  doc.setFont("helvetica", "normal");
+  const payDate = receipt.paymentDate ? new Date(receipt.paymentDate).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }) : new Date().toLocaleDateString("en-CA");
+  doc.text(payDate, margin + 40, cy);
+  cy += 7;
+
+  doc.setFont("helvetica", "bold");
+  doc.text("Invoice #:", margin, cy);
+  doc.setFont("helvetica", "normal");
+  doc.text(data.invoice?.invoiceNumber || "", margin + 40, cy);
+  cy += 12;
+
+  // Divider
+  doc.setDrawColor(180, 205, 235);
+  doc.line(margin, cy, pw - margin, cy);
+  cy += 8;
+
+  // Customer info
+  doc.setFont("helvetica", "bold");
+  doc.text("Received From:", margin, cy);
+  cy += 6;
+  doc.setFont("helvetica", "normal");
+  if (data.customer?.name) { doc.text(data.customer.name, margin, cy); cy += 5; }
+  if (data.customer?.address) { doc.text(data.customer.address, margin, cy); cy += 5; }
+  cy += 8;
+
+  // Amount — light blue tinted background
+  doc.setFillColor(230, 240, 250);
+  doc.rect(margin, cy, pw - margin * 2, 14, "F");
+  doc.setFontSize(12);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(30, 30, 30);
+  doc.text("Amount Paid:", margin + 4, cy + 9);
+  doc.text(`$${Number(receipt.amount).toFixed(2)}`, pw - margin - 4, cy + 9, { align: "right" });
+  cy += 22;
+
+  // Payment method
+  if (receipt.paymentMethod) {
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.text("Payment Method:", margin, cy);
+    doc.setFont("helvetica", "normal");
+    doc.text(receipt.paymentMethod.replace("_", " ").replace(/\b\w/g, (c: string) => c.toUpperCase()), margin + 50, cy);
+    cy += 10;
+  }
+
+  // Notes
+  if (receipt.notes) {
+    doc.setFont("helvetica", "bold");
+    doc.text("Notes:", margin, cy);
+    cy += 5;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    const noteLines = doc.splitTextToSize(receipt.notes, pw - margin * 2);
+    doc.text(noteLines, margin, cy);
+    cy += noteLines.length * 5;
+  }
+
+  // Footer
+  cy += 15;
+  doc.setDrawColor(180, 205, 235);
+  doc.line(margin, cy, pw - margin, cy);
+  cy += 6;
+  doc.setFontSize(8);
+  doc.setTextColor(120, 120, 120);
+  doc.text("Thank you for your payment.", pw / 2, cy, { align: "center" });
+
+  doc.save(`Receipt-${receipt.receiptNumber}.pdf`);
+}
+
 export default function InvoiceDetail() {
   const [, params] = useRoute("/invoices/:id");
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const [addItemOpen, setAddItemOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [payDialogOpen, setPayDialogOpen] = useState(false);
+  const [paymentMethodSelection, setPaymentMethodSelection] = useState<string>("e-transfer");
   const [editForm, setEditForm] = useState<{
     invoiceNumber: string;
     status: string;
@@ -388,7 +551,8 @@ export default function InvoiceDetail() {
     taxLabel: string;
     notes: string;
     terms: string;
-  }>({ invoiceNumber: "", status: "draft", invoiceDate: "", dueDate: "", taxRate: 5, taxLabel: "GST 5%", notes: "", terms: "" });
+    paymentMethod: string;
+  }>({ invoiceNumber: "", status: "draft", invoiceDate: "", dueDate: "", taxRate: 5, taxLabel: "GST 5%", notes: "", terms: "", paymentMethod: "" });
   const [newItem, setNewItem] = useState({ description: "", room: "", quantity: 1, unitPrice: 0 });
   const [deleteItemTarget, setDeleteItemTarget] = useState<{ id: number; description: string } | null>(null);
   const [exporting, setExporting] = useState<string | null>(null);
@@ -418,6 +582,12 @@ export default function InvoiceDetail() {
   const { data: sourceEstimate } = useQuery<Estimate>({
     queryKey: ["/api/estimates", invoice?.estimateId],
     enabled: !!invoice?.estimateId,
+  });
+
+  const { data: existingReceipt } = useQuery<any>({
+    queryKey: ["/api/invoices", invoiceId, "receipt"],
+    enabled: invoiceId > 0 && invoice?.status === "paid",
+    retry: false,
   });
 
   const updateInvoiceMutation = useMutation({
@@ -501,6 +671,7 @@ export default function InvoiceDetail() {
       taxLabel: invoice.taxLabel,
       notes: invoice.notes || "",
       terms: invoice.terms || "",
+      paymentMethod: (invoice as any).paymentMethod || "",
     });
     setEditOpen(true);
   };
@@ -520,6 +691,7 @@ export default function InvoiceDetail() {
       total,
       notes: editForm.notes || null,
       terms: editForm.terms || null,
+      paymentMethod: editForm.paymentMethod || null,
     };
     if (editForm.status === "paid" && !invoice?.paymentDate) {
       payload.paymentDate = new Date().toISOString();
@@ -556,7 +728,7 @@ export default function InvoiceDetail() {
   const handleExportMaterialExcel = async () => {
     setExporting("material");
     try {
-      await exportMaterialExcel(invoiceId);
+      await exportMaterialExcel(invoiceId, invoice?.estimateId || null);
       toast({ title: "Material Excel exported" });
     } catch (err: any) {
       toast({ title: "Export failed", description: err.message, variant: "destructive" });
@@ -568,12 +740,64 @@ export default function InvoiceDetail() {
   const handleExportLabourExcel = async () => {
     setExporting("labour");
     try {
-      await exportLabourExcel(invoiceId);
+      await exportLabourExcel(invoiceId, invoice?.estimateId || null);
       toast({ title: "Labour Excel exported" });
     } catch (err: any) {
       toast({ title: "Export failed", description: err.message, variant: "destructive" });
     } finally {
       setExporting(null);
+    }
+  };
+
+  const generateReceiptMutation = useMutation({
+    mutationFn: async () => {
+      if (!invoice) throw new Error("No invoice");
+      const res = await apiRequest("POST", "/api/receipts", {
+        invoiceId: invoice.id,
+        projectId: invoice.projectId,
+        customerId: invoice.customerId,
+        amount: invoice.total,
+        paymentMethod: (invoice as any).paymentMethod || null,
+        paymentDate: invoice.paymentDate || new Date().toISOString(),
+        notes: null,
+      });
+      return res.json();
+    },
+    onSuccess: async (receipt) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices", invoiceId, "receipt"] });
+      toast({ title: "Receipt generated" });
+      await exportReceiptPdf(invoiceId, receipt);
+    },
+    onError: async (err: Error) => {
+      // If receipt already exists (409), fetch it and export
+      if (err.message.includes("already exists")) {
+        toast({ title: "Receipt already exists", description: "Downloading existing receipt..." });
+        await queryClient.invalidateQueries({ queryKey: ["/api/invoices", invoiceId, "receipt"] });
+        try {
+          const res = await apiRequest("GET", `/api/invoices/${invoiceId}/receipt`);
+          const existing = await res.json();
+          await exportReceiptPdf(invoiceId, existing);
+          toast({ title: "Receipt PDF exported" });
+        } catch (_) {
+          // Receipt query was invalidated, button will update on next render
+        }
+      } else {
+        toast({ title: "Error", description: err.message, variant: "destructive" });
+      }
+    },
+  });
+
+  const handleDownloadReceipt = async () => {
+    if (existingReceipt) {
+      setExporting("receipt");
+      try {
+        await exportReceiptPdf(invoiceId, existingReceipt);
+        toast({ title: "Receipt PDF exported" });
+      } catch (err: any) {
+        toast({ title: "Export failed", description: err.message, variant: "destructive" });
+      } finally {
+        setExporting(null);
+      }
     }
   };
 
@@ -632,6 +856,11 @@ export default function InvoiceDetail() {
               Invoice {invoice.invoiceNumber}
             </h1>
             <InvoiceStatusBadge status={invoice.status} />
+            {(invoice as any).phase && (
+              <Badge className="bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300 capitalize" data-testid="badge-phase">
+                {(invoice as any).phase} Phase
+              </Badge>
+            )}
           </div>
           <div className="flex items-center gap-2 mt-1 flex-wrap">
             <p className="text-sm text-muted-foreground" data-testid="text-project-name">
@@ -673,7 +902,10 @@ export default function InvoiceDetail() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => updateInvoiceMutation.mutate({ status: "paid", paymentDate: new Date().toISOString() as any })}
+              onClick={() => {
+                setPaymentMethodSelection("e-transfer");
+                setPayDialogOpen(true);
+              }}
               disabled={updateInvoiceMutation.isPending}
               data-testid="button-mark-paid"
             >
@@ -695,7 +927,8 @@ export default function InvoiceDetail() {
             variant="outline"
             size="sm"
             onClick={handleExportMaterialExcel}
-            disabled={!!exporting}
+            disabled={!!exporting || !invoice.estimateId}
+            title={!invoice.estimateId ? "No source estimate — material breakdown unavailable" : "Export material breakdown from source estimate"}
             data-testid="button-download-material-excel"
           >
             {exporting === "material" ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <FileSpreadsheet className="w-4 h-4 mr-1" />}
@@ -705,12 +938,37 @@ export default function InvoiceDetail() {
             variant="outline"
             size="sm"
             onClick={handleExportLabourExcel}
-            disabled={!!exporting}
+            disabled={!!exporting || !invoice.estimateId}
+            title={!invoice.estimateId ? "No source estimate — labour breakdown unavailable" : "Export labour breakdown from source estimate"}
             data-testid="button-download-labour-excel"
           >
             {exporting === "labour" ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <FileSpreadsheet className="w-4 h-4 mr-1" />}
             {exporting === "labour" ? "Exporting..." : "Labour Excel"}
           </Button>
+          {invoice.status === "paid" && !existingReceipt && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => generateReceiptMutation.mutate()}
+              disabled={generateReceiptMutation.isPending}
+              data-testid="button-generate-receipt"
+            >
+              {generateReceiptMutation.isPending ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Receipt className="w-4 h-4 mr-1" />}
+              {generateReceiptMutation.isPending ? "Generating..." : "Generate Receipt"}
+            </Button>
+          )}
+          {invoice.status === "paid" && existingReceipt && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleDownloadReceipt}
+              disabled={exporting === "receipt"}
+              data-testid="button-download-receipt"
+            >
+              {exporting === "receipt" ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Receipt className="w-4 h-4 mr-1" />}
+              {exporting === "receipt" ? "Exporting..." : "Download Receipt"}
+            </Button>
+          )}
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button
@@ -764,6 +1022,23 @@ export default function InvoiceDetail() {
               <div className="flex justify-between gap-4 text-sm">
                 <span className="text-muted-foreground">Payment Date</span>
                 <span data-testid="text-payment-date">{formatDate(invoice.paymentDate)}</span>
+              </div>
+            )}
+            {(invoice as any).paymentMethod && (
+              <div className="flex justify-between gap-4 text-sm">
+                <span className="text-muted-foreground">Payment Method</span>
+                <Badge variant="outline" className="text-xs capitalize" data-testid="text-payment-method">
+                  <CreditCard className="w-3 h-3 mr-1" />
+                  {(invoice as any).paymentMethod.replace("_", " ")}
+                </Badge>
+              </div>
+            )}
+            {(invoice as any).phase && (
+              <div className="flex justify-between gap-4 text-sm">
+                <span className="text-muted-foreground">Phase</span>
+                <Badge className="bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300 capitalize text-xs">
+                  {(invoice as any).phase}
+                </Badge>
               </div>
             )}
             <div className="flex justify-between gap-4 text-sm">
@@ -1139,6 +1414,25 @@ export default function InvoiceDetail() {
               </div>
             </div>
             <div className="space-y-2">
+              <Label>Payment Method</Label>
+              <Select
+                value={editForm.paymentMethod || "none"}
+                onValueChange={(v) => setEditForm({ ...editForm, paymentMethod: v === "none" ? "" : v })}
+              >
+                <SelectTrigger data-testid="select-edit-payment-method">
+                  <SelectValue placeholder="No payment method" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No payment method</SelectItem>
+                  {PAYMENT_METHODS.map(m => (
+                    <SelectItem key={m} value={m} className="capitalize">
+                      {m.replace("_", " ").replace(/\b\w/g, c => c.toUpperCase())}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
               <Label>Notes</Label>
               <Textarea
                 value={editForm.notes}
@@ -1167,6 +1461,50 @@ export default function InvoiceDetail() {
               data-testid="button-save-edit"
             >
               {updateInvoiceMutation.isPending ? "Saving..." : "Save Changes"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={payDialogOpen} onOpenChange={setPayDialogOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Mark as Paid</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Mark invoice {invoice.invoiceNumber} as paid. Select the payment method used.
+            </p>
+            <div className="space-y-2">
+              <Label>Payment Method</Label>
+              <Select value={paymentMethodSelection} onValueChange={setPaymentMethodSelection}>
+                <SelectTrigger data-testid="select-pay-method">
+                  <SelectValue placeholder="Select method" />
+                </SelectTrigger>
+                <SelectContent>
+                  {PAYMENT_METHODS.map(m => (
+                    <SelectItem key={m} value={m} className="capitalize">
+                      {m.replace("_", " ").replace(/\b\w/g, c => c.toUpperCase())}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              className="w-full"
+              onClick={() => {
+                updateInvoiceMutation.mutate({
+                  status: "paid",
+                  paymentDate: new Date().toISOString(),
+                  paymentMethod: paymentMethodSelection,
+                } as any);
+                setPayDialogOpen(false);
+              }}
+              disabled={updateInvoiceMutation.isPending}
+              data-testid="button-confirm-paid"
+            >
+              <DollarSign className="w-4 h-4 mr-1" />
+              Confirm Payment
             </Button>
           </div>
         </DialogContent>

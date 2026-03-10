@@ -12,7 +12,8 @@ import {
   insertPanelCircuitSchema, insertEstimateServiceSchema, insertEstimateCrewSchema,
   insertCustomerSchema, insertEmployeeSchema, insertInvoiceSchema, insertInvoiceItemSchema,
   insertJobTypeSchema, insertProjectPhotoSchema, insertProjectAssignmentSchema,
-  ANALYSIS_MODES
+  insertReceiptSchema, insertTimeEntrySchema,
+  ANALYSIS_MODES, INVOICE_PHASES
 } from "@shared/schema";
 import { z } from "zod";
 import * as cecRules from "./cec-rules";
@@ -1206,6 +1207,14 @@ export async function registerRoutes(
     } catch (err: any) {
       res.status(400).json({ message: err.message });
     }
+  });
+
+  app.patch("/api/estimate-services/:id", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid service ID" });
+    const updates = req.body;
+    const updated = await storage.updateEstimateService(id, updates);
+    res.json(updated);
   });
 
   app.delete("/api/estimate-services/:id", async (req, res) => {
@@ -3774,48 +3783,83 @@ Return ONLY valid JSON:
       const project = await storage.getProject(estimate.projectId);
       if (!project) return res.status(404).json({ message: "Project not found" });
 
-      const items = await storage.getEstimateItems(id);
-      const services = await storage.getEstimateServices(id);
+      // Aggregated invoice creation: mode, customItems, invoiceName, itemIds, serviceIds
+      const { invoiceName, itemIds, serviceIds, mode, customItems } = req.body as {
+        invoiceName?: string;
+        itemIds?: number[];
+        serviceIds?: number[];
+        mode?: "by_phase" | "full"; // default: "by_phase"
+        customItems?: { description: string; amount: number }[];
+      };
+
+      const allItems = await storage.getEstimateItems(id);
+      const allServices = await storage.getEstimateServices(id);
       const settingsData = await storage.getSettings();
       const sm = Object.fromEntries(settingsData.map(s => [s.key, s.value]));
 
-      const totalMaterialCost = items.reduce((sum, item) => {
-        const cost = item.quantity * item.materialCost;
-        const markup = cost * (item.markupPct / 100);
-        return sum + cost + markup;
-      }, 0);
-      const totalLaborHours = items.reduce((sum, item) => sum + item.quantity * item.laborHours, 0);
-      const totalLaborCost = totalLaborHours * estimate.laborRate;
+      // Filter items based on selected IDs (backward compat: if no IDs provided, include everything)
+      const items = itemIds && itemIds.length > 0
+        ? allItems.filter(i => itemIds.includes(i.id))
+        : allItems;
+      const services = serviceIds && serviceIds.length > 0
+        ? allServices.filter(s => serviceIds.includes(s.id))
+        : (!itemIds && !serviceIds) ? allServices : allServices.filter(s => serviceIds?.includes(s.id));
 
       // Wire cost from wire_types catalog
       const wireTypesAll = await storage.getWireTypes();
       const wireCostMap = new Map(wireTypesAll.map(w => [w.name, w.costPerFoot]));
-      const totalWireCost = items.reduce((sum, item) => {
-        const costPerFt = wireCostMap.get(item.wireType || "") || 0;
-        return sum + item.quantity * item.wireFootage * costPerFt;
-      }, 0);
 
-      const serviceMaterialCost = services.reduce((sum, s) => sum + s.materialCost, 0);
-      const serviceLaborHours = services.reduce((sum, s) => sum + s.laborHours, 0);
-      const serviceLaborCost = serviceLaborHours * estimate.laborRate;
+      // Helper: calculate raw cost for a set of items (before global markup/overhead)
+      const calcItemsCost = (itemSet: typeof items) => {
+        const matCost = itemSet.reduce((sum, item) => {
+          const cost = item.quantity * item.materialCost;
+          const markup = cost * (item.markupPct / 100);
+          return sum + cost + markup;
+        }, 0);
+        const laborCost = itemSet.reduce((sum, item) => sum + item.quantity * item.laborHours, 0) * estimate.laborRate;
+        const wireCost = itemSet.reduce((sum, item) => {
+          const costPerFt = wireCostMap.get(item.wireType || "") || 0;
+          return sum + item.quantity * item.wireFootage * costPerFt;
+        }, 0);
+        return { matCost, laborCost, wireCost };
+      };
 
-      const combinedMaterialCost = totalMaterialCost + totalWireCost + serviceMaterialCost;
-      const combinedLaborCost = totalLaborCost + serviceLaborCost;
+      const calcServicesCost = (serviceSet: typeof services) => {
+        const matCost = serviceSet.reduce((sum, s) => sum + s.materialCost, 0);
+        const laborCost = serviceSet.reduce((sum, s) => sum + s.laborHours, 0) * estimate.laborRate;
+        return { matCost, laborCost };
+      };
+
+      // Calculate grand total across all selected items/services
+      const totalItemsCost = calcItemsCost(items);
+      const totalServicesCost = calcServicesCost(services);
+      const combinedMaterialCost = totalItemsCost.matCost + totalItemsCost.wireCost + totalServicesCost.matCost;
+      const combinedLaborCost = totalItemsCost.laborCost + totalServicesCost.laborCost;
       const materialWithMarkup = combinedMaterialCost * (1 + estimate.materialMarkupPct / 100);
       const laborWithMarkup = combinedLaborCost * (1 + estimate.laborMarkupPct / 100);
-      const subtotal = materialWithMarkup + laborWithMarkup;
-      const overhead = subtotal * (estimate.overheadPct / 100);
-      const subtotalWithOverhead = subtotal + overhead;
+      const subtotalRaw = materialWithMarkup + laborWithMarkup;
+      const overhead = subtotalRaw * (estimate.overheadPct / 100);
+      const subtotalWithOverhead = subtotalRaw + overhead;
       const profit = subtotalWithOverhead * (estimate.profitPct / 100);
+
+      // Only include permit fee if all items are selected (full invoice)
       let permitFeeAmount = 0;
-      if (estimate.includePermit && estimate.permitFee) {
+      const isFullInvoiceScope = !itemIds && !serviceIds;
+      if (isFullInvoiceScope && estimate.includePermit && estimate.permitFee) {
         permitFeeAmount = estimate.permitFee;
       }
-      const grandTotal = subtotalWithOverhead + profit + permitFeeAmount;
+
+      // If customItems are provided, use their sum as the grand total
+      let grandTotal: number;
+      if (customItems && customItems.length > 0) {
+        grandTotal = customItems.reduce((sum, ci) => sum + ci.amount, 0);
+      } else {
+        grandTotal = subtotalWithOverhead + profit + permitFeeAmount;
+      }
 
       const taxRate = parseFloat(sm.gstRate || "5");
       const taxLabel = sm.gstLabel || `GST ${taxRate}%`;
-      const taxAmount = (subtotalWithOverhead + profit) * (taxRate / 100);
+      const taxAmount = grandTotal * (taxRate / 100);
       const invoiceTotal = grandTotal + taxAmount;
 
       const existingInvoices = await storage.getInvoices();
@@ -3831,6 +3875,7 @@ Return ONLY valid JSON:
         projectId: estimate.projectId,
         customerId: project.customerId,
         status: "draft",
+        phase: null,
         invoiceDate: new Date(),
         dueDate,
         subtotal: grandTotal,
@@ -3838,58 +3883,100 @@ Return ONLY valid JSON:
         taxLabel,
         taxAmount,
         total: invoiceTotal,
-        notes: sm.estimateNotes || null,
+        notes: invoiceName || sm.estimateNotes || null,
         terms: sm.estimateTerms || null,
       });
 
-      const roomGroups = new Map<string, { items: typeof items; totalPrice: number }>();
-      for (const item of items) {
-        const room = item.room || "General";
-        if (!roomGroups.has(room)) {
-          roomGroups.set(room, { items: [], totalPrice: 0 });
+      // Create invoice line items based on mode
+      if (customItems && customItems.length > 0) {
+        // User provided custom line items — use those directly
+        for (const ci of customItems) {
+          await storage.createInvoiceItem({
+            invoiceId: invoice.id,
+            description: ci.description,
+            room: null,
+            quantity: 1,
+            unitPrice: ci.amount,
+            total: ci.amount,
+          });
         }
-        const group = roomGroups.get(room)!;
-        group.items.push(item);
-        group.totalPrice += item.quantity * (item.materialCost + item.laborHours * estimate.laborRate);
-      }
-
-      for (const [room, group] of Array.from(roomGroups)) {
-        const desc = group.items.map((i: any) => `${i.quantity}x ${i.deviceType}`).join(", ");
+      } else if (mode === "full") {
+        // Single aggregated line item
+        const description = invoiceName || "Complete Electrical — Materials, labour & wire";
         await storage.createInvoiceItem({
           invoiceId: invoice.id,
-          description: `Supply and install electrical for ${room}`,
-          room,
-          quantity: 1,
-          unitPrice: group.totalPrice,
-          total: group.totalPrice,
-        });
-      }
-
-      for (const service of services) {
-        const serviceTotal = service.materialCost + service.laborHours * estimate.laborRate;
-        await storage.createInvoiceItem({
-          invoiceId: invoice.id,
-          description: service.name,
+          description,
           room: null,
           quantity: 1,
-          unitPrice: serviceTotal,
-          total: serviceTotal,
+          unitPrice: grandTotal,
+          total: grandTotal,
         });
+      } else {
+        // mode === "by_phase" (default) — group items by phase, create one line per phase
+        const phaseMap = new Map<string, { items: typeof items; services: typeof services }>();
+        const phaseLabels: Record<string, string> = {
+          service: "Electrical Service",
+          roughin: "Rough-In",
+          finish: "Finishing",
+          unassigned: "General Electrical",
+        };
+        const phaseDescSuffix: Record<string, string> = {
+          service: "Materials, labour & permits",
+          roughin: "Materials, labour & wire",
+          finish: "Materials, labour & fixtures",
+          unassigned: "Materials & labour",
+        };
+
+        for (const item of items) {
+          const phase = item.phase || "unassigned";
+          if (!phaseMap.has(phase)) phaseMap.set(phase, { items: [], services: [] });
+          phaseMap.get(phase)!.items.push(item);
+        }
+        // Assign services to "service" phase by default
+        for (const service of services) {
+          const phase = "service";
+          if (!phaseMap.has(phase)) phaseMap.set(phase, { items: [], services: [] });
+          phaseMap.get(phase)!.services.push(service);
+        }
+
+        // Calculate per-phase raw subtotals for proportional allocation
+        const rawPhaseTotals = new Map<string, number>();
+        let rawGrandTotal = 0;
+        for (const [phase, group] of Array.from(phaseMap.entries())) {
+          const ic = calcItemsCost(group.items);
+          const sc = calcServicesCost(group.services);
+          const phaseMat = (ic.matCost + ic.wireCost + sc.matCost) * (1 + estimate.materialMarkupPct / 100);
+          const phaseLabor = (ic.laborCost + sc.laborCost) * (1 + estimate.laborMarkupPct / 100);
+          const phaseSubtotal = phaseMat + phaseLabor;
+          rawPhaseTotals.set(phase, phaseSubtotal);
+          rawGrandTotal += phaseSubtotal;
+        }
+
+        // Distribute overhead, profit, and permit proportionally across phases
+        const phaseOrder = ["service", "roughin", "finish", "unassigned"];
+        for (const phase of phaseOrder) {
+          if (!phaseMap.has(phase)) continue;
+          const rawPhase = rawPhaseTotals.get(phase) || 0;
+          const proportion = rawGrandTotal > 0 ? rawPhase / rawGrandTotal : 0;
+          const phaseOverhead = overhead * proportion;
+          const phaseProfit = profit * proportion;
+          const phasePermit = permitFeeAmount * proportion;
+          const phaseTotal = rawPhase + phaseOverhead + phaseProfit + phasePermit;
+
+          const label = phaseLabels[phase] || phase;
+          const suffix = phaseDescSuffix[phase] || "Materials & labour";
+          await storage.createInvoiceItem({
+            invoiceId: invoice.id,
+            description: `${label} — ${suffix}`,
+            room: null,
+            quantity: 1,
+            unitPrice: Math.round(phaseTotal * 100) / 100,
+            total: Math.round(phaseTotal * 100) / 100,
+          });
+        }
       }
 
-      // Add permit fee as a line item if included
-      if (permitFeeAmount > 0) {
-        await storage.createInvoiceItem({
-          invoiceId: invoice.id,
-          description: "Electrical Permit",
-          room: null,
-          quantity: 1,
-          unitPrice: permitFeeAmount,
-          total: permitFeeAmount,
-        });
-      }
-
-      res.json({ invoiceId: invoice.id, invoiceNumber, message: "Invoice created from estimate" });
+      res.json({ id: invoice.id, invoiceId: invoice.id, invoiceNumber, message: "Invoice created from estimate" });
     } catch (err: any) {
       console.error("Convert to invoice error:", err);
       res.status(500).json({ message: err.message || "Failed to create invoice" });
@@ -3945,6 +4032,46 @@ Return ONLY valid JSON:
       project: project ? { name: project.name, address: project.address } : null,
       items: invoiceItemsList,
     });
+  });
+
+  // Receipt — check if receipt exists for an invoice
+  app.get("/api/invoices/:id/receipt", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid invoice ID" });
+    const receipt = await storage.getReceiptByInvoiceId(id);
+    if (!receipt) return res.status(404).json({ message: "No receipt found" });
+    res.json(receipt);
+  });
+
+  // Receipt — create receipt from paid invoice
+  app.post("/api/receipts", async (req, res) => {
+    try {
+      // Auto-generate receipt number if not provided
+      const body = { ...req.body };
+      if (!body.receiptNumber) {
+        const count = await storage.countReceipts();
+        body.receiptNumber = `REC-${String(count + 1).padStart(4, "0")}`;
+      }
+
+      const parsed = insertReceiptSchema.safeParse(body);
+      if (!parsed.success) return res.status(400).json({ message: parsed.error.issues.map(i => i.message).join(", ") });
+
+      const receiptData = parsed.data as any;
+
+      // Verify invoice exists and is paid
+      const invoice = await storage.getInvoice(receiptData.invoiceId);
+      if (!invoice) return res.status(404).json({ message: "Invoice not found" });
+      if (invoice.status !== "paid") return res.status(400).json({ message: "Invoice must be paid to generate a receipt" });
+
+      // Check if receipt already exists
+      const existing = await storage.getReceiptByInvoiceId(receiptData.invoiceId);
+      if (existing) return res.status(409).json({ message: "Receipt already exists for this invoice", receipt: existing });
+
+      const receipt = await storage.createReceipt(receiptData);
+      res.status(201).json(receipt);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
   });
 
   // Material Excel export
@@ -4481,6 +4608,23 @@ Return ONLY valid JSON:
   app.delete("/api/projects/:projectId/photos/:photoId", handlePhotoDelete);
   app.delete("/api/project-photos/:id", handlePhotoDelete);
 
+  // Update photo caption
+  app.patch("/api/projects/:projectId/photos/:photoId", async (req, res) => {
+    const projectId = parseId(req.params.projectId);
+    const photoId = parseId(req.params.photoId);
+    if (!projectId || !photoId) return res.status(400).json({ message: "Invalid project or photo ID" });
+
+    const photo = await storage.getProjectPhoto(photoId);
+    if (!photo || photo.projectId !== projectId) {
+      return res.status(404).json({ message: "Photo not found" });
+    }
+
+    const { caption } = req.body;
+    const updated = await storage.updateProjectPhoto(photoId, { caption: caption ?? null });
+    if (!updated) return res.status(500).json({ message: "Failed to update photo" });
+    res.json(updated);
+  });
+
   // ─── Project Photo Folders (Google Drive) ───
   app.get("/api/projects/:id/photo-folder", async (req, res) => {
     const id = parseId(req.params.id as string);
@@ -4572,6 +4716,134 @@ Return ONLY valid JSON:
     // Return employee info + their assigned projects
     const assignments = await storage.getEmployeeProjects(employee.id);
     res.json({ employee: { id: employee.id, name: employee.name, role: employee.role }, assignments });
+  });
+
+  // ─── Employee Login (PIN-only, no employee ID required) ───
+  app.post("/api/employee-login", async (req, res) => {
+    const { pin } = req.body;
+    if (!pin) return res.status(400).json({ message: "PIN is required" });
+    // Find employee by PIN
+    const allEmployees = await storage.getEmployees();
+    const employee = allEmployees.find(e => e.pin === String(pin) && e.isActive);
+    if (!employee) return res.status(401).json({ message: "Invalid PIN" });
+    const assignments = await storage.getEmployeeProjects(employee.id);
+    res.json({ employee: { id: employee.id, name: employee.name, role: employee.role }, assignments });
+  });
+
+  // ─── Time Entries ───
+  app.get("/api/time-entries", async (req, res) => {
+    const filters: { employeeId?: number; projectId?: number; startDate?: string; endDate?: string } = {};
+    if (req.query.employeeId) filters.employeeId = Number(req.query.employeeId);
+    if (req.query.projectId) filters.projectId = Number(req.query.projectId);
+    if (req.query.startDate) filters.startDate = String(req.query.startDate);
+    if (req.query.endDate) filters.endDate = String(req.query.endDate);
+    const entries = await storage.getTimeEntries(filters);
+    res.json(entries);
+  });
+
+  app.post("/api/time-entries", async (req, res) => {
+    const parsed = insertTimeEntrySchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: parsed.error.issues.map(i => i.message).join(", ") });
+    try {
+      const entry = await storage.createTimeEntry(parsed.data);
+      res.status(201).json(entry);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.put("/api/time-entries", async (req, res) => {
+    const parsed = insertTimeEntrySchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: parsed.error.issues.map(i => i.message).join(", ") });
+    try {
+      const entry = await storage.upsertTimeEntry(parsed.data);
+      res.json(entry);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.patch("/api/time-entries/:id", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid time entry ID" });
+    try {
+      const entry = await storage.updateTimeEntry(id, req.body);
+      if (!entry) return res.status(404).json({ message: "Time entry not found" });
+      res.json(entry);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.delete("/api/time-entries/:id", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid time entry ID" });
+    await storage.deleteTimeEntry(id);
+    res.status(204).send();
+  });
+
+  app.get("/api/employees/:id/project-summary", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid employee ID" });
+    const summary = await storage.getEmployeeProjectSummary(id);
+    res.json(summary);
+  });
+
+  app.get("/api/projects/:id/time-summary", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid project ID" });
+    const summary = await storage.getProjectTimeSummary(id);
+    res.json(summary);
+  });
+
+  // ─── Project Financials ───
+  app.get("/api/projects/:id/financials", async (req, res) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid project ID" });
+    const project = await storage.getProject(id);
+    if (!project) return res.status(404).json({ message: "Project not found" });
+
+    // Invoice totals
+    const projectInvoices = await storage.getInvoicesByProject(id);
+    const invoicedTotal = projectInvoices.reduce((sum, inv) => sum + (inv.total || 0), 0);
+    const paidTotal = projectInvoices
+      .filter(inv => inv.status === "paid")
+      .reduce((sum, inv) => sum + (inv.total || 0), 0);
+    const outstanding = invoicedTotal - paidTotal;
+
+    // Labour cost from time entries + employee rates
+    const timeSummary = await storage.getProjectTimeSummary(id);
+    const allEmployees = await storage.getEmployees();
+    const employeeMap = allEmployees.reduce<Record<number, { name: string; hourlyRate: number }>>((acc, e) => {
+      acc[e.id] = { name: e.name, hourlyRate: e.hourlyRate };
+      return acc;
+    }, {});
+
+    const employeeBreakdown = timeSummary.map(entry => {
+      const emp = employeeMap[entry.employeeId];
+      const rate = emp?.hourlyRate || 0;
+      const cost = entry.totalHours * rate;
+      return {
+        employeeId: entry.employeeId,
+        employeeName: emp?.name || "Unknown",
+        hours: entry.totalHours,
+        rate,
+        cost,
+        phase: entry.phase,
+      };
+    });
+
+    const labourCost = employeeBreakdown.reduce((sum, e) => sum + e.cost, 0);
+    const margin = paidTotal - labourCost;
+
+    res.json({
+      invoicedTotal,
+      paidTotal,
+      outstanding,
+      labourCost,
+      margin,
+      employeeBreakdown,
+    });
   });
 
   return httpServer;

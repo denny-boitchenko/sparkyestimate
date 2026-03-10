@@ -19,10 +19,15 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue
 } from "@/components/ui/select";
-import { FileText, DollarSign, Clock, CheckCircle, MoreHorizontal, Send, Trash2, Users, Search, ArrowUpDown } from "lucide-react";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { FileText, DollarSign, Clock, CheckCircle, MoreHorizontal, Send, Trash2, Users, Search, ArrowUpDown, CreditCard } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Invoice, Project, Customer } from "@shared/schema";
+import { PAYMENT_METHODS } from "@shared/schema";
 
 type StatusFilter = "all" | "draft" | "sent" | "paid" | "overdue";
 
@@ -57,6 +62,8 @@ export default function Invoices() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [customerFilter, setCustomerFilter] = useState<string>("all");
   const [deleteTarget, setDeleteTarget] = useState<Invoice | null>(null);
+  const [payTarget, setPayTarget] = useState<Invoice | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<string>("e-transfer");
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState("date_newest");
   const { toast } = useToast();
@@ -74,8 +81,8 @@ export default function Invoices() {
   });
 
   const updateStatusMutation = useMutation({
-    mutationFn: async ({ id, status, paymentDate }: { id: number; status: string; paymentDate?: string | null }) => {
-      await apiRequest("PATCH", `/api/invoices/${id}`, { status, paymentDate });
+    mutationFn: async ({ id, status, paymentDate, paymentMethod }: { id: number; status: string; paymentDate?: string | null; paymentMethod?: string | null }) => {
+      await apiRequest("PATCH", `/api/invoices/${id}`, { status, paymentDate, paymentMethod });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
@@ -292,6 +299,7 @@ export default function Invoices() {
                     <TableHead>Due Date</TableHead>
                     <TableHead className="text-right">Total</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead>Payment</TableHead>
                     <TableHead></TableHead>
                   </TableRow>
                 </TableHeader>
@@ -332,6 +340,16 @@ export default function Invoices() {
                         <InvoiceStatusBadge status={getEffectiveStatus(invoice)} />
                       </TableCell>
                       <TableCell>
+                        {invoice.status === "paid" && (invoice as any).paymentMethod ? (
+                          <Badge variant="outline" className="text-xs capitalize">
+                            <CreditCard className="w-3 h-3 mr-1" />
+                            {(invoice as any).paymentMethod.replace("_", " ")}
+                          </Badge>
+                        ) : (
+                          <span className="text-sm text-muted-foreground">-</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button size="icon" variant="ghost" data-testid={`button-menu-${invoice.id}`}>
@@ -350,11 +368,10 @@ export default function Invoices() {
                             )}
                             {invoice.status !== "paid" && (
                               <DropdownMenuItem
-                                onClick={() => updateStatusMutation.mutate({
-                                  id: invoice.id,
-                                  status: "paid",
-                                  paymentDate: new Date().toISOString(),
-                                })}
+                                onClick={() => {
+                                  setPayTarget(invoice);
+                                  setPaymentMethod("e-transfer");
+                                }}
                                 data-testid={`button-mark-paid-${invoice.id}`}
                               >
                                 <DollarSign className="w-4 h-4 mr-2" />
@@ -404,6 +421,52 @@ export default function Invoices() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={!!payTarget} onOpenChange={(open) => !open && setPayTarget(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Mark as Paid</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Mark invoice {payTarget?.invoiceNumber} as paid. Select the payment method used.
+            </p>
+            <div className="space-y-2">
+              <Label>Payment Method</Label>
+              <Select value={paymentMethod} onValueChange={setPaymentMethod}>
+                <SelectTrigger data-testid="select-payment-method">
+                  <SelectValue placeholder="Select method" />
+                </SelectTrigger>
+                <SelectContent>
+                  {PAYMENT_METHODS.map(m => (
+                    <SelectItem key={m} value={m} className="capitalize">
+                      {m.replace("_", " ").replace(/\b\w/g, c => c.toUpperCase())}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              className="w-full"
+              onClick={() => {
+                if (payTarget) {
+                  updateStatusMutation.mutate({
+                    id: payTarget.id,
+                    status: "paid",
+                    paymentDate: new Date().toISOString(),
+                    paymentMethod,
+                  });
+                }
+                setPayTarget(null);
+              }}
+              data-testid="button-confirm-paid"
+            >
+              <DollarSign className="w-4 h-4 mr-1" />
+              Confirm Payment
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

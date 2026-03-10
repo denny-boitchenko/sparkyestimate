@@ -18,13 +18,35 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow
+} from "@/components/ui/table";
+import {
   ArrowLeft, Edit, Zap, MapPin, Phone, Mail, Building2,
   Calculator, Plus, Trash2, Calendar, FileText, Camera, Upload,
-  FolderOpen, FileImage, FolderPlus, FolderX
+  FolderOpen, FileImage, FolderPlus, FolderX, Pencil, Check, X,
+  DollarSign, TrendingUp, TrendingDown, Users, Clock
 } from "lucide-react";
 import type { Project, Estimate, Customer, ProjectPhoto } from "@shared/schema";
 
 type PhotoWithUrl = ProjectPhoto & { downloadUrl: string | null; uploadedBy?: string };
+
+type EmployeeBreakdown = {
+  employeeId: number;
+  employeeName: string;
+  hours: number;
+  rate: number;
+  cost: number;
+  phase: string;
+};
+
+type ProjectFinancials = {
+  invoicedTotal: number;
+  paidTotal: number;
+  outstanding: number;
+  labourCost: number;
+  margin: number;
+  employeeBreakdown: EmployeeBreakdown[];
+};
 
 function StatusBadge({ status }: { status: string }) {
   const config: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
@@ -57,6 +79,11 @@ export default function ProjectDetail() {
   const [estimateName, setEstimateName] = useState("");
   const [activePhase, setActivePhase] = useState("service");
   const [uploading, setUploading] = useState(false);
+  const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [uploadCaption, setUploadCaption] = useState("");
+  const [editingCaptionId, setEditingCaptionId] = useState<number | null>(null);
+  const [editingCaptionText, setEditingCaptionText] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const projectId = params?.id ? parseInt(params.id) : 0;
@@ -82,6 +109,11 @@ export default function ProjectDetail() {
 
   const { data: photos } = useQuery<PhotoWithUrl[]>({
     queryKey: ["/api/projects", projectId, "photos"],
+    enabled: projectId > 0,
+  });
+
+  const { data: financials } = useQuery<ProjectFinancials>({
+    queryKey: ["/api/projects", projectId, "financials"],
     enabled: projectId > 0,
   });
 
@@ -131,7 +163,7 @@ export default function ProjectDetail() {
     },
   });
 
-  const handlePhotoUpload = async (file: File) => {
+  const handlePhotoUpload = async (file: File, caption?: string) => {
     if (!project) return;
     setUploading(true);
     try {
@@ -139,6 +171,7 @@ export default function ProjectDetail() {
         const formData = new FormData();
         formData.append("file", file);
         formData.append("phase", activePhase);
+        if (caption) formData.append("caption", caption);
         const res = await fetch(`/api/projects/${projectId}/photos/upload-gdrive`, {
           method: "POST",
           body: formData,
@@ -150,6 +183,7 @@ export default function ProjectDetail() {
           filename: file.name,
           contentType: file.type,
           phase: activePhase,
+          caption: caption || null,
           employeeId: null,
           gpsLat: null,
           gpsLng: null,
@@ -172,13 +206,36 @@ export default function ProjectDetail() {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (files) {
-      for (let i = 0; i < files.length; i++) {
-        handlePhotoUpload(files[i]);
-      }
+    if (files && files.length > 0) {
+      setPendingFiles(Array.from(files));
+      setUploadCaption("");
+      setUploadDialogOpen(true);
     }
     e.target.value = "";
   };
+
+  const handleConfirmUpload = async () => {
+    setUploadDialogOpen(false);
+    const caption = uploadCaption.trim() || undefined;
+    for (const file of pendingFiles) {
+      await handlePhotoUpload(file, caption);
+    }
+    setPendingFiles([]);
+    setUploadCaption("");
+  };
+
+  const updateCaptionMutation = useMutation({
+    mutationFn: async ({ photoId, caption }: { photoId: number; caption: string }) => {
+      await apiRequest("PATCH", `/api/projects/${projectId}/photos/${photoId}`, { caption });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "photos"] });
+      setEditingCaptionId(null);
+    },
+    onError: (err: any) => {
+      toast({ title: "Failed to update caption", description: err.message, variant: "destructive" });
+    },
+  });
 
   const phasePhotos = (phase: string) =>
     (photos || []).filter(p => p.inspectionPhase === phase);
@@ -298,6 +355,9 @@ export default function ProjectDetail() {
           <TabsTrigger value="estimates" data-testid="tab-estimates">
             Estimates ({estimates?.length || 0})
           </TabsTrigger>
+          <TabsTrigger value="financials" data-testid="tab-financials">
+            Financials
+          </TabsTrigger>
           <TabsTrigger value="photos" data-testid="tab-photos">
             Photos ({totalPhotos})
           </TabsTrigger>
@@ -312,31 +372,31 @@ export default function ProjectDetail() {
               <CardContent className="space-y-3">
                 <div className="flex items-center gap-3">
                   <div className="flex items-center justify-center w-9 h-9 rounded-md bg-primary/10 dark:bg-primary/20">
-                    <Zap className="w-4 h-4 text-primary" />
+                    <Users className="w-4 h-4 text-primary" />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-sm font-medium">{project.clientName}</p>
                     {linkedCustomer ? (
-                      <Link href={`/customers`}>
-                        <Badge variant="secondary" className="text-xs mt-0.5" data-testid="badge-linked-customer">
-                          Linked to {linkedCustomer.name}
-                        </Badge>
+                      <Link href={`/customers/${linkedCustomer.id}`}>
+                        <span className="text-xs text-primary hover:underline cursor-pointer" data-testid="link-linked-customer">
+                          View customer profile
+                        </span>
                       </Link>
                     ) : (
-                      <p className="text-xs text-muted-foreground">Client</p>
+                      <p className="text-xs text-muted-foreground">No linked customer</p>
                     )}
                   </div>
                 </div>
-                {project.clientEmail && (
+                {(project.clientEmail || linkedCustomer?.email) && (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Mail className="w-4 h-4 flex-shrink-0" />
-                    <span>{project.clientEmail}</span>
+                    <span>{project.clientEmail || linkedCustomer?.email}</span>
                   </div>
                 )}
-                {project.clientPhone && (
+                {(project.clientPhone || linkedCustomer?.phone) && (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Phone className="w-4 h-4 flex-shrink-0" />
-                    <span>{project.clientPhone}</span>
+                    <span>{project.clientPhone || linkedCustomer?.phone}</span>
                   </div>
                 )}
                 {project.address && (
@@ -438,6 +498,185 @@ export default function ProjectDetail() {
           )}
         </TabsContent>
 
+        <TabsContent value="financials" className="space-y-4 mt-4">
+          {/* Summary Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+            <Card>
+              <CardContent className="pt-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center justify-center w-9 h-9 rounded-md bg-primary/10 dark:bg-primary/20 flex-shrink-0">
+                    <DollarSign className="w-4 h-4 text-primary" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Invoiced Total</p>
+                    <p className="text-lg font-semibold" data-testid="text-invoiced-total">
+                      ${(financials?.invoicedTotal || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center justify-center w-9 h-9 rounded-md bg-emerald-500/10 dark:bg-emerald-500/20 flex-shrink-0">
+                    <DollarSign className="w-4 h-4 text-emerald-500" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Paid by Customer</p>
+                    <p className="text-lg font-semibold text-emerald-600 dark:text-emerald-400" data-testid="text-paid-total">
+                      ${(financials?.paidTotal || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center justify-center w-9 h-9 rounded-md bg-amber-500/10 dark:bg-amber-500/20 flex-shrink-0">
+                    <DollarSign className="w-4 h-4 text-amber-500" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Outstanding</p>
+                    <p className="text-lg font-semibold text-amber-600 dark:text-amber-400" data-testid="text-outstanding">
+                      ${(financials?.outstanding || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center justify-center w-9 h-9 rounded-md bg-violet-500/10 dark:bg-violet-500/20 flex-shrink-0">
+                    <Clock className="w-4 h-4 text-violet-500" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Labour Cost</p>
+                    <p className="text-lg font-semibold" data-testid="text-labour-cost">
+                      ${(financials?.labourCost || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4">
+                <div className="flex items-center gap-3">
+                  <div className={`flex items-center justify-center w-9 h-9 rounded-md flex-shrink-0 ${
+                    (financials?.margin || 0) >= 0
+                      ? "bg-emerald-500/10 dark:bg-emerald-500/20"
+                      : "bg-red-500/10 dark:bg-red-500/20"
+                  }`}>
+                    {(financials?.margin || 0) >= 0
+                      ? <TrendingUp className="w-4 h-4 text-emerald-500" />
+                      : <TrendingDown className="w-4 h-4 text-red-500" />
+                    }
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Margin</p>
+                    <p className={`text-lg font-semibold ${
+                      (financials?.margin || 0) >= 0
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : "text-red-600 dark:text-red-400"
+                    }`} data-testid="text-margin">
+                      ${(financials?.margin || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Progress Bar: Paid vs Invoiced */}
+          {(financials?.invoicedTotal || 0) > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base font-semibold">Payment Progress</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">
+                      Paid: ${(financials?.paidTotal || 0).toLocaleString("en-CA", { minimumFractionDigits: 2 })}
+                    </span>
+                    <span className="text-muted-foreground">
+                      of ${(financials?.invoicedTotal || 0).toLocaleString("en-CA", { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                  <div className="w-full bg-muted rounded-full h-3 overflow-hidden">
+                    <div
+                      className="bg-emerald-500 h-full rounded-full transition-all duration-500"
+                      style={{ width: `${Math.min(100, ((financials?.paidTotal || 0) / (financials?.invoicedTotal || 1)) * 100)}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground text-right">
+                    {Math.round(((financials?.paidTotal || 0) / (financials?.invoicedTotal || 1)) * 100)}% collected
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Employee Breakdown */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base font-semibold">Employee Breakdown</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {!financials?.employeeBreakdown || financials.employeeBreakdown.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <Clock className="w-10 h-10 mx-auto mb-2 opacity-30" />
+                  <p className="text-sm">No time entries recorded yet</p>
+                  <p className="text-xs mt-1">Time logged by employees will appear here</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Employee</TableHead>
+                        <TableHead>Phase</TableHead>
+                        <TableHead className="text-right">Hours</TableHead>
+                        <TableHead className="text-right">Rate</TableHead>
+                        <TableHead className="text-right">Cost</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {financials.employeeBreakdown.map((entry, idx) => (
+                        <TableRow key={idx}>
+                          <TableCell className="font-medium">{entry.employeeName}</TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className="text-xs capitalize">
+                              {entry.phase === "roughin" ? "Rough-in" : entry.phase || "Unassigned"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right">{entry.hours.toFixed(1)}</TableCell>
+                          <TableCell className="text-right">${entry.rate.toFixed(2)}/hr</TableCell>
+                          <TableCell className="text-right font-medium">
+                            ${entry.cost.toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      <TableRow className="border-t-2 font-semibold">
+                        <TableCell colSpan={2}>Total</TableCell>
+                        <TableCell className="text-right">
+                          {financials.employeeBreakdown.reduce((sum, e) => sum + e.hours, 0).toFixed(1)}
+                        </TableCell>
+                        <TableCell></TableCell>
+                        <TableCell className="text-right">
+                          ${financials.labourCost.toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
         <TabsContent value="photos" className="space-y-4 mt-4">
           {!storageStatus?.configured && (
             <Card className="border-amber-200 bg-amber-50 dark:bg-amber-950/20">
@@ -535,27 +774,78 @@ export default function ProjectDetail() {
                 {phasePhotos(phase).length > 0 ? (
                   <div className="border rounded-lg divide-y">
                     {phasePhotos(phase).map(photo => (
-                      <div key={photo.id} className="flex items-center gap-3 px-4 py-3 hover:bg-muted/50">
-                        <FileImage className="w-4 h-4 text-muted-foreground shrink-0" />
-                        <span className="text-sm font-medium truncate flex-1 min-w-0">
-                          {photo.originalFilename}
-                        </span>
-                        <span className="text-xs text-muted-foreground shrink-0">
-                          {new Date(photo.createdAt).toLocaleDateString()}
-                        </span>
-                        {photo.uploadedBy && (
-                          <Badge variant="outline" className="text-[10px] h-5 px-1.5 shrink-0">
-                            {photo.uploadedBy}
-                          </Badge>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="w-7 h-7 shrink-0"
-                          onClick={() => deletePhotoMutation.mutate(photo.id)}
-                        >
-                          <Trash2 className="w-3.5 h-3.5 text-destructive" />
-                        </Button>
+                      <div key={photo.id} className="px-4 py-3 hover:bg-muted/50">
+                        <div className="flex items-center gap-3">
+                          <FileImage className="w-4 h-4 text-muted-foreground shrink-0" />
+                          <span className="text-sm font-medium truncate flex-1 min-w-0">
+                            {photo.originalFilename}
+                          </span>
+                          <span className="text-xs text-muted-foreground shrink-0">
+                            {new Date(photo.createdAt).toLocaleDateString()}
+                          </span>
+                          {photo.uploadedBy && (
+                            <Badge variant="outline" className="text-[10px] h-5 px-1.5 shrink-0">
+                              {photo.uploadedBy}
+                            </Badge>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="w-7 h-7 shrink-0"
+                            onClick={() => {
+                              setEditingCaptionId(photo.id);
+                              setEditingCaptionText(photo.caption || "");
+                            }}
+                            title="Edit note"
+                          >
+                            <Pencil className="w-3.5 h-3.5 text-muted-foreground" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="w-7 h-7 shrink-0"
+                            onClick={() => deletePhotoMutation.mutate(photo.id)}
+                          >
+                            <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                          </Button>
+                        </div>
+                        {editingCaptionId === photo.id ? (
+                          <div className="flex items-start gap-2 mt-2 ml-7">
+                            <Textarea
+                              className="text-sm min-h-[60px] flex-1"
+                              placeholder="Add a note..."
+                              value={editingCaptionText}
+                              onChange={(e) => setEditingCaptionText(e.target.value)}
+                              autoFocus
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" && !e.shiftKey) {
+                                  e.preventDefault();
+                                  updateCaptionMutation.mutate({ photoId: photo.id, caption: editingCaptionText.trim() });
+                                }
+                                if (e.key === "Escape") setEditingCaptionId(null);
+                              }}
+                            />
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="w-7 h-7 shrink-0"
+                              onClick={() => updateCaptionMutation.mutate({ photoId: photo.id, caption: editingCaptionText.trim() })}
+                              disabled={updateCaptionMutation.isPending}
+                            >
+                              <Check className="w-3.5 h-3.5 text-green-600" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="w-7 h-7 shrink-0"
+                              onClick={() => setEditingCaptionId(null)}
+                            >
+                              <X className="w-3.5 h-3.5 text-muted-foreground" />
+                            </Button>
+                          </div>
+                        ) : photo.caption ? (
+                          <p className="text-xs text-muted-foreground mt-1 ml-7">{photo.caption}</p>
+                        ) : null}
                       </div>
                     ))}
                   </div>
@@ -692,6 +982,54 @@ export default function ProjectDetail() {
               </Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={uploadDialogOpen} onOpenChange={(open) => { if (!open) { setUploadDialogOpen(false); setPendingFiles([]); setUploadCaption(""); } }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Upload to {phaseLabel(activePhase)}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">
+                {pendingFiles.length === 1 ? "File" : `${pendingFiles.length} files`}
+              </Label>
+              <div className="text-sm space-y-0.5">
+                {pendingFiles.map((f, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <FileImage className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                    <span className="truncate">{f.name}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Note / Caption (optional)</Label>
+              <Textarea
+                placeholder="e.g., Panel box before wiring, Rough-in inspection photo..."
+                value={uploadCaption}
+                onChange={(e) => setUploadCaption(e.target.value)}
+                className="min-h-[80px]"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => { setUploadDialogOpen(false); setPendingFiles([]); setUploadCaption(""); }}>Cancel</Button>
+              <Button onClick={handleConfirmUpload} disabled={uploading}>
+                {uploading ? (
+                  <>
+                    <Upload className="w-4 h-4 mr-2 animate-spin" />
+                    Uploading...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-4 h-4 mr-2" />
+                    Upload
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

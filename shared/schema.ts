@@ -45,6 +45,7 @@ export const estimates = pgTable("estimates", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   projectId: integer("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
+  estimateNumber: text("estimate_number"), // editable estimate number (e.g., "EST-001")
   overheadPct: real("overhead_pct").notNull().default(12),
   profitPct: real("profit_pct").notNull().default(5),
   materialMarkupPct: real("material_markup_pct").notNull().default(5),
@@ -83,6 +84,7 @@ export const estimateItems = pgTable("estimate_items", {
   boxType: text("box_type"),
   coverPlate: text("cover_plate"),
   panelName: text("panel_name").notNull().default("Main Panel"),
+  phase: text("phase"), // "service", "roughin", "finish" — which invoice phase this item belongs to
   assemblyId: integer("assembly_id").references(() => deviceAssemblies.id, { onDelete: "set null" }),
 });
 
@@ -93,9 +95,11 @@ export const invoices = pgTable("invoices", {
   projectId: integer("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   customerId: integer("customer_id"),
   status: text("status").notNull().default("draft"),
+  phase: text("phase"), // "service", "roughin", "finish", or null for full invoice
   invoiceDate: timestamp("invoice_date").defaultNow().notNull(),
   dueDate: timestamp("due_date"),
   paymentDate: timestamp("payment_date"),
+  paymentMethod: text("payment_method"), // "cash", "cheque", "e-transfer", "credit_card"
   subtotal: real("subtotal").notNull().default(0),
   taxRate: real("tax_rate").notNull().default(5),
   taxLabel: text("tax_label").notNull().default("GST 5%"),
@@ -181,7 +185,8 @@ export const settings = pgTable("settings", {
 export const wireTypes = pgTable("wire_types", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   name: text("name").notNull().unique(),
-  costPerFoot: real("cost_per_foot").notNull().default(0),
+  costPerFoot: real("cost_per_foot").notNull().default(0), // legacy — kept for migration compatibility
+  costPerMeter: real("cost_per_meter").notNull().default(0), // primary unit for Canadian market
   supplier: text("supplier"),
 });
 
@@ -287,6 +292,32 @@ export const projectAssignments = pgTable("project_assignments", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Time entries — employee hour logging against projects
+export const timeEntries = pgTable("time_entries", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  employeeId: integer("employee_id").notNull().references(() => employees.id, { onDelete: "cascade" }),
+  projectId: integer("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  date: text("date").notNull(), // "YYYY-MM-DD"
+  hours: real("hours").notNull(),
+  phase: text("phase"), // "service", "roughin", "finish"
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// Receipts — generated from paid invoices
+export const receipts = pgTable("receipts", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  receiptNumber: text("receipt_number").notNull(),
+  invoiceId: integer("invoice_id").notNull().references(() => invoices.id, { onDelete: "cascade" }),
+  projectId: integer("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  customerId: integer("customer_id"),
+  amount: real("amount").notNull(),
+  paymentMethod: text("payment_method"),
+  paymentDate: timestamp("payment_date").defaultNow().notNull(),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // Insert schemas
 export const insertCustomerSchema = createInsertSchema(customers).omit({ id: true, createdAt: true });
 export const insertEmployeeSchema = createInsertSchema(employees).omit({ id: true, createdAt: true });
@@ -312,6 +343,8 @@ export const insertRoomPanelAssignmentSchema = createInsertSchema(roomPanelAssig
 export const insertPermitFeeScheduleSchema = createInsertSchema(permitFeeSchedules).omit({ id: true, createdAt: true });
 export const insertProjectPhotoSchema = createInsertSchema(projectPhotos).omit({ id: true, createdAt: true });
 export const insertProjectAssignmentSchema = createInsertSchema(projectAssignments).omit({ id: true, createdAt: true });
+export const insertTimeEntrySchema = createInsertSchema(timeEntries).omit({ id: true, createdAt: true });
+export const insertReceiptSchema = createInsertSchema(receipts).omit({ id: true, createdAt: true });
 
 // Types
 export type Customer = typeof customers.$inferSelect;
@@ -362,6 +395,13 @@ export type ProjectPhoto = typeof projectPhotos.$inferSelect;
 export type InsertProjectPhoto = z.infer<typeof insertProjectPhotoSchema>;
 export type ProjectAssignment = typeof projectAssignments.$inferSelect;
 export type InsertProjectAssignment = z.infer<typeof insertProjectAssignmentSchema>;
+export type TimeEntry = typeof timeEntries.$inferSelect;
+export type InsertTimeEntry = z.infer<typeof insertTimeEntrySchema>;
+export type Receipt = typeof receipts.$inferSelect;
+export type InsertReceipt = z.infer<typeof insertReceiptSchema>;
+
+export const PAYMENT_METHODS = ["cash", "cheque", "e-transfer", "credit_card"] as const;
+export const INVOICE_PHASES = ["service", "roughin", "finish"] as const;
 
 export const PROJECT_STATUSES = ["draft", "in_progress", "bid_sent", "won", "lost"] as const;
 export const DWELLING_TYPES = [

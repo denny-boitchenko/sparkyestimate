@@ -132,6 +132,7 @@ export default function EstimateDetail() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const [addItemOpen, setAddItemOpen] = useState(false);
+  const [addItemPreselectedRoom, setAddItemPreselectedRoom] = useState<string>("");
   const [collapsedRooms, setCollapsedRooms] = useState<Set<string>>(new Set());
   const [bomOpenCategories, setBomOpenCategories] = useState<string[] | null>(null); // null = all open (default)
   const [renamingRoom, setRenamingRoom] = useState<string | null>(null);
@@ -150,6 +151,13 @@ export default function EstimateDetail() {
     ids: number[];
     label: string;
   } | null>(null);
+  const [convertDialogOpen, setConvertDialogOpen] = useState(false);
+  const [invoiceName, setInvoiceName] = useState("Invoice #1");
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<number>>(new Set());
+  const [selectedServiceIds, setSelectedServiceIds] = useState<Set<number>>(new Set());
+  const [invoiceMode, setInvoiceMode] = useState<"by_phase" | "full">("by_phase");
+  const [phaseDescriptions, setPhaseDescriptions] = useState<Record<string, string>>({});
+  const [customLineItems, setCustomLineItems] = useState<{ description: string; amount: number }[]>([]);
 
   const estimateId = params?.id ? parseInt(params.id) : 0;
 
@@ -404,13 +412,20 @@ export default function EstimateDetail() {
   });
 
   const convertToInvoiceMutation = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", `/api/estimates/${estimateId}/convert-to-invoice`);
+    mutationFn: async (payload: {
+      invoiceName?: string;
+      itemIds?: number[];
+      serviceIds?: number[];
+      mode?: "by_phase" | "full";
+      customItems?: { description: string; amount: number }[];
+    }) => {
+      const res = await apiRequest("POST", `/api/estimates/${estimateId}/convert-to-invoice`, payload);
       return await res.json();
     },
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
       toast({ title: "Invoice created", description: `Invoice ${data.invoiceNumber} generated` });
+      setConvertDialogOpen(false);
       navigate(`/invoices/${data.id}`);
     },
     onError: (err: Error) => {
@@ -525,17 +540,18 @@ export default function EstimateDetail() {
       const infoBoxX = pw - margin - 72;
       const infoBoxW = 72;
 
-      doc.setFillColor(70, 70, 70);
+      doc.setFillColor(30, 64, 120);
       doc.rect(infoBoxX, 15, infoBoxW, 7, "F");
 
       doc.setFontSize(7.5);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(255, 255, 255);
       doc.text("ESTIMATE", infoBoxX + 4, 20);
-      doc.text(`#${estimateId}`, infoBoxX + infoBoxW - 4, 20, { align: "right" });
+      const estNum = (estimate as any)?.estimateNumber || `EST-${estimateId}`;
+      doc.text(`#${estNum}`, infoBoxX + infoBoxW - 4, 20, { align: "right" });
 
-      doc.setDrawColor(200, 200, 200);
-      doc.setFillColor(250, 250, 250);
+      doc.setDrawColor(180, 205, 235);
+      doc.setFillColor(235, 243, 255);
       doc.rect(infoBoxX, 22, infoBoxW, 7, "F");
       doc.line(infoBoxX, 22, infoBoxX + infoBoxW, 22);
       doc.setTextColor(60, 60, 60);
@@ -545,7 +561,7 @@ export default function EstimateDetail() {
       doc.setFont("helvetica", "normal");
       doc.text(formattedDate, infoBoxX + infoBoxW - 4, 27, { align: "right" });
 
-      doc.setFillColor(250, 250, 250);
+      doc.setFillColor(235, 243, 255);
       doc.rect(infoBoxX, 29, infoBoxW, 7, "F");
       doc.line(infoBoxX, 29, infoBoxX + infoBoxW, 29);
       doc.setFont("helvetica", "bold");
@@ -553,7 +569,7 @@ export default function EstimateDetail() {
       doc.setFontSize(9);
       doc.text(`$${grandTotal.toFixed(2)}`, infoBoxX + infoBoxW - 4, 34, { align: "right" });
 
-      doc.setDrawColor(200, 200, 200);
+      doc.setDrawColor(180, 205, 235);
       doc.rect(infoBoxX, 15, infoBoxW, 21, "S");
 
       let cy = 32;
@@ -603,7 +619,7 @@ export default function EstimateDetail() {
 
       doc.setFontSize(7.5);
       doc.setFont("helvetica", "bold");
-      doc.setTextColor(100, 100, 100);
+      doc.setTextColor(44, 82, 130);
       doc.text("CONTACT US", contactBoxX + 5, contactY);
       contactY += 6;
 
@@ -629,7 +645,7 @@ export default function EstimateDetail() {
       // Group all devices into one "Rough In/Finishing - Material & Labor" line
       // Services (panel, meter base etc.) as separate lines
       // Permit as separate line
-      const headerColor = [100, 100, 100]; // Grey instead of amber
+      const headerColor = [44, 82, 130]; // Blue instead of grey
       const serviceRows: any[] = [];
       let servicesSubtotal = 0;
 
@@ -706,8 +722,8 @@ export default function EstimateDetail() {
       const valX = pw - margin;
       const labelX = summaryBoxX;
 
-      doc.setDrawColor(220, 220, 220);
-      doc.setFillColor(250, 250, 250);
+      doc.setDrawColor(180, 205, 235);
+      doc.setFillColor(235, 243, 255);
       doc.rect(summaryBoxX, finalY - 4, summaryBoxW, 8, "F");
       doc.line(summaryBoxX, finalY - 4, summaryBoxX + summaryBoxW, finalY - 4);
       doc.line(summaryBoxX, finalY + 4, summaryBoxX + summaryBoxW, finalY + 4);
@@ -748,7 +764,7 @@ export default function EstimateDetail() {
         finalY += 5;
         doc.setFont("helvetica", "normal");
         doc.setFontSize(8);
-        doc.setTextColor(100, 100, 100);
+        doc.setTextColor(44, 82, 130);
         const noteLines = doc.splitTextToSize(estimateNotes, contentW);
         doc.text(noteLines, margin, finalY);
         finalY += noteLines.length * 4;
@@ -765,7 +781,7 @@ export default function EstimateDetail() {
         finalY += 5;
         doc.setFont("helvetica", "normal");
         doc.setFontSize(8);
-        doc.setTextColor(100, 100, 100);
+        doc.setTextColor(44, 82, 130);
         const termLines = doc.splitTextToSize(estimateTerms, contentW);
         doc.text(termLines, margin, finalY);
       }
@@ -777,7 +793,7 @@ export default function EstimateDetail() {
         drawFooter(i, totalPages);
       }
 
-      doc.save(`Client-Estimate-${estimateId}.pdf`);
+      doc.save(`Client-Estimate-${estNum}.pdf`);
       toast({ title: "Client Estimate PDF exported" });
     } catch (err: any) {
       toast({ title: "Export failed", description: err.message, variant: "destructive" });
@@ -846,14 +862,14 @@ export default function EstimateDetail() {
       (doc as any).autoTable({
         startY: 26,
         head: [[
-          { content: "Item", styles: { fillColor: [100, 100, 100] } },
-          { content: "Qty", styles: { fillColor: [100, 100, 100] } },
-          { content: "Device Description", styles: { fillColor: [100, 100, 100] } },
-          { content: "Box Type", styles: { fillColor: [100, 100, 100] } },
-          { content: "Cover Plate", styles: { fillColor: [100, 100, 100] } },
-          { content: "Wire Type", styles: { fillColor: [100, 100, 100] } },
-          { content: "Wire (ft/ea)", styles: { fillColor: [100, 100, 100] } },
-          { content: "Wire Total (ft)", styles: { fillColor: [100, 100, 100] } },
+          { content: "Item", styles: { fillColor: [44, 82, 130] } },
+          { content: "Qty", styles: { fillColor: [44, 82, 130] } },
+          { content: "Device Description", styles: { fillColor: [44, 82, 130] } },
+          { content: "Box Type", styles: { fillColor: [44, 82, 130] } },
+          { content: "Cover Plate", styles: { fillColor: [44, 82, 130] } },
+          { content: "Wire Type", styles: { fillColor: [44, 82, 130] } },
+          { content: "Wire (ft/ea)", styles: { fillColor: [44, 82, 130] } },
+          { content: "Wire Total (ft)", styles: { fillColor: [44, 82, 130] } },
         ]],
         body: tableRows,
         styles: { fontSize: 7, cellPadding: 2 },
@@ -876,8 +892,8 @@ export default function EstimateDetail() {
         (doc as any).autoTable({
           startY: miscY,
           head: [[
-            { content: "Part", styles: { fillColor: [100, 100, 100] } },
-            { content: "Qty Needed", styles: { fillColor: [100, 100, 100] } },
+            { content: "Part", styles: { fillColor: [44, 82, 130] } },
+            { content: "Qty Needed", styles: { fillColor: [44, 82, 130] } },
           ]],
           body: miscRows,
           styles: { fontSize: 7, cellPadding: 2 },
@@ -888,7 +904,7 @@ export default function EstimateDetail() {
 
       doc.addPage("landscape");
 
-      doc.setFillColor(100, 100, 100);
+      doc.setFillColor(44, 82, 130);
       doc.rect(14, 12, 120, 8, "F");
       doc.setTextColor(255, 255, 255);
       doc.setFontSize(12);
@@ -914,11 +930,11 @@ export default function EstimateDetail() {
       (doc as any).autoTable({
         startY: 30,
         head: [[
-          { content: "Wire Type", styles: { fillColor: [100, 100, 100] } },
-          { content: "Total Feet", styles: { fillColor: [100, 100, 100] } },
-          { content: "Total Metres", styles: { fillColor: [100, 100, 100] } },
-          { content: "Spools (150m)", styles: { fillColor: [100, 100, 100] } },
-          { content: "Spools (75m)", styles: { fillColor: [100, 100, 100] } },
+          { content: "Wire Type", styles: { fillColor: [44, 82, 130] } },
+          { content: "Total Feet", styles: { fillColor: [44, 82, 130] } },
+          { content: "Total Metres", styles: { fillColor: [44, 82, 130] } },
+          { content: "Spools (150m)", styles: { fillColor: [44, 82, 130] } },
+          { content: "Spools (75m)", styles: { fillColor: [44, 82, 130] } },
         ]],
         body: wireRows,
         styles: { fontSize: 8, cellPadding: 3 },
@@ -1140,6 +1156,15 @@ export default function EstimateDetail() {
     },
   });
 
+  const updateServiceMutation = useMutation({
+    mutationFn: async ({ id, ...data }: { id: number } & Partial<EstimateService>) => {
+      await apiRequest("PATCH", `/api/estimate-services/${id}`, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/estimates", estimateId, "services"] });
+    },
+  });
+
   if (isLoading) {
     return (
       <div className="p-6 space-y-6">
@@ -1173,12 +1198,12 @@ export default function EstimateDetail() {
   const totalLaborCost = totalLaborHours * estimate.laborRate;
   const totalWireFootage = (items || []).reduce((sum, item) => sum + item.quantity * item.wireFootage, 0);
 
-  // Wire cost from wire_types catalog
+  // Wire cost from wire_types catalog (using costPerMeter)
   const wireCostLookup = new Map<string, number>();
-  for (const wt of (wireTypesData || [])) wireCostLookup.set(wt.name, wt.costPerFoot);
+  for (const wt of (wireTypesData || [])) wireCostLookup.set(wt.name, (wt as any).costPerMeter || wt.costPerFoot);
   const totalWireCost = (items || []).reduce((sum, item) => {
-    const costPerFt = wireCostLookup.get(item.wireType || "") || 0;
-    return sum + item.quantity * item.wireFootage * costPerFt;
+    const costPerM = wireCostLookup.get(item.wireType || "") || 0;
+    return sum + item.quantity * item.wireFootage * costPerM;
   }, 0);
 
   const serviceMaterialCost = (services || []).reduce((sum, s) => sum + s.materialCost, 0);
@@ -1218,9 +1243,22 @@ export default function EstimateDetail() {
             onBlur={(e) => { if (e.target.value !== estimate.name) updateEstimateMutation.mutate({ name: e.target.value }); }}
             data-testid="input-estimate-name"
           />
-          <p className="text-sm text-muted-foreground">
-            Created {new Date(estimate.createdAt).toLocaleDateString("en-CA")}
-          </p>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <span>Estimate #</span>
+            <Input
+              className="h-6 w-32 text-sm border-dashed px-1 py-0"
+              defaultValue={(estimate as any).estimateNumber || ""}
+              placeholder={`EST-${estimate.id}`}
+              key={`estnum-${estimate.id}-${(estimate as any).estimateNumber}`}
+              onBlur={(e) => {
+                const val = e.target.value.trim();
+                if (val !== ((estimate as any).estimateNumber || "")) {
+                  updateEstimateMutation.mutate({ estimateNumber: val || null } as any);
+                }
+              }}
+            />
+            <span className="ml-2">Created {new Date(estimate.createdAt).toLocaleDateString("en-CA")}</span>
+          </div>
         </div>
         <div className="flex gap-2 flex-wrap">
           <DropdownMenu>
@@ -1252,12 +1290,19 @@ export default function EstimateDetail() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => convertToInvoiceMutation.mutate()}
-            disabled={convertToInvoiceMutation.isPending}
+            onClick={() => {
+              // Pre-populate selected items/services with everything
+              const allItemIds = new Set((items || []).map(i => i.id));
+              const allServiceIds = new Set((services || []).map(s => s.id));
+              setSelectedItemIds(allItemIds);
+              setSelectedServiceIds(allServiceIds);
+              setInvoiceName("Invoice #1");
+              setConvertDialogOpen(true);
+            }}
             data-testid="button-convert-to-invoice"
           >
             <FileOutput className="w-4 h-4 mr-2" />
-            {convertToInvoiceMutation.isPending ? "Converting..." : "Convert to Invoice"}
+            Convert to Invoice
           </Button>
         </div>
       </div>
@@ -1508,8 +1553,11 @@ export default function EstimateDetail() {
                         <TableRow>
                           <TableHead className="text-xs uppercase text-muted-foreground">Room / Device</TableHead>
                           <TableHead className="w-[140px] text-xs uppercase text-muted-foreground">Panel</TableHead>
+                          <TableHead className="w-[100px] text-xs uppercase text-muted-foreground">Phase</TableHead>
                           <TableHead className="text-right w-20 text-xs uppercase text-muted-foreground">Count</TableHead>
-                          <TableHead className="w-24 text-xs uppercase text-muted-foreground">Edit</TableHead>
+                          <TableHead className="w-20 text-xs uppercase text-muted-foreground">Qty</TableHead>
+                          <TableHead className="w-24 text-xs uppercase text-muted-foreground">Mat $/ea</TableHead>
+                          <TableHead className="w-24 text-xs uppercase text-muted-foreground">Hrs/ea</TableHead>
                           <TableHead className="w-10"></TableHead>
                         </TableRow>
                       </TableHeader>
@@ -1583,22 +1631,40 @@ export default function EstimateDetail() {
                                     {roomPanel}
                                   </Badge>
                                 </TableCell>
+                                <TableCell className="py-2.5"></TableCell>
                                 <TableCell className="text-right py-2.5">
                                   <span className="text-sm font-semibold">{deviceCount} devices</span>
                                 </TableCell>
                                 <TableCell className="py-2.5"></TableCell>
+                                <TableCell className="py-2.5"></TableCell>
+                                <TableCell className="py-2.5"></TableCell>
                                 <TableCell className="py-2.5">
-                                  <Button
-                                    size="icon"
-                                    variant="ghost"
-                                    className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setDeleteTarget({ type: "item", ids: roomItems.map(i => i.id), label: `all ${deviceCount} devices in ${roomName}` });
-                                    }}
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </Button>
+                                  <div className="flex items-center gap-1">
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-7 w-7 text-primary hover:text-primary hover:bg-primary/10"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setAddItemPreselectedRoom(roomName);
+                                        setAddItemOpen(true);
+                                      }}
+                                      title={`Add item to ${roomName}`}
+                                    >
+                                      <Plus className="w-3.5 h-3.5" />
+                                    </Button>
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setDeleteTarget({ type: "item", ids: roomItems.map(i => i.id), label: `all ${deviceCount} devices in ${roomName}` });
+                                      }}
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </Button>
+                                  </div>
                                 </TableCell>
                               </TableRow>
                               {!isCollapsed && roomItems.map((item) => (
@@ -1621,6 +1687,27 @@ export default function EstimateDetail() {
                                       </SelectContent>
                                     </Select>
                                   </TableCell>
+                                  <TableCell className="py-2">
+                                    <Select
+                                      value={item.phase || "__none__"}
+                                      onValueChange={(v) => updateItemMutation.mutate({ id: item.id, phase: v === "__none__" ? null : v } as any)}
+                                    >
+                                      <SelectTrigger className={`h-7 text-[11px] w-[90px] ${
+                                        item.phase === "service" ? "border-emerald-300 text-emerald-700 dark:border-emerald-600 dark:text-emerald-400" :
+                                        item.phase === "roughin" ? "border-blue-300 text-blue-700 dark:border-blue-600 dark:text-blue-400" :
+                                        item.phase === "finish" ? "border-amber-300 text-amber-700 dark:border-amber-600 dark:text-amber-400" :
+                                        "border-muted text-muted-foreground"
+                                      }`}>
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="__none__">&mdash;</SelectItem>
+                                        <SelectItem value="service">Service</SelectItem>
+                                        <SelectItem value="roughin">Rough-In</SelectItem>
+                                        <SelectItem value="finish">Finish</SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                  </TableCell>
                                   <TableCell className="text-right py-2">
                                     <span className="text-sm">{item.quantity}</span>
                                   </TableCell>
@@ -1633,6 +1720,30 @@ export default function EstimateDetail() {
                                       onBlur={(e) => { const v = parseInt(e.target.value) || 1; if (v !== item.quantity) updateItemMutation.mutate({ id: item.id, quantity: v }); }}
                                       min={0}
                                       data-testid={`input-qty-${item.id}`}
+                                    />
+                                  </TableCell>
+                                  <TableCell className="py-2">
+                                    <Input
+                                      type="number"
+                                      step="0.01"
+                                      className="w-24 h-7 text-right text-sm"
+                                      defaultValue={item.materialCost}
+                                      key={`matcost-${item.id}-${item.materialCost}`}
+                                      onBlur={(e) => { const v = parseFloat(e.target.value) || 0; if (v !== item.materialCost) updateItemMutation.mutate({ id: item.id, materialCost: v }); }}
+                                      min={0}
+                                      data-testid={`input-matcost-${item.id}`}
+                                    />
+                                  </TableCell>
+                                  <TableCell className="py-2">
+                                    <Input
+                                      type="number"
+                                      step="0.05"
+                                      className="w-20 h-7 text-right text-sm"
+                                      defaultValue={item.laborHours}
+                                      key={`labhrs-${item.id}-${item.laborHours}`}
+                                      onBlur={(e) => { const v = parseFloat(e.target.value) || 0; if (v !== item.laborHours) updateItemMutation.mutate({ id: item.id, laborHours: v }); }}
+                                      min={0}
+                                      data-testid={`input-labhrs-${item.id}`}
                                     />
                                   </TableCell>
                                   <TableCell className="py-2">
@@ -2168,27 +2279,7 @@ export default function EstimateDetail() {
         <TabsContent value="wire">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
-              <div className="flex items-center gap-3">
-                <CardTitle className="text-base font-semibold">Wire Schedule — Spool Purchasing</CardTitle>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-xs text-muted-foreground">Waste:</span>
-                  <Input
-                    type="number"
-                    className="w-16 h-7 text-right text-sm"
-                    value={estimate?.wasteFactor ?? 15}
-                    onChange={(e) => {
-                      const v = parseFloat(e.target.value);
-                      if (!isNaN(v) && v >= 0 && v <= 100) {
-                        updateEstimateMutation.mutate({ wasteFactor: v } as any);
-                      }
-                    }}
-                    min={0}
-                    max={100}
-                    data-testid="input-waste-factor"
-                  />
-                  <span className="text-xs text-muted-foreground">%</span>
-                </div>
-              </div>
+              <CardTitle className="text-base font-semibold">Wire Schedule — Spool Purchasing</CardTitle>
               <Button size="sm" variant="outline" onClick={() => setAddWireRunOpen(true)} data-testid="button-add-wire">
                 <Plus className="w-4 h-4 mr-1" />
                 Add Wire Run
@@ -2204,21 +2295,20 @@ export default function EstimateDetail() {
                   <p className="text-xs text-muted-foreground mt-1">Add line items to see wire schedule</p>
                 </div>
               ) : (() => {
-                const wasteFactor = (estimate?.wasteFactor ?? 15) / 100;
                 const wireCostMap = new Map<string, number>();
                 for (const wt of (wireTypesData || [])) {
-                  wireCostMap.set(wt.name, wt.costPerFoot);
+                  wireCostMap.set(wt.name, (wt as any).costPerMeter || wt.costPerFoot);
                 }
 
                 // Aggregate by wire type with room breakdown
-                const wireSummary = new Map<string, { footage: number; costPerFt: number; rooms: Map<string, { footage: number; devices: string[] }> }>();
+                const wireSummary = new Map<string, { footage: number; costPerM: number; rooms: Map<string, { footage: number; devices: string[] }> }>();
                 for (const item of items) {
                   const wt = item.wireType || "Unassigned";
                   const totalFt = item.quantity * item.wireFootage;
-                  const costPerFt = wireCostMap.get(wt) || 0;
-                  const existing = wireSummary.get(wt) || { footage: 0, costPerFt, rooms: new Map() };
+                  const costPerM = wireCostMap.get(wt) || 0;
+                  const existing = wireSummary.get(wt) || { footage: 0, costPerM, rooms: new Map() };
                   existing.footage += totalFt;
-                  existing.costPerFt = costPerFt;
+                  existing.costPerM = costPerM;
                   const room = item.room || "Unassigned";
                   const roomData = existing.rooms.get(room) || { footage: 0, devices: [] };
                   roomData.footage += totalFt;
@@ -2236,10 +2326,16 @@ export default function EstimateDetail() {
                   return localWireOverrides[wt] ?? wireFootageOverrides[wt] ?? computed;
                 };
 
+                const matMarkupPct = estimate?.materialMarkupPct || 0;
+
                 const wireGrandTotal = wireEntries.reduce((s, [wt, d]) => {
                   const footage = getWireFootage(wt, d.footage);
-                  return s + footage * (1 + wasteFactor) * d.costPerFt;
+                  const metres = footage * 0.3048;
+                  const baseCost = metres * d.costPerM;
+                  return s + baseCost;
                 }, 0);
+
+                const wireGrandTotalWithMarkup = wireGrandTotal * (1 + matMarkupPct / 100);
 
                 // Spool overrides from estimate or local state
                 const spoolOverrides: Record<string, { s150?: number; s75?: number }> =
@@ -2255,10 +2351,10 @@ export default function EstimateDetail() {
                         <TableHeader>
                           <TableRow>
                             <TableHead>Wire Type</TableHead>
-                            <TableHead className="text-right">Total ft</TableHead>
-                            <TableHead className="text-right">Cost/ft</TableHead>
-                            <TableHead className="text-right">w/ Waste ({estimate?.wasteFactor ?? 15}%)</TableHead>
-                            <TableHead className="text-right">Metres</TableHead>
+                            <TableHead className="text-right">Total m</TableHead>
+                            <TableHead className="text-right">Cost/m</TableHead>
+                            <TableHead className="text-right">Wire Cost</TableHead>
+                            <TableHead className="text-right">Markup ({matMarkupPct}%)</TableHead>
                             <TableHead className="text-right">150m Spools</TableHead>
                             <TableHead className="text-right">75m Spools</TableHead>
                             <TableHead className="text-right">Total Cost</TableHead>
@@ -2269,11 +2365,12 @@ export default function EstimateDetail() {
                           {wireEntries.map(([wt, data]) => {
                             const effectiveFootage = getWireFootage(wt, data.footage);
                             const isOverridden = effectiveFootage !== data.footage;
-                            const withWaste = effectiveFootage * (1 + wasteFactor);
-                            const metres = withWaste * 0.3048;
+                            const metres = effectiveFootage * 0.3048;
                             const calcSpools150 = Math.ceil(metres / 150);
                             const calcSpools75 = Math.ceil(metres / 75);
-                            const totalCost = withWaste * data.costPerFt;
+                            const wireCost = metres * data.costPerM;
+                            const wireMarkup = wireCost * (matMarkupPct / 100);
+                            const totalCost = wireCost + wireMarkup;
                             const roomEntries = Array.from(data.rooms.entries()).sort(([a], [b]) => a.localeCompare(b));
                             const affectedCount = (items || []).filter(i => (i.wireType || "Unassigned") === wt).length;
                             return (
@@ -2313,7 +2410,7 @@ export default function EstimateDetail() {
                                             {roomEntries.map(([room, rd]) => (
                                               <div key={room} className="flex items-center justify-between text-xs text-muted-foreground">
                                                 <span className="font-medium">{room}</span>
-                                                <span>{rd.footage.toFixed(0)} ft — {rd.devices.join(", ")}</span>
+                                                <span>{(rd.footage * 0.3048).toFixed(0)} m — {rd.devices.join(", ")}</span>
                                               </div>
                                             ))}
                                           </div>
@@ -2325,23 +2422,24 @@ export default function EstimateDetail() {
                                     <Input
                                       type="number"
                                       className={`w-20 h-7 text-right text-sm ml-auto ${isOverridden ? "font-bold text-blue-600" : ""}`}
-                                      value={effectiveFootage.toFixed(0)}
+                                      value={Math.round(metres)}
                                       onChange={(e) => {
-                                        const v = parseInt(e.target.value) || 0;
-                                        setLocalWireOverrides(prev => ({ ...prev, [wt]: v }));
+                                        const mVal = parseInt(e.target.value) || 0;
+                                        const ftVal = Math.round(mVal / 0.3048);
+                                        setLocalWireOverrides(prev => ({ ...prev, [wt]: ftVal }));
                                       }}
                                       onBlur={() => {
                                         const merged = { ...wireFootageOverrides, ...localWireOverrides };
                                         updateEstimateMutation.mutate({ wireFootageOverrides: merged } as any);
                                       }}
                                       min={0}
-                                      title={isOverridden ? `Computed: ${data.footage.toFixed(0)} ft (overridden)` : "Click to override"}
-                                      data-testid={`input-wire-footage-${wt}`}
+                                      title={isOverridden ? `Computed: ${Math.round(data.footage * 0.3048)} m (overridden)` : "Click to override"}
+                                      data-testid={`input-wire-metres-${wt}`}
                                     />
                                   </TableCell>
-                                  <TableCell className="text-right text-sm text-muted-foreground">${data.costPerFt.toFixed(2)}</TableCell>
-                                  <TableCell className="text-right text-sm">{withWaste.toFixed(0)} ft</TableCell>
-                                  <TableCell className="text-right text-sm">{metres.toFixed(0)} m</TableCell>
+                                  <TableCell className="text-right text-sm text-muted-foreground">${data.costPerM.toFixed(2)}</TableCell>
+                                  <TableCell className="text-right text-sm">${wireCost.toFixed(2)}</TableCell>
+                                  <TableCell className="text-right text-sm text-muted-foreground">${wireMarkup.toFixed(2)}</TableCell>
                                   <TableCell className="text-right">
                                     <Input
                                       type="number"
@@ -2405,9 +2503,21 @@ export default function EstimateDetail() {
                       </Table>
                     </div>
 
-                    <div className="px-6 border-t mt-0 pt-4 pb-4 flex justify-end gap-4">
-                      <span className="text-sm font-medium">Total Wire Cost:</span>
-                      <span className="text-sm font-bold" data-testid="text-wire-grand-total">${wireGrandTotal.toFixed(2)}</span>
+                    <div className="px-6 border-t mt-0 pt-4 pb-4 space-y-1">
+                      <div className="flex justify-end gap-4">
+                        <span className="text-sm text-muted-foreground">Wire Cost:</span>
+                        <span className="text-sm">${wireGrandTotal.toFixed(2)}</span>
+                      </div>
+                      {matMarkupPct > 0 && (
+                        <div className="flex justify-end gap-4">
+                          <span className="text-sm text-muted-foreground">Material Markup ({matMarkupPct}%):</span>
+                          <span className="text-sm">${(wireGrandTotal * matMarkupPct / 100).toFixed(2)}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-end gap-4">
+                        <span className="text-sm font-medium">Total Wire Cost:</span>
+                        <span className="text-sm font-bold" data-testid="text-wire-grand-total">${wireGrandTotalWithMarkup.toFixed(2)}</span>
+                      </div>
                     </div>
 
                     <div className="px-6 pb-4">
@@ -2537,6 +2647,7 @@ export default function EstimateDetail() {
                     updateEstimateMutation.mutate({
                       jobType: val,
                       laborMultiplier: option?.multiplier || 1.0,
+                      laborHoursOverride: null,
                     } as any);
                   }}
                 >
@@ -3189,7 +3300,9 @@ export default function EstimateDetail() {
             let rangeCount = 0;
             let heatingLoad = 0;
             let coolingLoad = 0;
-            let otherApplianceDemand = 0;
+            let dryerNameplate = 0;
+            let evChargerNameplate = 0;
+            let otherApplianceNameplate = 0;
             const applianceDetails: { label: string; watts: number; type: string }[] = [];
 
             for (const c of circuits) {
@@ -3213,8 +3326,14 @@ export default function EstimateDetail() {
               } else if (match.type === "cool") {
                 coolingLoad += watts;
                 applianceDetails.push({ label: `${match.label} — ${desc}`, watts, type: "cool" });
+              } else if (/\bdryer\b/i.test(desc)) {
+                dryerNameplate += watts;
+                applianceDetails.push({ label: `${match.label} — ${desc}`, watts, type: "dryer" });
+              } else if (/\b(ev\s*charger|car\s*charger|level\s*2)\b/i.test(desc)) {
+                evChargerNameplate += watts;
+                applianceDetails.push({ label: `${match.label} — ${desc}`, watts, type: "ev" });
               } else {
-                otherApplianceDemand += watts;
+                otherApplianceNameplate += watts;
                 applianceDetails.push({ label: `${match.label} — ${desc}`, watts, type: "other" });
               }
             }
@@ -3225,7 +3344,12 @@ export default function EstimateDetail() {
             const heatingCoolingDemand = Math.max(heatingLoad, coolingLoad);
             const heatingCoolingLabel = heatingLoad >= coolingLoad ? "Heating" : "Cooling";
 
-            const totalDemandWatts = Math.ceil(basicDemand + rangeDemand + heatingCoolingDemand + otherApplianceDemand);
+            // CEC 8-200(1)(b)(iv): appliances rated over 1500W at 25% demand factor
+            const dryerDemand = Math.round(dryerNameplate * 0.25);
+            const evChargerDemand = Math.round(evChargerNameplate * 0.25);
+            const otherApplianceDemand = Math.round(otherApplianceNameplate * 0.25);
+
+            const totalDemandWatts = Math.ceil(basicDemand + rangeDemand + heatingCoolingDemand + dryerDemand + evChargerDemand + otherApplianceDemand);
             const demandAmps = Math.ceil(totalDemandWatts / 240);
             const recommendedSize = demandAmps <= 80 ? 100 : demandAmps <= 100 ? 125 : demandAmps <= 160 ? 200 : 400;
             const isOverloaded = demandAmps > selectedPanelSize * 0.8;
@@ -3336,11 +3460,43 @@ export default function EstimateDetail() {
                           </>
                         )}
 
-                        {/* Other appliances — itemized */}
+                        {/* Dryer — 25% demand factor */}
+                        {applianceDetails.filter(a => a.type === "dryer").length > 0 && (
+                          <>
+                            <div className="flex justify-between mt-1 font-medium text-foreground">
+                              <span>Dryer ({dryerNameplate.toLocaleString()}W nameplate) @ 25%</span>
+                              <span>{dryerDemand.toLocaleString()}W</span>
+                            </div>
+                            {applianceDetails.filter(a => a.type === "dryer").map((a, i) => (
+                              <div key={i} className="flex justify-between pl-3">
+                                <span>{a.label}</span>
+                                <span>{a.watts.toLocaleString()}W</span>
+                              </div>
+                            ))}
+                          </>
+                        )}
+
+                        {/* EV Charger — 25% demand factor per CEC 8-500 */}
+                        {applianceDetails.filter(a => a.type === "ev").length > 0 && (
+                          <>
+                            <div className="flex justify-between mt-1 font-medium text-foreground">
+                              <span>EV Charger ({evChargerNameplate.toLocaleString()}W nameplate) @ 25%</span>
+                              <span>{evChargerDemand.toLocaleString()}W</span>
+                            </div>
+                            {applianceDetails.filter(a => a.type === "ev").map((a, i) => (
+                              <div key={i} className="flex justify-between pl-3">
+                                <span>{a.label}</span>
+                                <span>{a.watts.toLocaleString()}W</span>
+                              </div>
+                            ))}
+                          </>
+                        )}
+
+                        {/* Other appliances — 25% demand factor per CEC 8-200(1)(b)(iv) */}
                         {applianceDetails.filter(a => a.type === "other").length > 0 && (
                           <>
                             <div className="flex justify-between mt-1 font-medium text-foreground">
-                              <span>Other appliances @ 100% nameplate</span>
+                              <span>Other appliances ({otherApplianceNameplate.toLocaleString()}W nameplate) @ 25%</span>
                               <span>{otherApplianceDemand.toLocaleString()}W</span>
                             </div>
                             {applianceDetails.filter(a => a.type === "other").map((a, i) => (
@@ -3510,21 +3666,61 @@ export default function EstimateDetail() {
                     <TableHeader>
                       <TableRow>
                         <TableHead>Name</TableHead>
-                        <TableHead className="text-right">Material $</TableHead>
-                        <TableHead className="text-right">Labor Hrs</TableHead>
-                        <TableHead></TableHead>
+                        <TableHead className="text-right w-32">Material $</TableHead>
+                        <TableHead className="text-right w-28">Labor Hrs</TableHead>
+                        <TableHead className="w-10"></TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {services.map((service) => (
-                        <TableRow key={service.id} data-testid={`row-service-${service.id}`}>
-                          <TableCell className="text-sm font-medium">{service.name}</TableCell>
-                          <TableCell className="text-right text-sm">${service.materialCost.toFixed(2)}</TableCell>
-                          <TableCell className="text-right text-sm">{service.laborHours.toFixed(2)}</TableCell>
+                        <TableRow key={service.id} className="group" data-testid={`row-service-${service.id}`}>
+                          <TableCell>
+                            <Input
+                              className="h-7 text-sm font-medium border-none shadow-none p-0 focus-visible:ring-1 bg-transparent"
+                              defaultValue={service.name}
+                              key={`svc-name-${service.id}-${service.name}`}
+                              onBlur={(e) => {
+                                const v = e.target.value.trim();
+                                if (v && v !== service.name) updateServiceMutation.mutate({ id: service.id, name: v });
+                              }}
+                              data-testid={`input-service-name-${service.id}`}
+                            />
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Input
+                              type="number"
+                              step="0.01"
+                              className="w-28 h-7 text-right text-sm ml-auto"
+                              defaultValue={service.materialCost}
+                              key={`svc-mat-${service.id}-${service.materialCost}`}
+                              onBlur={(e) => {
+                                const v = parseFloat(e.target.value) || 0;
+                                if (v !== service.materialCost) updateServiceMutation.mutate({ id: service.id, materialCost: v });
+                              }}
+                              min={0}
+                              data-testid={`input-service-material-${service.id}`}
+                            />
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Input
+                              type="number"
+                              step="0.25"
+                              className="w-24 h-7 text-right text-sm ml-auto"
+                              defaultValue={service.laborHours}
+                              key={`svc-hrs-${service.id}-${service.laborHours}`}
+                              onBlur={(e) => {
+                                const v = parseFloat(e.target.value) || 0;
+                                if (v !== service.laborHours) updateServiceMutation.mutate({ id: service.id, laborHours: v });
+                              }}
+                              min={0}
+                              data-testid={`input-service-hours-${service.id}`}
+                            />
+                          </TableCell>
                           <TableCell>
                             <Button
                               size="icon"
                               variant="ghost"
+                              className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
                               onClick={() => setDeleteTarget({ type: "service", ids: [service.id], label: service.name })}
                               data-testid={`button-delete-service-${service.id}`}
                             >
@@ -3759,7 +3955,7 @@ export default function EstimateDetail() {
 
       <AddItemDialog
         open={addItemOpen}
-        onOpenChange={setAddItemOpen}
+        onOpenChange={(v) => { setAddItemOpen(v); if (!v) setAddItemPreselectedRoom(""); }}
         assemblies={assemblies || []}
         onAdd={(data) => addItemMutation.mutate(data)}
         isPending={addItemMutation.isPending}
@@ -3774,6 +3970,7 @@ export default function EstimateDetail() {
           setAddItemOpen(false);
           setCreateDeviceOpen(true);
         }}
+        preselectedRoom={addItemPreselectedRoom}
       />
 
       <AddCircuitDialog
@@ -3866,11 +4063,362 @@ export default function EstimateDetail() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Convert to Invoice Dialog */}
+      <Dialog open={convertDialogOpen} onOpenChange={setConvertDialogOpen}>
+        <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Convert to Invoice</DialogTitle>
+          </DialogHeader>
+          {(() => {
+            const allItems = items || [];
+            const allServices = services || [];
+            const serviceItems = allItems.filter(i => i.phase === "service");
+            const roughinItems = allItems.filter(i => i.phase === "roughin");
+            const finishItems = allItems.filter(i => i.phase === "finish");
+            const unassignedItems = allItems.filter(i => !i.phase);
+
+            const toggleItem = (id: number) => {
+              setSelectedItemIds(prev => {
+                const next = new Set(prev);
+                if (next.has(id)) next.delete(id); else next.add(id);
+                return next;
+              });
+            };
+            const toggleService = (id: number) => {
+              setSelectedServiceIds(prev => {
+                const next = new Set(prev);
+                if (next.has(id)) next.delete(id); else next.add(id);
+                return next;
+              });
+            };
+            const selectAllPhase = (phaseItems: typeof allItems) => {
+              setSelectedItemIds(prev => {
+                const next = new Set(prev);
+                const allSelected = phaseItems.every(i => next.has(i.id));
+                phaseItems.forEach(i => allSelected ? next.delete(i.id) : next.add(i.id));
+                return next;
+              });
+            };
+
+            // Calculate per-item cost (before global markup/overhead)
+            const itemCost = (i: typeof allItems[0]) => {
+              const matCost = i.quantity * i.materialCost;
+              const markup = matCost * (i.markupPct / 100);
+              return matCost + markup + (i.quantity * i.laborHours * (estimate?.laborRate || 0));
+            };
+            const serviceCost = (s: typeof allServices[0]) =>
+              s.materialCost + (s.laborHours * (estimate?.laborRate || 0));
+
+            const selectedItemsList = allItems.filter(i => selectedItemIds.has(i.id));
+            const selectedServicesList = allServices.filter(s => selectedServiceIds.has(s.id));
+            const selectedItemsTotal = selectedItemsList.reduce((sum, i) => sum + itemCost(i), 0);
+            const selectedServicesTotal = selectedServicesList.reduce((sum, s) => sum + serviceCost(s), 0);
+            const previewTotal = selectedItemsTotal + selectedServicesTotal;
+
+            // Phase grouping for preview
+            const phaseConfig: { key: string; label: string; suffix: string; color: string; items: typeof allItems }[] = [
+              { key: "service", label: "Electrical Service", suffix: "Materials, labour & permits", color: "text-emerald-600 dark:text-emerald-400", items: serviceItems },
+              { key: "roughin", label: "Rough-In", suffix: "Materials, labour & wire", color: "text-blue-600 dark:text-blue-400", items: roughinItems },
+              { key: "finish", label: "Finishing", suffix: "Materials, labour & fixtures", color: "text-amber-600 dark:text-amber-400", items: finishItems },
+              { key: "unassigned", label: "General Electrical", suffix: "Materials & labour", color: "text-muted-foreground", items: unassignedItems },
+            ];
+
+            // Calculate phase totals from selected items only
+            const phaseTotals = phaseConfig.map(pc => {
+              const selectedPhaseItems = pc.items.filter(i => selectedItemIds.has(i.id));
+              const phaseServices = pc.key === "service" ? selectedServicesList : [];
+              const total = selectedPhaseItems.reduce((sum, i) => sum + itemCost(i), 0)
+                + phaseServices.reduce((sum, s) => sum + serviceCost(s), 0);
+              const defaultDesc = phaseDescriptions[pc.key] || `${pc.label} — ${pc.suffix}`;
+              return { ...pc, total, selectedCount: selectedPhaseItems.length + phaseServices.length, defaultDesc };
+            }).filter(pt => pt.selectedCount > 0);
+
+            const renderPhaseCheckboxes = (title: string, phaseItems: typeof allItems, color: string) => {
+              if (phaseItems.length === 0) return null;
+              const allSelected = phaseItems.every(i => selectedItemIds.has(i.id));
+              return (
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <h4 className={`text-sm font-semibold ${color}`}>{title}</h4>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 text-xs"
+                      onClick={() => selectAllPhase(phaseItems)}
+                    >
+                      {allSelected ? "Deselect All" : "Select All"}
+                    </Button>
+                  </div>
+                  {phaseItems.map(item => (
+                    <label key={item.id} className="flex items-center gap-3 py-1.5 px-2 rounded hover:bg-muted/50 cursor-pointer">
+                      <Checkbox
+                        checked={selectedItemIds.has(item.id)}
+                        onCheckedChange={() => toggleItem(item.id)}
+                      />
+                      <span className="text-sm flex-1">{item.deviceType}</span>
+                      <span className="text-xs text-muted-foreground">{item.room || "—"}</span>
+                      <span className="text-xs text-muted-foreground w-10 text-right">x{item.quantity}</span>
+                      <span className="text-sm font-medium w-20 text-right">
+                        ${itemCost(item).toFixed(2)}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              );
+            };
+
+            // Build the final custom items list for submission
+            const buildCustomItems = (): { description: string; amount: number }[] | undefined => {
+              // Check if user edited any descriptions or added custom lines
+              const hasEdits = Object.keys(phaseDescriptions).length > 0 || customLineItems.length > 0;
+              if (!hasEdits) return undefined; // Let backend auto-generate
+
+              const result: { description: string; amount: number }[] = [];
+              if (invoiceMode === "by_phase") {
+                for (const pt of phaseTotals) {
+                  result.push({ description: pt.defaultDesc, amount: pt.total });
+                }
+              } else {
+                const desc = phaseDescriptions["_full"] || "Complete Electrical — Materials, labour & wire";
+                result.push({ description: desc, amount: previewTotal });
+              }
+              for (const cl of customLineItems) {
+                if (cl.description && cl.amount > 0) {
+                  result.push(cl);
+                }
+              }
+              return result;
+            };
+
+            return (
+              <div className="space-y-4">
+                <div>
+                  <Label htmlFor="invoiceName">Invoice Name</Label>
+                  <Input
+                    id="invoiceName"
+                    value={invoiceName}
+                    onChange={(e) => setInvoiceName(e.target.value)}
+                    placeholder="e.g. Service Invoice"
+                    className="mt-1"
+                  />
+                </div>
+
+                {/* Mode Toggle */}
+                <div>
+                  <Label className="text-xs text-muted-foreground uppercase tracking-wide mb-2 block">Invoice Line Item Style</Label>
+                  <div className="flex gap-2">
+                    <Button
+                      variant={invoiceMode === "by_phase" ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setInvoiceMode("by_phase")}
+                    >
+                      By Phase
+                    </Button>
+                    <Button
+                      variant={invoiceMode === "full" ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setInvoiceMode("full")}
+                    >
+                      Full Estimate
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {invoiceMode === "by_phase"
+                      ? "Creates one line item per phase (Service, Rough-In, Finishing)."
+                      : "Creates a single line item with the total amount."}
+                  </p>
+                </div>
+
+                {/* Item Selection */}
+                <Accordion type="single" collapsible className="border rounded-lg">
+                  <AccordionItem value="items" className="border-0">
+                    <AccordionTrigger className="px-3 py-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide hover:no-underline">
+                      Select Items ({selectedItemIds.size} of {allItems.length} items, {selectedServiceIds.size} services)
+                    </AccordionTrigger>
+                    <AccordionContent className="px-3 pb-3 space-y-3">
+                      {renderPhaseCheckboxes("Service Items", serviceItems, "text-emerald-600 dark:text-emerald-400")}
+                      {renderPhaseCheckboxes("Rough-In Items", roughinItems, "text-blue-600 dark:text-blue-400")}
+                      {renderPhaseCheckboxes("Finish Items", finishItems, "text-amber-600 dark:text-amber-400")}
+                      {renderPhaseCheckboxes("Unassigned Items", unassignedItems, "text-muted-foreground")}
+                      {allItems.length === 0 && (
+                        <p className="text-sm text-muted-foreground italic">No line items on this estimate.</p>
+                      )}
+
+                      {allServices.length > 0 && (
+                        <div className="space-y-1 border-t pt-2">
+                          <div className="flex items-center justify-between">
+                            <h4 className="text-sm font-semibold text-muted-foreground">Services</h4>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 text-xs"
+                              onClick={() => {
+                                const allSelected = allServices.every(s => selectedServiceIds.has(s.id));
+                                if (allSelected) {
+                                  setSelectedServiceIds(new Set());
+                                } else {
+                                  setSelectedServiceIds(new Set(allServices.map(s => s.id)));
+                                }
+                              }}
+                            >
+                              {allServices.every(s => selectedServiceIds.has(s.id)) ? "Deselect All" : "Select All"}
+                            </Button>
+                          </div>
+                          {allServices.map(service => (
+                            <label key={service.id} className="flex items-center gap-3 py-1.5 px-2 rounded hover:bg-muted/50 cursor-pointer">
+                              <Checkbox
+                                checked={selectedServiceIds.has(service.id)}
+                                onCheckedChange={() => toggleService(service.id)}
+                              />
+                              <span className="text-sm flex-1">{service.name}</span>
+                              <span className="text-sm font-medium w-20 text-right">
+                                ${serviceCost(service).toFixed(2)}
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </AccordionContent>
+                  </AccordionItem>
+                </Accordion>
+
+                {/* Invoice Preview */}
+                <div className="border rounded-lg p-3 space-y-3">
+                  <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                    Invoice Preview — What the customer will see
+                  </h3>
+
+                  {(selectedItemIds.size === 0 && selectedServiceIds.size === 0) ? (
+                    <p className="text-sm text-muted-foreground italic py-4 text-center">
+                      Select items above to see the invoice preview.
+                    </p>
+                  ) : invoiceMode === "by_phase" ? (
+                    <div className="space-y-2">
+                      {phaseTotals.map(pt => (
+                        <div key={pt.key} className="flex items-center gap-2 py-2 px-2 rounded bg-muted/30">
+                          <div className="flex-1">
+                            <Input
+                              className="text-sm font-medium border-dashed"
+                              value={phaseDescriptions[pt.key] || `${pt.label} — ${pt.suffix}`}
+                              onChange={(e) => setPhaseDescriptions(prev => ({ ...prev, [pt.key]: e.target.value }))}
+                              placeholder={`${pt.label} — ${pt.suffix}`}
+                            />
+                            <span className="text-xs text-muted-foreground ml-1">
+                              {pt.selectedCount} items rolled up
+                            </span>
+                          </div>
+                          <span className="text-sm font-bold w-28 text-right">${pt.total.toFixed(2)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 py-2 px-2 rounded bg-muted/30">
+                      <div className="flex-1">
+                        <Input
+                          className="text-sm font-medium border-dashed"
+                          value={phaseDescriptions["_full"] || "Complete Electrical — Materials, labour & wire"}
+                          onChange={(e) => setPhaseDescriptions(prev => ({ ...prev, "_full": e.target.value }))}
+                          placeholder="Complete Electrical — Materials, labour & wire"
+                        />
+                        <span className="text-xs text-muted-foreground ml-1">
+                          {selectedItemIds.size} items + {selectedServiceIds.size} services rolled up
+                        </span>
+                      </div>
+                      <span className="text-sm font-bold w-28 text-right">${previewTotal.toFixed(2)}</span>
+                    </div>
+                  )}
+
+                  {/* Custom Line Items */}
+                  {customLineItems.map((cl, idx) => (
+                    <div key={idx} className="flex items-center gap-2 py-2 px-2 rounded bg-muted/20 border border-dashed">
+                      <Input
+                        className="text-sm flex-1"
+                        value={cl.description}
+                        onChange={(e) => {
+                          const next = [...customLineItems];
+                          next[idx] = { ...next[idx], description: e.target.value };
+                          setCustomLineItems(next);
+                        }}
+                        placeholder="Custom line item description"
+                      />
+                      <Input
+                        type="number"
+                        step="0.01"
+                        className="text-sm w-28 text-right"
+                        value={cl.amount || ""}
+                        onChange={(e) => {
+                          const next = [...customLineItems];
+                          next[idx] = { ...next[idx], amount: parseFloat(e.target.value) || 0 };
+                          setCustomLineItems(next);
+                        }}
+                        placeholder="Amount"
+                      />
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 shrink-0"
+                        onClick={() => setCustomLineItems(prev => prev.filter((_, i) => i !== idx))}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  ))}
+
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    onClick={() => setCustomLineItems(prev => [...prev, { description: "", amount: 0 }])}
+                  >
+                    <Plus className="w-4 h-4 mr-1" />
+                    Add Custom Line Item
+                  </Button>
+                </div>
+
+                {/* Total */}
+                <div className="flex items-center justify-between border-t pt-3">
+                  <div>
+                    <span className="text-sm text-muted-foreground">
+                      {selectedItemIds.size} items + {selectedServiceIds.size} services selected
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-xs text-muted-foreground block">Estimated Total (before markup/overhead)</span>
+                    <span className="text-lg font-bold">
+                      ${(previewTotal + customLineItems.reduce((s, c) => s + (c.amount || 0), 0)).toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={() => setConvertDialogOpen(false)}>Cancel</Button>
+                  <Button
+                    onClick={() => {
+                      const ci = buildCustomItems();
+                      convertToInvoiceMutation.mutate({
+                        invoiceName: invoiceName || undefined,
+                        itemIds: selectedItemIds.size > 0 ? Array.from(selectedItemIds) : undefined,
+                        serviceIds: selectedServiceIds.size > 0 ? Array.from(selectedServiceIds) : undefined,
+                        mode: invoiceMode,
+                        customItems: ci,
+                      });
+                    }}
+                    disabled={convertToInvoiceMutation.isPending || (selectedItemIds.size === 0 && selectedServiceIds.size === 0)}
+                  >
+                    {convertToInvoiceMutation.isPending ? "Creating..." : "Create Invoice"}
+                  </Button>
+                </div>
+              </div>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
-function AddItemDialog({ open, onOpenChange, assemblies, onAdd, isPending, existingRooms, panelNames, onCreateNewAssembly }: {
+function AddItemDialog({ open, onOpenChange, assemblies, onAdd, isPending, existingRooms, panelNames, onCreateNewAssembly, preselectedRoom }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   assemblies: DeviceAssembly[];
@@ -3879,10 +4427,12 @@ function AddItemDialog({ open, onOpenChange, assemblies, onAdd, isPending, exist
   existingRooms: string[];
   panelNames: string[];
   onCreateNewAssembly: () => void;
+  preselectedRoom?: string;
 }) {
   const [selectedAssembly, setSelectedAssembly] = useState("");
+  const [assemblySearch, setAssemblySearch] = useState("");
   const [roomMode, setRoomMode] = useState<"existing" | "new">("existing");
-  const [room, setRoom] = useState("");
+  const [room, setRoom] = useState(preselectedRoom || "");
   const [quantity, setQuantity] = useState(1);
   const [panelName, setPanelName] = useState("Main Panel");
 
@@ -3894,7 +4444,7 @@ function AddItemDialog({ open, onOpenChange, assemblies, onAdd, isPending, exist
       onAdd({
         deviceType: assembly.name,
         description: assembly.device,
-        room,
+        room: room || preselectedRoom || "",
         quantity,
         materialCost: assembly.materialCost,
         laborHours: assembly.laborHours,
@@ -3915,15 +4465,36 @@ function AddItemDialog({ open, onOpenChange, assemblies, onAdd, isPending, exist
     return acc;
   }, {});
 
+  // Filter assemblies by search term
+  const searchLower = assemblySearch.toLowerCase().trim();
+  const filteredGroupedAssemblies = searchLower
+    ? Object.entries(groupedAssemblies).reduce<Record<string, DeviceAssembly[]>>((acc, [cat, items]) => {
+        const filtered = items.filter(a =>
+          a.name.toLowerCase().includes(searchLower) ||
+          (a.device || "").toLowerCase().includes(searchLower) ||
+          cat.toLowerCase().includes(searchLower)
+        );
+        if (filtered.length > 0) acc[cat] = filtered;
+        return acc;
+      }, {})
+    : groupedAssemblies;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Add Line Item</DialogTitle>
+          <DialogTitle>Add Line Item{preselectedRoom ? ` — ${preselectedRoom}` : ""}</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label>Device Assembly</Label>
+            <Input
+              placeholder="Search assemblies..."
+              value={assemblySearch}
+              onChange={(e) => setAssemblySearch(e.target.value)}
+              className="mb-1"
+              data-testid="input-assembly-search"
+            />
             <Select value={selectedAssembly} onValueChange={(v) => {
               if (v === "__create__") {
                 onCreateNewAssembly();
@@ -3936,7 +4507,7 @@ function AddItemDialog({ open, onOpenChange, assemblies, onAdd, isPending, exist
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="__create__" className="font-medium text-primary">+ Create New Assembly</SelectItem>
-                {Object.entries(groupedAssemblies).map(([category, items]) => (
+                {Object.entries(filteredGroupedAssemblies).map(([category, items]) => (
                   items.map(item => (
                     <SelectItem key={item.id} value={item.id.toString()}>
                       {item.name} - ${item.materialCost.toFixed(2)}

@@ -658,7 +658,17 @@ export default function Projects() {
                       <Users className="w-4 h-4 text-primary" />
                     </div>
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold" data-testid={`text-client-name-${client}`}>{client}</p>
+                      {(() => {
+                        const custId = clientProjects[0]?.customerId;
+                        const hasCustomer = custId && customerMap[custId];
+                        return hasCustomer ? (
+                          <Link href={`/customers/${custId}`} onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+                            <p className="text-sm font-semibold text-primary hover:underline" data-testid={`text-client-name-${client}`}>{client}</p>
+                          </Link>
+                        ) : (
+                          <p className="text-sm font-semibold" data-testid={`text-client-name-${client}`}>{client}</p>
+                        );
+                      })()}
                       <p className="text-xs text-muted-foreground">
                         {clientProjects.length} project{clientProjects.length !== 1 ? "s" : ""}
                         {clientProjects[0]?.clientEmail ? ` · ${clientProjects[0].clientEmail}` : ""}
@@ -764,8 +774,18 @@ export default function Projects() {
                           <span className="text-sm font-medium">{project.name}</span>
                         </div>
                       </TableCell>
-                      <TableCell onClick={() => navigate(`/projects/${project.id}`)}>
-                        <span className="text-sm">{project.clientName}</span>
+                      <TableCell>
+                        {project.customerId && customerMap[project.customerId] ? (
+                          <Link href={`/customers/${project.customerId}`}>
+                            <span className="text-sm text-primary hover:underline cursor-pointer">
+                              {project.clientName}
+                            </span>
+                          </Link>
+                        ) : (
+                          <span className="text-sm text-muted-foreground" onClick={() => navigate(`/projects/${project.id}`)}>
+                            {project.clientName}
+                          </span>
+                        )}
                       </TableCell>
                       <TableCell>
                         <StatusBadge status={project.status} />

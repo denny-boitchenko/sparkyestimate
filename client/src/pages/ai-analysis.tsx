@@ -28,7 +28,8 @@ import {
   Upload, ScanLine, Zap, FileImage, CheckCircle2,
   Lightbulb, Plug, ToggleLeft, ShieldAlert, Wifi, Clock,
   DoorOpen, ChevronRight, ChevronDown, ArrowLeft, Sparkles, Trash2, FileText,
-  Plus, Link, User, Building, Search, RefreshCw, Download, ChevronsUpDown
+  Plus, Link, User, Building, Search, RefreshCw, Download, ChevronsUpDown,
+  MapPin, X
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle
@@ -37,6 +38,21 @@ import type { Project, AiAnalysis, Customer, DeviceAssembly } from "@shared/sche
 import { DWELLING_TYPES } from "@shared/schema";
 
 type WizardStep = "upload" | "pages" | "review";
+
+type StampType = "main_panel" | "sub_panel" | "meter";
+
+interface PanelStamp {
+  type: StampType;
+  x: number; // percentage 0-100
+  y: number; // percentage 0-100
+  page: number;
+}
+
+const STAMP_CONFIG: Record<StampType, { label: string; color: string; bgColor: string; borderColor: string }> = {
+  main_panel: { label: "Main Panel", color: "text-blue-700 dark:text-blue-300", bgColor: "bg-blue-500", borderColor: "border-blue-500" },
+  sub_panel: { label: "Sub Panel", color: "text-amber-700 dark:text-amber-300", bgColor: "bg-amber-500", borderColor: "border-amber-500" },
+  meter: { label: "Meter", color: "text-green-700 dark:text-green-300", bgColor: "bg-green-500", borderColor: "border-green-500" },
+};
 
 interface RoomData {
   name: string;
@@ -164,6 +180,8 @@ export default function AiAnalysisPage() {
   const [expandedRooms, setExpandedRooms] = useState<Set<number>>(new Set());
   const [expandedFloors, setExpandedFloors] = useState<Set<string>>(new Set());
   const [roomSearch, setRoomSearch] = useState("");
+  const [panelStamps, setPanelStamps] = useState<PanelStamp[]>([]);
+  const [activeStampTool, setActiveStampTool] = useState<StampType | null>(null);
 
   const { data: projects } = useQuery<Project[]>({
     queryKey: ["/api/projects"],
@@ -325,6 +343,11 @@ export default function AiAnalysisPage() {
       formData.append("dwellingType", dwellingType);
       formData.append("hasLegalSuite", hasLegalSuite ? "true" : "false");
       formData.append("sessionId", sessionId);
+
+      // Pass panel stamp positions to AI for context
+      if (panelStamps.length > 0) {
+        formData.append("panelStamps", JSON.stringify(panelStamps));
+      }
 
       if (isPdf && pageThumbs.length > 0) {
         const selectedPages = pageThumbs.filter(p => p.selected).map(p => p.pageNumber);
@@ -582,6 +605,20 @@ export default function AiAnalysisPage() {
     setPageThumbs(prev => prev.map(p => ({ ...p, selected: false })));
   };
 
+  const handleStampClick = useCallback((pageNumber: number, e: React.MouseEvent<HTMLDivElement>) => {
+    if (!activeStampTool) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    setPanelStamps(prev => [...prev, { type: activeStampTool, x, y, page: pageNumber }]);
+    // Stay in stamp mode so user can place multiple stamps
+  }, [activeStampTool]);
+
+  const removeStamp = useCallback((index: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setPanelStamps(prev => prev.filter((_, i) => i !== index));
+  }, []);
+
   const getDeviceIcon = (type: string) => {
     const t = type.toLowerCase();
     if (t.includes("receptacle") || t.includes("outlet")) return Plug;
@@ -617,6 +654,8 @@ export default function AiAnalysisPage() {
     setIsPdf(false);
     setEditedCounts({});
     setAssemblyOverrides({});
+    setPanelStamps([]);
+    setActiveStampTool(null);
     setCreateProjectOpen(false);
     setLinkToExistingProject("");
     setNewProjectName("");
@@ -1097,6 +1136,7 @@ export default function AiAnalysisPage() {
               </CardTitle>
               <p className="text-xs text-muted-foreground mt-1">
                 {selectedFile?.name} · {pageThumbs.length} pages · {selectedPageCount} selected
+                {panelStamps.length > 0 && ` · ${panelStamps.length} stamp${panelStamps.length !== 1 ? "s" : ""} placed`}
               </p>
             </div>
             <div className="flex gap-2">
@@ -1109,48 +1149,132 @@ export default function AiAnalysisPage() {
             </div>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 mb-6">
-              {pageThumbs.map((thumb) => (
-                <div
-                  key={thumb.pageNumber}
-                  className={`relative rounded-md border-2 cursor-pointer overflow-visible transition-colors ${
-                    thumb.selected
-                      ? "border-primary ring-2 ring-primary/20"
-                      : "border-muted"
-                  }`}
-                  onClick={() => togglePage(thumb.pageNumber)}
-                  data-testid={`page-thumb-${thumb.pageNumber}`}
+            {/* ─── Panel Stamp Toolbar ─── */}
+            <div className="flex items-center gap-2 mb-4 p-2 rounded-md bg-muted/50 border">
+              <MapPin className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+              <span className="text-xs font-medium text-muted-foreground mr-1">Mark Panels:</span>
+              {(Object.entries(STAMP_CONFIG) as [StampType, typeof STAMP_CONFIG[StampType]][]).map(([type, config]) => (
+                <Button
+                  key={type}
+                  variant={activeStampTool === type ? "default" : "outline"}
+                  size="sm"
+                  className={`h-7 text-xs ${activeStampTool === type ? "" : config.color}`}
+                  onClick={() => setActiveStampTool(activeStampTool === type ? null : type)}
+                  data-testid={`stamp-tool-${type}`}
                 >
-                  <img
-                    src={thumb.dataUrl}
-                    alt={`Page ${thumb.pageNumber}`}
-                    className="w-full h-auto rounded-md"
-                  />
-                  <div className="absolute top-1.5 left-1.5">
-                    <Checkbox
-                      checked={thumb.selected}
-                      onCheckedChange={() => togglePage(thumb.pageNumber)}
-                      data-testid={`checkbox-page-${thumb.pageNumber}`}
-                    />
-                  </div>
-                  <div className="absolute bottom-0 left-0 right-0 bg-background/80 dark:bg-background/90 py-1 px-2 rounded-b-md">
-                    <p className="text-xs font-medium text-center">Page {thumb.pageNumber}</p>
-                  </div>
-                </div>
+                  <span className={`w-2 h-2 rounded-full mr-1.5 ${config.bgColor}`} />
+                  {config.label}
+                </Button>
               ))}
+              {panelStamps.length > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs text-destructive ml-auto"
+                  onClick={() => setPanelStamps([])}
+                  data-testid="stamp-clear-all"
+                >
+                  <X className="w-3 h-3 mr-1" />
+                  Clear All
+                </Button>
+              )}
+              {activeStampTool && (
+                <span className="text-[10px] text-muted-foreground ml-2">
+                  Click on a page to place {STAMP_CONFIG[activeStampTool].label}
+                </span>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 mb-6">
+              {pageThumbs.map((thumb) => {
+                const pageStamps = panelStamps
+                  .map((s, i) => ({ ...s, globalIdx: i }))
+                  .filter(s => s.page === thumb.pageNumber);
+                return (
+                  <div
+                    key={thumb.pageNumber}
+                    className={`relative rounded-md border-2 overflow-visible transition-colors ${
+                      activeStampTool ? `cursor-crosshair ${STAMP_CONFIG[activeStampTool].borderColor} border-dashed` :
+                      thumb.selected
+                        ? "border-primary ring-2 ring-primary/20 cursor-pointer"
+                        : "border-muted cursor-pointer"
+                    }`}
+                    onClick={(e) => {
+                      if (activeStampTool) {
+                        handleStampClick(thumb.pageNumber, e);
+                      } else {
+                        togglePage(thumb.pageNumber);
+                      }
+                    }}
+                    data-testid={`page-thumb-${thumb.pageNumber}`}
+                  >
+                    <img
+                      src={thumb.dataUrl}
+                      alt={`Page ${thumb.pageNumber}`}
+                      className="w-full h-auto rounded-md"
+                    />
+                    {/* Stamp overlays */}
+                    {pageStamps.map((stamp) => (
+                      <div
+                        key={stamp.globalIdx}
+                        className="absolute z-10 group"
+                        style={{
+                          left: `${stamp.x}%`,
+                          top: `${stamp.y}%`,
+                          transform: "translate(-50%, -50%)",
+                        }}
+                      >
+                        <div
+                          className={`w-4 h-4 rounded-full ${STAMP_CONFIG[stamp.type].bgColor} border-2 border-white shadow-md flex items-center justify-center`}
+                          title={STAMP_CONFIG[stamp.type].label}
+                        >
+                          <span className="text-[7px] text-white font-bold leading-none">
+                            {stamp.type === "main_panel" ? "M" : stamp.type === "sub_panel" ? "S" : "E"}
+                          </span>
+                        </div>
+                        <button
+                          className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-destructive text-white text-[7px] leading-none hidden group-hover:flex items-center justify-center shadow"
+                          onClick={(e) => removeStamp(stamp.globalIdx, e)}
+                          title="Remove stamp"
+                        >
+                          x
+                        </button>
+                      </div>
+                    ))}
+                    <div className="absolute top-1.5 left-1.5">
+                      <Checkbox
+                        checked={thumb.selected}
+                        onCheckedChange={() => togglePage(thumb.pageNumber)}
+                        onClick={(e) => e.stopPropagation()}
+                        data-testid={`checkbox-page-${thumb.pageNumber}`}
+                      />
+                    </div>
+                    <div className="absolute bottom-0 left-0 right-0 bg-background/80 dark:bg-background/90 py-1 px-2 rounded-b-md">
+                      <p className="text-xs font-medium text-center">
+                        Page {thumb.pageNumber}
+                        {pageStamps.length > 0 && (
+                          <span className="text-[10px] text-muted-foreground ml-1">
+                            ({pageStamps.length} stamp{pageStamps.length !== 1 ? "s" : ""})
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
 
             <div className="flex gap-3 justify-end">
               <Button
                 variant="outline"
-                onClick={() => setWizardStep("upload")}
+                onClick={() => { setActiveStampTool(null); setWizardStep("upload"); }}
                 data-testid="button-back-to-upload"
               >
                 <ArrowLeft className="w-4 h-4 mr-2" />
                 Back
               </Button>
               <Button
-                onClick={() => analyzeMutation.mutate()}
+                onClick={() => { setActiveStampTool(null); analyzeMutation.mutate(); }}
                 disabled={selectedPageCount === 0 || analyzeMutation.isPending}
                 data-testid="button-analyze-selected"
               >

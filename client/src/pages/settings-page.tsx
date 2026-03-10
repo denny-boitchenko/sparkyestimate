@@ -19,7 +19,7 @@ import {
   ChevronDown, ChevronRight, Search, ListTree
 } from "lucide-react";
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import type { Setting, DeviceAssembly, WireType, ServiceBundle, ComplianceDocument, SupplierImport, JobType, PartsCatalogEntry, AssemblyPart, PermitFeeSchedule } from "@shared/schema";
+import type { Setting, DeviceAssembly, WireType, ComplianceDocument, SupplierImport, JobType, PartsCatalogEntry, AssemblyPart, PermitFeeSchedule } from "@shared/schema";
 import { DEVICE_CATEGORIES, PART_CATEGORIES } from "@shared/schema";
 
 interface SettingsData {
@@ -29,9 +29,6 @@ interface SettingsData {
   materialMarkup: string;
   laborMarkup: string;
   wasteFactor: string;
-  companyName: string;
-  companyPhone: string;
-  companyEmail: string;
 }
 
 const defaultSettings: SettingsData = {
@@ -41,9 +38,6 @@ const defaultSettings: SettingsData = {
   materialMarkup: "0",
   laborMarkup: "0",
   wasteFactor: "15",
-  companyName: "",
-  companyPhone: "",
-  companyEmail: "",
 };
 
 interface DeviceFormData {
@@ -74,22 +68,8 @@ const defaultDeviceForm: DeviceFormData = {
 
 interface WireTypeFormData {
   name: string;
-  costPerFoot: string;
+  costPerMeter: string;
 }
-
-interface ServiceFormData {
-  name: string;
-  items: string;
-  materialCost: string;
-  laborHours: string;
-}
-
-const defaultServiceForm: ServiceFormData = {
-  name: "",
-  items: "",
-  materialCost: "0",
-  laborHours: "0",
-};
 
 function CompanyLogoSection() {
   const { toast } = useToast();
@@ -318,52 +298,6 @@ function GeneralTab({ form, setForm, onSave, isSaving }: {
         </Card>
 
         <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base font-semibold flex items-center gap-2">
-                <Wrench className="w-4 h-4 text-primary" />
-                Company Information
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="companyName">Company Name</Label>
-                <Input
-                  id="companyName"
-                  placeholder="Your Electrical Company"
-                  value={form.companyName}
-                  onChange={(e) => setForm(p => ({ ...p, companyName: e.target.value }))}
-                  data-testid="input-company-name"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-2">
-                  <Label htmlFor="companyPhone">Phone</Label>
-                  <Input
-                    id="companyPhone"
-                    placeholder="(555) 123-4567"
-                    value={form.companyPhone}
-                    onChange={(e) => setForm(p => ({ ...p, companyPhone: e.target.value }))}
-                    data-testid="input-company-phone"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="companyEmail">Email</Label>
-                  <Input
-                    id="companyEmail"
-                    type="email"
-                    placeholder="info@company.com"
-                    value={form.companyEmail}
-                    onChange={(e) => setForm(p => ({ ...p, companyEmail: e.target.value }))}
-                    data-testid="input-company-email"
-                  />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <CompanyLogoSection />
-
           <Card>
             <CardHeader>
               <CardTitle className="text-base font-semibold flex items-center gap-2">
@@ -850,6 +784,254 @@ function MaterialsTab() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <SupplierImportSection />
+    </div>
+  );
+}
+
+function SupplierImportSection() {
+  const { toast } = useToast();
+  const [supplierName, setSupplierName] = useState("");
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [previewData, setPreviewData] = useState<any>(null);
+  const [previewImportId, setPreviewImportId] = useState<number | null>(null);
+  const [skippedIndices, setSkippedIndices] = useState<Set<number>>(new Set());
+  const [showImport, setShowImport] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const { data: importHistory } = useQuery<SupplierImport[]>({
+    queryKey: ["/api/supplier-imports"],
+  });
+
+  const uploadMutation = useMutation({
+    mutationFn: async () => {
+      if (!importFile) throw new Error("No file selected");
+      const formData = new FormData();
+      formData.append("supplierName", supplierName || "Unknown Supplier");
+      formData.append("file", importFile);
+      const res = await fetch("/api/supplier-imports/preview", {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || res.statusText);
+      }
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      setPreviewData(data.previewData);
+      setPreviewImportId(data.id);
+      setSkippedIndices(new Set());
+      toast({ title: "File processed", description: "Review items below before committing" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const commitMutation = useMutation({
+    mutationFn: async () => {
+      if (!previewImportId || !previewData) throw new Error("No preview data");
+      const items = (previewData.items || []).map((item: any, idx: number) => ({
+        ...item,
+        skip: skippedIndices.has(idx),
+      }));
+      const res = await apiRequest("POST", `/api/supplier-imports/${previewImportId}/commit`, { items });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/supplier-imports"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/device-assemblies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/wire-types"] });
+      toast({ title: "Import complete", description: data.message || "Items imported successfully" });
+      setPreviewData(null);
+      setPreviewImportId(null);
+      setSkippedIndices(new Set());
+      setImportFile(null);
+      setSupplierName("");
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const toggleSkip = (index: number) => {
+    setSkippedIndices(prev => {
+      const next = new Set(prev);
+      if (next.has(index)) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
+  };
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base font-semibold flex items-center gap-2">
+              <Upload className="w-4 h-4" />
+              Import Supplier Price List
+            </CardTitle>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setShowImport(!showImport)}
+              data-testid="button-toggle-supplier-import"
+            >
+              {showImport ? "Hide Import" : "Import Supplier List"}
+            </Button>
+          </div>
+        </CardHeader>
+        {showImport && (
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Supplier Name</Label>
+                <Input
+                  value={supplierName}
+                  onChange={(e) => setSupplierName(e.target.value)}
+                  placeholder="e.g. Nedco, Sonepar"
+                  data-testid="input-supplier-name"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>File (CSV or PDF)</Label>
+                <Input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".csv,.pdf"
+                  onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+                  data-testid="input-supplier-file"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <Button
+                onClick={() => uploadMutation.mutate()}
+                disabled={uploadMutation.isPending || !importFile}
+                data-testid="button-upload-supplier"
+              >
+                <Upload className="w-4 h-4 mr-2" />
+                {uploadMutation.isPending ? "Processing..." : "Upload & Preview"}
+              </Button>
+            </div>
+          </CardContent>
+        )}
+      </Card>
+
+      {previewData && previewData.items && previewData.items.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base font-semibold flex items-center justify-between gap-2 flex-wrap">
+              <span>Preview ({previewData.items.length} items found)</span>
+              <Button
+                onClick={() => commitMutation.mutate()}
+                disabled={commitMutation.isPending}
+                data-testid="button-commit-import"
+              >
+                {commitMutation.isPending ? "Importing..." : "Commit Import"}
+              </Button>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-12">Skip</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Category</TableHead>
+                  <TableHead>Cost</TableHead>
+                  <TableHead>Supplier</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {previewData.items.map((item: any, idx: number) => (
+                  <TableRow key={idx} data-testid={`row-preview-item-${idx}`} className={skippedIndices.has(idx) ? "opacity-50" : ""}>
+                    <TableCell>
+                      <Checkbox
+                        checked={skippedIndices.has(idx)}
+                        onCheckedChange={() => toggleSkip(idx)}
+                        data-testid={`checkbox-skip-item-${idx}`}
+                      />
+                    </TableCell>
+                    <TableCell data-testid={`text-preview-type-${idx}`}>
+                      {item.itemType === "wire" ? (
+                        <Badge variant="secondary" className="text-xs bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">Wire</Badge>
+                      ) : item.itemType === "part" ? (
+                        <Badge variant="secondary" className="text-xs bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200">Part</Badge>
+                      ) : (
+                        <Badge variant="default" className="text-xs bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">Material</Badge>
+                      )}
+                    </TableCell>
+                    <TableCell className="font-medium" data-testid={`text-preview-name-${idx}`}>{item.name}</TableCell>
+                    <TableCell data-testid={`text-preview-category-${idx}`}>
+                      <Badge variant="outline" className="text-xs">
+                        {item.itemType === "wire" ? "wire" : (item.category || "materials")}
+                      </Badge>
+                    </TableCell>
+                    <TableCell data-testid={`text-preview-cost-${idx}`}>
+                      {item.itemType === "wire"
+                        ? `$${(item.costPerFoot || 0).toFixed(2)}/ft`
+                        : `$${(item.materialCost || 0).toFixed(2)}`
+                      }
+                    </TableCell>
+                    <TableCell data-testid={`text-preview-supplier-${idx}`}>{item.supplier || "-"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {importHistory && importHistory.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base font-semibold">Import History</CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Supplier</TableHead>
+                  <TableHead>File</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Imported</TableHead>
+                  <TableHead>Date</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {importHistory.map((imp) => (
+                  <TableRow key={imp.id} data-testid={`row-import-history-${imp.id}`}>
+                    <TableCell className="font-medium" data-testid={`text-import-supplier-${imp.id}`}>{imp.supplierName}</TableCell>
+                    <TableCell data-testid={`text-import-file-${imp.id}`}>{imp.fileName}</TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={imp.status === "completed" ? "default" : "secondary"}
+                        data-testid={`badge-import-status-${imp.id}`}
+                      >
+                        {imp.status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell data-testid={`text-import-count-${imp.id}`}>{imp.importedCount}</TableCell>
+                    <TableCell data-testid={`text-import-date-${imp.id}`}>
+                      {new Date(imp.createdAt).toLocaleDateString()}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
@@ -857,7 +1039,7 @@ function MaterialsTab() {
 function WireTypesTab() {
   const { toast } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [wireForm, setWireForm] = useState<WireTypeFormData>({ name: "", costPerFoot: "0" });
+  const [wireForm, setWireForm] = useState<WireTypeFormData>({ name: "", costPerMeter: "0" });
 
   const { data: wireTypesData, isLoading } = useQuery<WireType[]>({
     queryKey: ["/api/wire-types"],
@@ -865,16 +1047,18 @@ function WireTypesTab() {
 
   const createMutation = useMutation({
     mutationFn: async (data: WireTypeFormData) => {
+      const costPerMeter = parseFloat(data.costPerMeter) || 0;
       await apiRequest("POST", "/api/wire-types", {
         name: data.name,
-        costPerFoot: parseFloat(data.costPerFoot) || 0,
+        costPerMeter,
+        costPerFoot: costPerMeter * 3.28084,
       });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/wire-types"] });
       toast({ title: "Wire type created" });
       setDialogOpen(false);
-      setWireForm({ name: "", costPerFoot: "0" });
+      setWireForm({ name: "", costPerMeter: "0" });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -910,8 +1094,10 @@ function WireTypesTab() {
     const orig = originalValue == null ? "" : String(originalValue);
     if (newValue === orig) return;
     const payload: Record<string, unknown> = {};
-    if (field === "costPerFoot") {
-      payload[field] = parseFloat(newValue) || 0;
+    if (field === "costPerMeter") {
+      const costPerMeter = parseFloat(newValue) || 0;
+      payload.costPerMeter = costPerMeter;
+      payload.costPerFoot = costPerMeter * 3.28084;
     } else {
       payload[field] = newValue || null;
     }
@@ -936,7 +1122,7 @@ function WireTypesTab() {
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
-                <TableHead>Cost per Foot</TableHead>
+                <TableHead>Cost/m</TableHead>
                 <TableHead>Supplier</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -955,11 +1141,11 @@ function WireTypesTab() {
                   </TableCell>
                   <TableCell>
                     <Input
-                      key={`cost-${wt.id}-${wt.costPerFoot}`}
+                      key={`cost-${wt.id}-${(wt as any).costPerMeter ?? wt.costPerFoot}`}
                       type="number"
                       step="0.01"
-                      defaultValue={wt.costPerFoot}
-                      onBlur={(e) => handleInlineBlur(wt.id, "costPerFoot", e.target.value, wt.costPerFoot)}
+                      defaultValue={(wt as any).costPerMeter ?? wt.costPerFoot}
+                      onBlur={(e) => handleInlineBlur(wt.id, "costPerMeter", e.target.value, (wt as any).costPerMeter ?? wt.costPerFoot)}
                       className="w-24"
                       data-testid={`input-wire-cost-${wt.id}`}
                     />
@@ -1011,12 +1197,12 @@ function WireTypesTab() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Cost per Foot ($)</Label>
+              <Label>Cost per Meter ($)</Label>
               <Input
                 type="number"
                 step="0.01"
-                value={wireForm.costPerFoot}
-                onChange={(e) => setWireForm(p => ({ ...p, costPerFoot: e.target.value }))}
+                value={wireForm.costPerMeter}
+                onChange={(e) => setWireForm(p => ({ ...p, costPerMeter: e.target.value }))}
                 data-testid="input-wire-type-cost"
               />
             </div>
@@ -1136,7 +1322,7 @@ function JobTypesTab() {
             <div>
               <CardTitle className="text-lg">Job Types & Labour Multipliers</CardTitle>
               <p className="text-sm text-muted-foreground mt-1">
-                NECA Manual of Labour Units — multipliers adjust labour hours by project complexity
+                Multipliers adjust labour hours by project complexity
               </p>
             </div>
             <Button size="sm" onClick={() => setDialogOpen(true)} data-testid="button-add-job-type">
@@ -1153,7 +1339,6 @@ function JobTypesTab() {
                   <TableHead>Value (ID)</TableHead>
                   <TableHead>Display Label</TableHead>
                   <TableHead>Multiplier</TableHead>
-                  <TableHead>NECA Column</TableHead>
                   <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
@@ -1186,11 +1371,6 @@ function JobTypesTab() {
                       />
                     </TableCell>
                     <TableCell>
-                      <Badge variant="outline" className="text-xs">
-                        {(jt.multiplier ?? 1) <= 1.2 ? "Normal" : (jt.multiplier ?? 1) <= 1.5 ? "Difficult" : "Very Difficult"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
                       <Button
                         size="icon"
                         variant="ghost"
@@ -1203,7 +1383,7 @@ function JobTypesTab() {
                   </TableRow>
                 )) : (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                    <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
                       No job types found. Add one to get started.
                     </TableCell>
                   </TableRow>
@@ -1262,236 +1442,6 @@ function JobTypesTab() {
               data-testid="button-submit-job-type"
             >
               {createMutation.isPending ? "Creating..." : "Create"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
-}
-
-function ServicesTab() {
-  const { toast } = useToast();
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [serviceForm, setServiceForm] = useState<ServiceFormData>(defaultServiceForm);
-
-  const { data: bundles, isLoading } = useQuery<ServiceBundle[]>({
-    queryKey: ["/api/service-bundles"],
-  });
-
-  const createMutation = useMutation({
-    mutationFn: async (data: ServiceFormData) => {
-      await apiRequest("POST", "/api/service-bundles", {
-        name: data.name,
-        items: data.items.split("\n").map(s => s.trim()).filter(Boolean),
-        materialCost: parseFloat(data.materialCost) || 0,
-        laborHours: parseFloat(data.laborHours) || 0,
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/service-bundles"] });
-      toast({ title: "Service bundle created" });
-      setDialogOpen(false);
-      setServiceForm(defaultServiceForm);
-    },
-    onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
-    },
-  });
-
-  const updateMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: number; data: ServiceFormData }) => {
-      await apiRequest("PATCH", `/api/service-bundles/${id}`, {
-        name: data.name,
-        items: data.items.split("\n").map(s => s.trim()).filter(Boolean),
-        materialCost: parseFloat(data.materialCost) || 0,
-        laborHours: parseFloat(data.laborHours) || 0,
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/service-bundles"] });
-      toast({ title: "Service bundle updated" });
-      setDialogOpen(false);
-      setEditingId(null);
-      setServiceForm(defaultServiceForm);
-    },
-    onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
-    },
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: async (id: number) => {
-      await apiRequest("DELETE", `/api/service-bundles/${id}`);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/service-bundles"] });
-      toast({ title: "Service bundle deleted" });
-    },
-    onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
-    },
-  });
-
-  const openEdit = (bundle: ServiceBundle) => {
-    setEditingId(bundle.id);
-    const items = Array.isArray(bundle.items) ? (bundle.items as string[]).join("\n") : "";
-    setServiceForm({
-      name: bundle.name,
-      items,
-      materialCost: String(bundle.materialCost),
-      laborHours: String(bundle.laborHours),
-    });
-    setDialogOpen(true);
-  };
-
-  const openCreate = () => {
-    setEditingId(null);
-    setServiceForm(defaultServiceForm);
-    setDialogOpen(true);
-  };
-
-  const handleSubmit = () => {
-    if (editingId) {
-      updateMutation.mutate({ id: editingId, data: serviceForm });
-    } else {
-      createMutation.mutate(serviceForm);
-    }
-  };
-
-  if (isLoading) {
-    return <div className="space-y-4"><Skeleton className="h-64" /></div>;
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="flex justify-end">
-        <Button onClick={openCreate} data-testid="button-add-service-bundle">
-          <Plus className="w-4 h-4 mr-2" />
-          Add Service Bundle
-        </Button>
-      </div>
-      <Card>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Items</TableHead>
-                <TableHead>Material $</TableHead>
-                <TableHead>Labor Hrs</TableHead>
-                <TableHead>Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {bundles && bundles.length > 0 ? bundles.map((b) => (
-                <TableRow key={b.id} data-testid={`row-service-${b.id}`}>
-                  <TableCell className="font-medium" data-testid={`text-service-name-${b.id}`}>{b.name}</TableCell>
-                  <TableCell>
-                    <div className="flex flex-wrap gap-1">
-                      {Array.isArray(b.items) && (b.items as string[]).map((item, i) => (
-                        <Badge key={i} variant="outline" className="text-xs" data-testid={`badge-service-item-${b.id}-${i}`}>
-                          {item}
-                        </Badge>
-                      ))}
-                    </div>
-                  </TableCell>
-                  <TableCell data-testid={`text-service-material-${b.id}`}>${b.materialCost.toFixed(2)}</TableCell>
-                  <TableCell data-testid={`text-service-labor-${b.id}`}>{b.laborHours}</TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-1">
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        onClick={() => openEdit(b)}
-                        data-testid={`button-edit-service-${b.id}`}
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        onClick={() => deleteMutation.mutate(b.id)}
-                        data-testid={`button-delete-service-${b.id}`}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              )) : (
-                <TableRow>
-                  <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
-                    No service bundles found
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{editingId ? "Edit Service Bundle" : "Add Service Bundle"}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Name</Label>
-              <Input
-                value={serviceForm.name}
-                onChange={(e) => setServiceForm(p => ({ ...p, name: e.target.value }))}
-                data-testid="input-service-name"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Items (one per line)</Label>
-              <Textarea
-                value={serviceForm.items}
-                onChange={(e) => setServiceForm(p => ({ ...p, items: e.target.value }))}
-                rows={4}
-                data-testid="input-service-items"
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <Label>Material Cost ($)</Label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  value={serviceForm.materialCost}
-                  onChange={(e) => setServiceForm(p => ({ ...p, materialCost: e.target.value }))}
-                  data-testid="input-service-material-cost"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Labor Hours</Label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  value={serviceForm.laborHours}
-                  onChange={(e) => setServiceForm(p => ({ ...p, laborHours: e.target.value }))}
-                  data-testid="input-service-labor-hours"
-                />
-              </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setDialogOpen(false)}
-              data-testid="button-cancel-service"
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={handleSubmit}
-              disabled={createMutation.isPending || updateMutation.isPending}
-              data-testid="button-submit-service"
-            >
-              {(createMutation.isPending || updateMutation.isPending) ? "Saving..." : (editingId ? "Update" : "Create")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1684,244 +1634,7 @@ function CecDocumentsTab() {
   );
 }
 
-function SupplierImportTab() {
-  const { toast } = useToast();
-  const [supplierName, setSupplierName] = useState("");
-  const [importFile, setImportFile] = useState<File | null>(null);
-  const [previewData, setPreviewData] = useState<any>(null);
-  const [previewImportId, setPreviewImportId] = useState<number | null>(null);
-  const [skippedIndices, setSkippedIndices] = useState<Set<number>>(new Set());
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const { data: importHistory, isLoading } = useQuery<SupplierImport[]>({
-    queryKey: ["/api/supplier-imports"],
-  });
-
-  const uploadMutation = useMutation({
-    mutationFn: async () => {
-      if (!importFile) throw new Error("No file selected");
-      const formData = new FormData();
-      formData.append("supplierName", supplierName || "Unknown Supplier");
-      formData.append("file", importFile);
-      const res = await fetch("/api/supplier-imports/preview", {
-        method: "POST",
-        body: formData,
-        credentials: "include",
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || res.statusText);
-      }
-      return res.json();
-    },
-    onSuccess: (data: any) => {
-      setPreviewData(data.previewData);
-      setPreviewImportId(data.id);
-      setSkippedIndices(new Set());
-      toast({ title: "File processed", description: "Review items below before committing" });
-    },
-    onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
-    },
-  });
-
-  const commitMutation = useMutation({
-    mutationFn: async () => {
-      if (!previewImportId || !previewData) throw new Error("No preview data");
-      const items = (previewData.items || []).map((item: any, idx: number) => ({
-        ...item,
-        skip: skippedIndices.has(idx),
-      }));
-      const res = await apiRequest("POST", `/api/supplier-imports/${previewImportId}/commit`, { items });
-      return res.json();
-    },
-    onSuccess: (data: any) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/supplier-imports"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/device-assemblies"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/wire-types"] });
-      toast({ title: "Import complete", description: data.message || "Items imported successfully" });
-      setPreviewData(null);
-      setPreviewImportId(null);
-      setSkippedIndices(new Set());
-      setImportFile(null);
-      setSupplierName("");
-    },
-    onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
-    },
-  });
-
-  const toggleSkip = (index: number) => {
-    setSkippedIndices(prev => {
-      const next = new Set(prev);
-      if (next.has(index)) {
-        next.delete(index);
-      } else {
-        next.add(index);
-      }
-      return next;
-    });
-  };
-
-  if (isLoading) {
-    return <div className="space-y-4"><Skeleton className="h-64" /></div>;
-  }
-
-  return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base font-semibold flex items-center gap-2">
-            <Upload className="w-4 h-4" />
-            Import Supplier Price List
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>Supplier Name</Label>
-              <Input
-                value={supplierName}
-                onChange={(e) => setSupplierName(e.target.value)}
-                placeholder="e.g. Nedco, Sonepar"
-                data-testid="input-supplier-name"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>File (CSV or PDF)</Label>
-              <Input
-                ref={fileInputRef}
-                type="file"
-                accept=".csv,.pdf"
-                onChange={(e) => setImportFile(e.target.files?.[0] || null)}
-                data-testid="input-supplier-file"
-              />
-            </div>
-          </div>
-          <div className="flex justify-end">
-            <Button
-              onClick={() => uploadMutation.mutate()}
-              disabled={uploadMutation.isPending || !importFile}
-              data-testid="button-upload-supplier"
-            >
-              <Upload className="w-4 h-4 mr-2" />
-              {uploadMutation.isPending ? "Processing..." : "Upload & Preview"}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      {previewData && previewData.items && previewData.items.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base font-semibold flex items-center justify-between gap-2 flex-wrap">
-              <span>Preview ({previewData.items.length} items found)</span>
-              <Button
-                onClick={() => commitMutation.mutate()}
-                disabled={commitMutation.isPending}
-                data-testid="button-commit-import"
-              >
-                {commitMutation.isPending ? "Importing..." : "Commit Import"}
-              </Button>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-12">Skip</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead>Cost</TableHead>
-                  <TableHead>Supplier</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {previewData.items.map((item: any, idx: number) => (
-                  <TableRow key={idx} data-testid={`row-preview-item-${idx}`} className={skippedIndices.has(idx) ? "opacity-50" : ""}>
-                    <TableCell>
-                      <Checkbox
-                        checked={skippedIndices.has(idx)}
-                        onCheckedChange={() => toggleSkip(idx)}
-                        data-testid={`checkbox-skip-item-${idx}`}
-                      />
-                    </TableCell>
-                    <TableCell data-testid={`text-preview-type-${idx}`}>
-                      {item.itemType === "wire" ? (
-                        <Badge variant="secondary" className="text-xs bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">Wire</Badge>
-                      ) : item.itemType === "part" ? (
-                        <Badge variant="secondary" className="text-xs bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200">Part</Badge>
-                      ) : (
-                        <Badge variant="default" className="text-xs bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">Material</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="font-medium" data-testid={`text-preview-name-${idx}`}>{item.name}</TableCell>
-                    <TableCell data-testid={`text-preview-category-${idx}`}>
-                      <Badge variant="outline" className="text-xs">
-                        {item.itemType === "wire" ? "wire" : (item.category || "materials")}
-                      </Badge>
-                    </TableCell>
-                    <TableCell data-testid={`text-preview-cost-${idx}`}>
-                      {item.itemType === "wire"
-                        ? `$${(item.costPerFoot || 0).toFixed(2)}/ft`
-                        : `$${(item.materialCost || 0).toFixed(2)}`
-                      }
-                    </TableCell>
-                    <TableCell data-testid={`text-preview-supplier-${idx}`}>{item.supplier || "-"}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      )}
-
-      {importHistory && importHistory.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base font-semibold">Import History</CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Supplier</TableHead>
-                  <TableHead>File</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Imported</TableHead>
-                  <TableHead>Date</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {importHistory.map((imp) => (
-                  <TableRow key={imp.id} data-testid={`row-import-history-${imp.id}`}>
-                    <TableCell className="font-medium" data-testid={`text-import-supplier-${imp.id}`}>{imp.supplierName}</TableCell>
-                    <TableCell data-testid={`text-import-file-${imp.id}`}>{imp.fileName}</TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={imp.status === "completed" ? "default" : "secondary"}
-                        data-testid={`badge-import-status-${imp.id}`}
-                      >
-                        {imp.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell data-testid={`text-import-count-${imp.id}`}>{imp.importedCount}</TableCell>
-                    <TableCell data-testid={`text-import-date-${imp.id}`}>
-                      {new Date(imp.createdAt).toLocaleDateString()}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      )}
-    </div>
-  );
-}
-
-function EstimateTemplateTab() {
+function DocumentTemplateTab() {
   const { toast } = useToast();
   const { data: settings } = useQuery<Setting[]>({ queryKey: ["/api/settings"] });
 
@@ -1959,7 +1672,7 @@ function EstimateTemplateTab() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
-      toast({ title: "Template settings saved" });
+      toast({ title: "Document template settings saved" });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -1970,9 +1683,12 @@ function EstimateTemplateTab() {
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle className="text-base font-semibold">Client Estimate Template</CardTitle>
+          <CardTitle className="text-base font-semibold">Company & Document Template</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Company details and template settings used on all PDF exports (estimates, invoices, receipts).
+          </p>
           <div className="space-y-2">
             <Label>Company Name</Label>
             <Input
@@ -2011,6 +1727,16 @@ function EstimateTemplateTab() {
               />
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      <CompanyLogoSection />
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base font-semibold">Tax & Notes</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Tax Rate (%)</Label>
@@ -2059,7 +1785,7 @@ function EstimateTemplateTab() {
               data-testid="button-save-template"
             >
               <Save className="w-4 h-4 mr-2" />
-              {saveMutation.isPending ? "Saving..." : "Save Template Settings"}
+              {saveMutation.isPending ? "Saving..." : "Save Document Template"}
             </Button>
           </div>
         </CardContent>
@@ -2628,18 +2354,13 @@ function PermitsTab() {
   const { data: schedules, isLoading } = useQuery<PermitFeeSchedule[]>({
     queryKey: ["/api/permit-fee-schedules"],
   });
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
   const [editRates, setEditRates] = useState<any>(null);
 
-  const toggleActiveMutation = useMutation({
-    mutationFn: async ({ id, isActive }: { id: number; isActive: boolean }) => {
-      await apiRequest("PATCH", `/api/permit-fee-schedules/${id}`, { isActive });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/permit-fee-schedules"] });
-      toast({ title: "Schedule updated" });
-    },
-  });
+  const activeSchedule = useMemo(() => {
+    if (!schedules || schedules.length === 0) return null;
+    return schedules.find(s => s.isActive) || schedules[0];
+  }, [schedules]);
 
   const saveRatesMutation = useMutation({
     mutationFn: async ({ id, rates }: { id: number; rates: any }) => {
@@ -2647,15 +2368,16 @@ function PermitsTab() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/permit-fee-schedules"] });
-      setEditingId(null);
+      setIsEditing(false);
       setEditRates(null);
       toast({ title: "Rates saved" });
     },
   });
 
-  const startEditing = (schedule: PermitFeeSchedule) => {
-    setEditingId(schedule.id);
-    setEditRates(JSON.parse(JSON.stringify(schedule.rates)));
+  const startEditing = () => {
+    if (!activeSchedule) return;
+    setIsEditing(true);
+    setEditRates(JSON.parse(JSON.stringify(activeSchedule.rates)));
   };
 
   if (isLoading) return <Skeleton className="h-48 w-full" />;
@@ -2666,94 +2388,79 @@ function PermitsTab() {
         <CardHeader>
           <CardTitle className="text-base font-semibold flex items-center gap-2">
             <Shield className="w-4 h-4 text-amber-500" />
-            TSBC Permit Fee Schedules
+            TSBC Permit Fee Schedule
           </CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground mb-4">
-            Manage Technical Safety BC fee schedules. Click "Edit Rates" to modify fee amounts.
-            The active schedule auto-calculates permit fees on estimates when the permit checkbox is enabled.
+            Edit the active TSBC fee schedule below. These rates auto-calculate permit fees on estimates when the permit checkbox is enabled.
           </p>
-          {(!schedules || schedules.length === 0) ? (
-            <p className="text-sm text-muted-foreground">No permit fee schedules found. Run the database seed to load TSBC rates.</p>
+          {!activeSchedule ? (
+            <p className="text-sm text-muted-foreground">No permit fee schedule found. Run the database seed to load TSBC rates.</p>
           ) : (
-            <div className="space-y-4">
-              {schedules.map((schedule) => {
-                const isEditing = editingId === schedule.id;
-                const rates = isEditing ? editRates : (schedule.rates as any);
-                return (
-                  <Card key={schedule.id} className={schedule.isActive ? "border-primary" : ""}>
-                    <CardHeader className="pb-2">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <CardTitle className="text-sm">{schedule.name}</CardTitle>
-                          <Badge variant={schedule.isActive ? "default" : "secondary"} className="text-xs">
-                            {schedule.isActive ? "Active" : "Inactive"}
-                          </Badge>
-                          <span className="text-xs text-muted-foreground">Effective: {schedule.effectiveDate}</span>
-                        </div>
-                        <div className="flex gap-2">
-                          {isEditing ? (
-                            <>
-                              <Button size="sm" variant="outline" onClick={() => { setEditingId(null); setEditRates(null); }}>
-                                Cancel
-                              </Button>
-                              <Button size="sm" onClick={() => saveRatesMutation.mutate({ id: schedule.id, rates: editRates })}
-                                disabled={saveRatesMutation.isPending}>
-                                <Save className="w-3 h-3 mr-1" />
-                                {saveRatesMutation.isPending ? "Saving..." : "Save"}
-                              </Button>
-                            </>
-                          ) : (
-                            <>
-                              <Button size="sm" variant="outline" onClick={() => startEditing(schedule)}>
-                                <Pencil className="w-3 h-3 mr-1" />
-                                Edit Rates
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant={schedule.isActive ? "secondary" : "default"}
-                                onClick={() => toggleActiveMutation.mutate({ id: schedule.id, isActive: !schedule.isActive })}
-                              >
-                                {schedule.isActive ? "Deactivate" : "Activate"}
-                              </Button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        {rates?.residential_service && (
-                          <EditableRateTable
-                            category="residential_service"
-                            label="Single Family (by Amps)"
-                            rates={rates.residential_service}
-                            onChange={(updated) => isEditing && setEditRates({ ...editRates, residential_service: updated })}
-                          />
-                        )}
-                        {rates?.service_upgrade && (
-                          <EditableRateTable
-                            category="service_upgrade"
-                            label="Service Upgrade (by Amps)"
-                            rates={rates.service_upgrade}
-                            onChange={(updated) => isEditing && setEditRates({ ...editRates, service_upgrade: updated })}
-                          />
-                        )}
-                        {rates?.other && (
-                          <EditableRateTable
-                            category="other"
-                            label="Other (by Job Value)"
-                            rates={rates.other}
-                            onChange={(updated) => isEditing && setEditRates({ ...editRates, other: updated })}
-                          />
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </div>
+            <Card className="border-primary">
+              <CardHeader className="pb-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <CardTitle className="text-sm">{activeSchedule.name}</CardTitle>
+                    <Badge variant="default" className="text-xs">Active</Badge>
+                    <span className="text-xs text-muted-foreground">Effective: {activeSchedule.effectiveDate}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    {isEditing ? (
+                      <>
+                        <Button size="sm" variant="outline" onClick={() => { setIsEditing(false); setEditRates(null); }}>
+                          Cancel
+                        </Button>
+                        <Button size="sm" onClick={() => saveRatesMutation.mutate({ id: activeSchedule.id, rates: editRates })}
+                          disabled={saveRatesMutation.isPending}>
+                          <Save className="w-3 h-3 mr-1" />
+                          {saveRatesMutation.isPending ? "Saving..." : "Save"}
+                        </Button>
+                      </>
+                    ) : (
+                      <Button size="sm" variant="outline" onClick={startEditing}>
+                        <Pencil className="w-3 h-3 mr-1" />
+                        Edit Rates
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {(() => {
+                  const rates = isEditing ? editRates : (activeSchedule.rates as any);
+                  return (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      {rates?.residential_service && (
+                        <EditableRateTable
+                          category="residential_service"
+                          label="Single Family (by Amps)"
+                          rates={rates.residential_service}
+                          onChange={(updated) => isEditing && setEditRates({ ...editRates, residential_service: updated })}
+                        />
+                      )}
+                      {rates?.service_upgrade && (
+                        <EditableRateTable
+                          category="service_upgrade"
+                          label="Service Upgrade (by Amps)"
+                          rates={rates.service_upgrade}
+                          onChange={(updated) => isEditing && setEditRates({ ...editRates, service_upgrade: updated })}
+                        />
+                      )}
+                      {rates?.other && (
+                        <EditableRateTable
+                          category="other"
+                          label="Other (by Job Value)"
+                          rates={rates.other}
+                          onChange={(updated) => isEditing && setEditRates({ ...editRates, other: updated })}
+                        />
+                      )}
+                    </div>
+                  );
+                })()}
+              </CardContent>
+            </Card>
           )}
         </CardContent>
       </Card>
@@ -2779,9 +2486,6 @@ export default function SettingsPage() {
         materialMarkup: map.get("materialMarkup") || defaultSettings.materialMarkup,
         laborMarkup: map.get("laborMarkup") || defaultSettings.laborMarkup,
         wasteFactor: map.get("wasteFactor") || defaultSettings.wasteFactor,
-        companyName: map.get("companyName") || defaultSettings.companyName,
-        companyPhone: map.get("companyPhone") || defaultSettings.companyPhone,
-        companyEmail: map.get("companyEmail") || defaultSettings.companyEmail,
       });
     }
   }, [settings]);
@@ -2838,21 +2542,13 @@ export default function SettingsPage() {
             <Briefcase className="w-4 h-4 mr-2" />
             Job Types
           </TabsTrigger>
-          <TabsTrigger value="services" data-testid="tab-services">
-            <Wrench className="w-4 h-4 mr-2" />
-            Services
-          </TabsTrigger>
           <TabsTrigger value="cec" data-testid="tab-cec">
             <Shield className="w-4 h-4 mr-2" />
             CEC
           </TabsTrigger>
-          <TabsTrigger value="supplier-import" data-testid="tab-supplier-import">
-            <Upload className="w-4 h-4 mr-2" />
-            Supplier Import
-          </TabsTrigger>
-          <TabsTrigger value="estimate-template" data-testid="tab-estimate-template">
+          <TabsTrigger value="document-template" data-testid="tab-document-template">
             <DollarSign className="w-4 h-4 mr-2" />
-            Estimate Template
+            Document Template
           </TabsTrigger>
           <TabsTrigger value="parts-catalog" data-testid="tab-parts-catalog">
             <ListTree className="w-4 h-4 mr-2" />
@@ -2889,20 +2585,12 @@ export default function SettingsPage() {
           <JobTypesTab />
         </TabsContent>
 
-        <TabsContent value="services">
-          <ServicesTab />
-        </TabsContent>
-
         <TabsContent value="cec">
           <CecDocumentsTab />
         </TabsContent>
 
-        <TabsContent value="supplier-import">
-          <SupplierImportTab />
-        </TabsContent>
-
-        <TabsContent value="estimate-template">
-          <EstimateTemplateTab />
+        <TabsContent value="document-template">
+          <DocumentTemplateTab />
         </TabsContent>
 
         <TabsContent value="parts-catalog">

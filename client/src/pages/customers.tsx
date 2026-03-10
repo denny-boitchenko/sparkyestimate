@@ -435,14 +435,16 @@ export default function Customers() {
                       onClick={() => openEditDialog(customer)}
                     >
                       <TableCell>
-                        <div className="flex items-center gap-2">
-                          <div className="flex items-center justify-center w-8 h-8 rounded-md bg-primary/10 dark:bg-primary/20 flex-shrink-0">
-                            <Users className="w-4 h-4 text-primary" />
+                        <Link href={`/customers/${customer.id}`} onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center gap-2 group">
+                            <div className="flex items-center justify-center w-8 h-8 rounded-md bg-primary/10 dark:bg-primary/20 flex-shrink-0">
+                              <Users className="w-4 h-4 text-primary" />
+                            </div>
+                            <span className="text-sm font-medium text-primary group-hover:underline" data-testid={`text-customer-name-${customer.id}`}>
+                              {customer.name}
+                            </span>
                           </div>
-                          <span className="text-sm font-medium" data-testid={`text-customer-name-${customer.id}`}>
-                            {customer.name}
-                          </span>
-                        </div>
+                        </Link>
                       </TableCell>
                       <TableCell>
                         <span className="text-sm text-muted-foreground" data-testid={`text-customer-email-${customer.id}`}>

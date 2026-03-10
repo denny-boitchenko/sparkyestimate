@@ -5,12 +5,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue
+} from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
-  Camera, LogOut, ArrowLeft, Upload, Trash2, MapPin, Zap
+  Camera, LogOut, ArrowLeft, Upload, MapPin, Zap, Clock, Plus
 } from "lucide-react";
-import type { Project, ProjectPhoto } from "@shared/schema";
+import type { Project, ProjectPhoto, TimeEntry } from "@shared/schema";
 
 type AuthState = {
   employee: { id: number; name: string; role: string };
@@ -19,18 +22,29 @@ type AuthState = {
 
 type PhotoWithUrl = ProjectPhoto & { downloadUrl: string | null };
 
+const PHASES = [
+  { value: "service", label: "Service" },
+  { value: "roughin", label: "Rough-in" },
+  { value: "finish", label: "Finish" },
+];
+
 export default function EmployeePortal() {
   const [auth, setAuth] = useState<AuthState>(null);
-  const [employeeId, setEmployeeId] = useState("");
   const [pin, setPin] = useState("");
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [loginError, setLoginError] = useState("");
+  const [portalTab, setPortalTab] = useState<"photos" | "timesheet">("photos");
   const { toast } = useToast();
 
-  // Login
+  // Time logging state
+  const [logPhase, setLogPhase] = useState("roughin");
+  const [logHours, setLogHours] = useState("8");
+  const [logNotes, setLogNotes] = useState("");
+
+  // Login via PIN only
   const loginMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/employee-auth", { employeeId: Number(employeeId), pin });
+      const res = await apiRequest("POST", "/api/employee-login", { pin });
       return res.json();
     },
     onSuccess: (data: AuthState) => {
@@ -39,7 +53,7 @@ export default function EmployeePortal() {
       setPin("");
     },
     onError: (err: Error) => {
-      setLoginError(err.message || "Invalid credentials");
+      setLoginError(err.message || "Invalid PIN");
     },
   });
 
@@ -57,6 +71,22 @@ export default function EmployeePortal() {
     enabled: !!selectedProject,
   });
 
+  // Fetch recent time entries for this employee (last 7 days)
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  const startDate = sevenDaysAgo.toISOString().split("T")[0];
+  const endDate = new Date().toISOString().split("T")[0];
+
+  const { data: recentTimeEntries } = useQuery<TimeEntry[]>({
+    queryKey: ["/api/time-entries", { employeeId: auth?.employee.id, startDate, endDate }],
+    queryFn: async () => {
+      const res = await fetch(`/api/time-entries?employeeId=${auth?.employee.id}&startDate=${startDate}&endDate=${endDate}`);
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: !!auth,
+  });
+
   // Storage status (R2 or Google Drive)
   const { data: storageStatus } = useQuery<{ configured: boolean; provider: string | null }>({
     queryKey: ["/api/r2-status"],
@@ -67,6 +97,23 @@ export default function EmployeePortal() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadPhase, setUploadPhase] = useState<string>("roughin");
   const [uploading, setUploading] = useState(false);
+
+  // Time entry creation
+  const logTimeMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const res = await apiRequest("POST", "/api/time-entries", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/time-entries"] });
+      toast({ title: "Hours logged" });
+      setLogHours("8");
+      setLogNotes("");
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
 
   const handlePhotoUpload = async (file: File) => {
     if (!selectedProject || !auth) return;
@@ -134,6 +181,8 @@ export default function EmployeePortal() {
     e.target.value = "";
   };
 
+  const getProjectName = (id: number) => projects?.find(p => p.id === id)?.name || `Project #${id}`;
+
   // ─── Login Screen ───
   if (!auth) {
     return (
@@ -149,30 +198,21 @@ export default function EmployeePortal() {
           <CardContent>
             <form onSubmit={(e) => { e.preventDefault(); loginMutation.mutate(); }} className="space-y-4">
               <div className="space-y-2">
-                <label className="text-sm font-medium">Employee ID</label>
-                <Input
-                  type="number"
-                  placeholder="Enter your employee ID"
-                  value={employeeId}
-                  onChange={(e) => setEmployeeId(e.target.value)}
-                  className="text-lg h-12"
-                />
-              </div>
-              <div className="space-y-2">
                 <label className="text-sm font-medium">PIN</label>
                 <Input
                   type="password"
-                  placeholder="4-digit PIN"
-                  maxLength={4}
+                  placeholder="Enter your PIN"
+                  maxLength={6}
                   value={pin}
                   onChange={(e) => setPin(e.target.value)}
-                  className="text-lg h-12 tracking-widest"
+                  className="text-lg h-14 tracking-widest text-center"
+                  autoFocus
                 />
               </div>
               {loginError && (
                 <p className="text-sm text-destructive">{loginError}</p>
               )}
-              <Button type="submit" className="w-full h-12 text-lg" disabled={loginMutation.isPending}>
+              <Button type="submit" className="w-full h-12 text-lg" disabled={loginMutation.isPending || !pin}>
                 {loginMutation.isPending ? "Signing in..." : "Sign In"}
               </Button>
             </form>
@@ -184,6 +224,8 @@ export default function EmployeePortal() {
 
   // ─── Project List ───
   if (!selectedProject) {
+    const recentTotal = (recentTimeEntries || []).reduce((sum, te) => sum + te.hours, 0);
+
     return (
       <div className="min-h-screen bg-background">
         <header className="sticky top-0 z-50 bg-background border-b p-4 flex items-center justify-between">
@@ -195,6 +237,22 @@ export default function EmployeePortal() {
             <LogOut className="w-5 h-5" />
           </Button>
         </header>
+
+        {/* Recent hours summary */}
+        <div className="p-4 pb-0">
+          <Card className="bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800">
+            <CardContent className="pt-4 pb-3">
+              <div className="flex items-center gap-3">
+                <Clock className="w-5 h-5 text-blue-500" />
+                <div>
+                  <p className="text-sm font-medium">{recentTotal.toFixed(1)} hours logged</p>
+                  <p className="text-xs text-muted-foreground">Last 7 days</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
         <div className="p-4 space-y-3">
           {myProjects.length === 0 ? (
             <Card>
@@ -226,13 +284,36 @@ export default function EmployeePortal() {
             ))
           )}
         </div>
+
+        {/* Recent time entries */}
+        {(recentTimeEntries || []).length > 0 && (
+          <div className="px-4 pb-4">
+            <h3 className="text-sm font-medium mb-2">Recent Time Entries</h3>
+            <div className="space-y-2">
+              {(recentTimeEntries || []).slice(0, 10).map(te => (
+                <div key={te.id} className="flex items-center justify-between text-sm border rounded-lg p-3">
+                  <div>
+                    <p className="font-medium">{getProjectName(te.projectId)}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {te.date} / {PHASES.find(p => p.value === te.phase)?.label || te.phase || "--"}
+                      {te.notes ? ` / ${te.notes}` : ""}
+                    </p>
+                  </div>
+                  <span className="font-mono text-sm">{te.hours.toFixed(1)}h</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     );
   }
 
-  // ─── Project Photos View ───
+  // ─── Project Detail View (Photos + Timesheet) ───
   const phasePhotos = (phase: string) =>
     (photos || []).filter(p => p.inspectionPhase === phase);
+
+  const projectTimeEntries = (recentTimeEntries || []).filter(te => te.projectId === selectedProject.id);
 
   return (
     <div className="min-h-screen bg-background">
@@ -246,91 +327,203 @@ export default function EmployeePortal() {
         </div>
       </header>
 
+      {/* Top-level tabs: Photos vs Timesheet */}
       <div className="p-4">
-        <Tabs defaultValue="roughin" onValueChange={(v) => setUploadPhase(v)}>
-          <TabsList className="grid w-full grid-cols-4 h-12">
-            <TabsTrigger value="service" className="text-sm">
-              Service ({phasePhotos("service").length})
-            </TabsTrigger>
-            <TabsTrigger value="roughin" className="text-sm">
-              Rough-in ({phasePhotos("roughin").length})
-            </TabsTrigger>
-            <TabsTrigger value="finish" className="text-sm">
-              Finish ({phasePhotos("finish").length})
-            </TabsTrigger>
-            <TabsTrigger value="misc" className="text-sm">
-              Misc ({phasePhotos("misc").length})
-            </TabsTrigger>
-          </TabsList>
+        <div className="flex gap-2 mb-4">
+          <Button
+            variant={portalTab === "photos" ? "default" : "outline"}
+            className="flex-1 h-11"
+            onClick={() => setPortalTab("photos")}
+          >
+            <Camera className="w-4 h-4 mr-2" />
+            Photos
+          </Button>
+          <Button
+            variant={portalTab === "timesheet" ? "default" : "outline"}
+            className="flex-1 h-11"
+            onClick={() => setPortalTab("timesheet")}
+          >
+            <Clock className="w-4 h-4 mr-2" />
+            Log Hours
+          </Button>
+        </div>
 
-          {["service", "roughin", "finish", "misc"].map(phase => (
-            <TabsContent key={phase} value={phase} className="space-y-4">
-              {/* Upload button */}
-              <div className="flex gap-2">
-                <Button
-                  className="flex-1 h-14 text-base"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={uploading || !storageStatus?.configured}
-                >
-                  {uploading ? (
-                    <>
-                      <Upload className="w-5 h-5 mr-2 animate-spin" />
-                      Uploading...
-                    </>
-                  ) : (
-                    <>
-                      <Camera className="w-5 h-5 mr-2" />
-                      Take Photo / Upload
-                    </>
-                  )}
-                </Button>
-              </div>
-              {!storageStatus?.configured && (
-                <p className="text-sm text-amber-600">
-                  Photo storage not configured. Ask the owner to set up Cloudflare R2 credentials.
-                </p>
-              )}
-
-              {/* Photo grid */}
-              <div className="grid grid-cols-2 gap-3">
-                {phasePhotos(phase).map(photo => (
-                  <Card key={photo.id} className="overflow-hidden">
-                    {photo.downloadUrl ? (
-                      <img
-                        src={photo.downloadUrl}
-                        alt={photo.originalFilename}
-                        className="w-full h-32 object-cover"
-                      />
-                    ) : (
-                      <div className="w-full h-32 bg-muted flex items-center justify-center">
-                        <Camera className="w-8 h-8 text-muted-foreground" />
-                      </div>
-                    )}
-                    <CardContent className="p-2">
-                      <p className="text-xs truncate">{photo.originalFilename}</p>
-                      <div className="flex items-center justify-between mt-1">
-                        <span className="text-xs text-muted-foreground">
-                          {new Date(photo.createdAt).toLocaleDateString()}
-                        </span>
-                        {photo.gpsLat && (
-                          <MapPin className="w-3 h-3 text-muted-foreground" />
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-
-              {phasePhotos(phase).length === 0 && (
-                <div className="text-center py-8 text-muted-foreground">
-                  <Camera className="w-12 h-12 mx-auto mb-2 opacity-30" />
-                  <p>No photos yet for {phase === "roughin" ? "Rough-in" : phase.charAt(0).toUpperCase() + phase.slice(1)}</p>
-                  <p className="text-sm">Tap the button above to add photos</p>
+        {portalTab === "timesheet" ? (
+          <div className="space-y-4">
+            {/* Log hours form */}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Plus className="w-4 h-4" />
+                  Log Hours for Today
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">Phase</label>
+                  <Select value={logPhase} onValueChange={setLogPhase}>
+                    <SelectTrigger className="h-11">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PHASES.map(p => (
+                        <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-              )}
-            </TabsContent>
-          ))}
-        </Tabs>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">Hours</label>
+                  <Input
+                    type="number"
+                    step="0.5"
+                    min="0.5"
+                    max="24"
+                    value={logHours}
+                    onChange={(e) => setLogHours(e.target.value)}
+                    className="h-11 text-lg"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">Notes (optional)</label>
+                  <Input
+                    value={logNotes}
+                    onChange={(e) => setLogNotes(e.target.value)}
+                    placeholder="What did you work on?"
+                    className="h-11"
+                  />
+                </div>
+                <Button
+                  className="w-full h-12 text-base"
+                  onClick={() => {
+                    logTimeMutation.mutate({
+                      employeeId: auth.employee.id,
+                      projectId: selectedProject.id,
+                      date: new Date().toISOString().split("T")[0],
+                      hours: parseFloat(logHours) || 8,
+                      phase: logPhase,
+                      notes: logNotes || null,
+                    });
+                  }}
+                  disabled={logTimeMutation.isPending}
+                >
+                  {logTimeMutation.isPending ? "Saving..." : "Log Hours"}
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* Recent entries for this project */}
+            {projectTimeEntries.length > 0 && (
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Recent Entries (This Project)</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    {projectTimeEntries.map(te => (
+                      <div key={te.id} className="flex items-center justify-between text-sm border-b last:border-0 py-2">
+                        <div>
+                          <span className="font-medium">{te.date}</span>
+                          <Badge variant="outline" className="ml-2 text-xs">
+                            {PHASES.find(p => p.value === te.phase)?.label || te.phase || "--"}
+                          </Badge>
+                          {te.notes && <p className="text-xs text-muted-foreground mt-0.5">{te.notes}</p>}
+                        </div>
+                        <span className="font-mono">{te.hours.toFixed(1)}h</span>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        ) : (
+          /* Photos tab -- existing photo functionality */
+          <Tabs defaultValue="roughin" onValueChange={(v) => setUploadPhase(v)}>
+            <TabsList className="grid w-full grid-cols-4 h-12">
+              <TabsTrigger value="service" className="text-sm">
+                Service ({phasePhotos("service").length})
+              </TabsTrigger>
+              <TabsTrigger value="roughin" className="text-sm">
+                Rough-in ({phasePhotos("roughin").length})
+              </TabsTrigger>
+              <TabsTrigger value="finish" className="text-sm">
+                Finish ({phasePhotos("finish").length})
+              </TabsTrigger>
+              <TabsTrigger value="misc" className="text-sm">
+                Misc ({phasePhotos("misc").length})
+              </TabsTrigger>
+            </TabsList>
+
+            {["service", "roughin", "finish", "misc"].map(phase => (
+              <TabsContent key={phase} value={phase} className="space-y-4">
+                {/* Upload button */}
+                <div className="flex gap-2">
+                  <Button
+                    className="flex-1 h-14 text-base"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploading || !storageStatus?.configured}
+                  >
+                    {uploading ? (
+                      <>
+                        <Upload className="w-5 h-5 mr-2 animate-spin" />
+                        Uploading...
+                      </>
+                    ) : (
+                      <>
+                        <Camera className="w-5 h-5 mr-2" />
+                        Take Photo / Upload
+                      </>
+                    )}
+                  </Button>
+                </div>
+                {!storageStatus?.configured && (
+                  <p className="text-sm text-amber-600">
+                    Photo storage not configured. Ask the owner to set up Cloudflare R2 credentials.
+                  </p>
+                )}
+
+                {/* Photo grid */}
+                <div className="grid grid-cols-2 gap-3">
+                  {phasePhotos(phase).map(photo => (
+                    <Card key={photo.id} className="overflow-hidden">
+                      {photo.downloadUrl ? (
+                        <img
+                          src={photo.downloadUrl}
+                          alt={photo.originalFilename}
+                          className="w-full h-32 object-cover"
+                        />
+                      ) : (
+                        <div className="w-full h-32 bg-muted flex items-center justify-center">
+                          <Camera className="w-8 h-8 text-muted-foreground" />
+                        </div>
+                      )}
+                      <CardContent className="p-2">
+                        <p className="text-xs truncate">{photo.originalFilename}</p>
+                        <div className="flex items-center justify-between mt-1">
+                          <span className="text-xs text-muted-foreground">
+                            {new Date(photo.createdAt).toLocaleDateString()}
+                          </span>
+                          {photo.gpsLat && (
+                            <MapPin className="w-3 h-3 text-muted-foreground" />
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+
+                {phasePhotos(phase).length === 0 && (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Camera className="w-12 h-12 mx-auto mb-2 opacity-30" />
+                    <p>No photos yet for {phase === "roughin" ? "Rough-in" : phase.charAt(0).toUpperCase() + phase.slice(1)}</p>
+                    <p className="text-sm">Tap the button above to add photos</p>
+                  </div>
+                )}
+              </TabsContent>
+            ))}
+          </Tabs>
+        )}
       </div>
 
       {/* Hidden file input for camera/upload */}
