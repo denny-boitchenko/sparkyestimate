@@ -1,7 +1,16 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, real, timestamp, jsonb, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, real, timestamp, jsonb, boolean, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+
+export const users = pgTable("users", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  username: text("username").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  role: text("role").notNull().default("admin"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
 
 export const customers = pgTable("customers", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
@@ -37,6 +46,7 @@ export const projects = pgTable("projects", {
   dwellingType: text("dwelling_type").notNull().default("single"),
   status: text("status").notNull().default("draft"),
   notes: text("notes"),
+  createdByEmployeeId: integer("created_by_employee_id"), // set when a field employee creates the job
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -51,6 +61,7 @@ export const estimates = pgTable("estimates", {
   materialMarkupPct: real("material_markup_pct").notNull().default(5),
   laborMarkupPct: real("labor_markup_pct").notNull().default(5),
   laborRate: real("labor_rate").notNull().default(90),
+  miscExpenses: real("misc_expenses").notNull().default(0),
   laborHoursOverride: real("labor_hours_override"),
   laborMultiplier: real("labor_multiplier").notNull().default(1.0),
   jobType: text("job_type").notNull().default("new_construction"),
@@ -149,6 +160,21 @@ export const partsCatalog = pgTable("parts_catalog", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Per-supplier prices for a catalog part. A re-import upserts the supplier's
+// row instead of overwriting everyone else's price. The "effective" price
+// (cheapest, or the preferred one) is mirrored onto parts_catalog.unitCost.
+export const partSupplierPrices = pgTable("part_supplier_prices", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  partId: integer("part_id").notNull().references(() => partsCatalog.id, { onDelete: "cascade" }),
+  supplierName: text("supplier_name").notNull(),
+  price: real("price").notNull().default(0),
+  partNumber: text("part_number"),
+  isPreferred: boolean("is_preferred").notNull().default(false),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  uniqPartSupplier: uniqueIndex("uniq_part_supplier").on(t.partId, t.supplierName),
+}));
+
 export const assemblyParts = pgTable("assembly_parts", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   assemblyId: integer("assembly_id").notNull()
@@ -216,8 +242,10 @@ export const panelCircuits = pgTable("panel_circuits", {
 export const estimateServices = pgTable("estimate_services", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   estimateId: integer("estimate_id").notNull().references(() => estimates.id, { onDelete: "cascade" }),
-  serviceBundleId: integer("service_bundle_id").notNull().references(() => serviceBundles.id),
+  serviceBundleId: integer("service_bundle_id").references(() => serviceBundles.id),
   name: text("name").notNull(),
+  // Editable parts breakdown: [{ name, materialCost, laborHours, qty }]
+  items: jsonb("items").notNull().default([]),
   materialCost: real("material_cost").notNull().default(0),
   laborHours: real("labor_hours").notNull().default(0),
 });
@@ -319,6 +347,7 @@ export const receipts = pgTable("receipts", {
 });
 
 // Insert schemas
+export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
 export const insertCustomerSchema = createInsertSchema(customers).omit({ id: true, createdAt: true });
 export const insertEmployeeSchema = createInsertSchema(employees).omit({ id: true, createdAt: true });
 export const insertProjectSchema = createInsertSchema(projects).omit({ id: true, createdAt: true, updatedAt: true });
@@ -338,6 +367,7 @@ export const insertEstimateCrewSchema = createInsertSchema(estimateCrew).omit({ 
 export const insertComplianceDocumentSchema = createInsertSchema(complianceDocuments).omit({ id: true, uploadedAt: true });
 export const insertSupplierImportSchema = createInsertSchema(supplierImports).omit({ id: true, createdAt: true });
 export const insertPartsCatalogSchema = createInsertSchema(partsCatalog).omit({ id: true, createdAt: true });
+export const insertPartSupplierPriceSchema = createInsertSchema(partSupplierPrices).omit({ id: true, updatedAt: true });
 export const insertAssemblyPartSchema = createInsertSchema(assemblyParts).omit({ id: true });
 export const insertRoomPanelAssignmentSchema = createInsertSchema(roomPanelAssignments).omit({ id: true });
 export const insertPermitFeeScheduleSchema = createInsertSchema(permitFeeSchedules).omit({ id: true, createdAt: true });
@@ -347,6 +377,8 @@ export const insertTimeEntrySchema = createInsertSchema(timeEntries).omit({ id: 
 export const insertReceiptSchema = createInsertSchema(receipts).omit({ id: true, createdAt: true });
 
 // Types
+export type User = typeof users.$inferSelect;
+export type InsertUser = z.infer<typeof insertUserSchema>;
 export type Customer = typeof customers.$inferSelect;
 export type InsertCustomer = z.infer<typeof insertCustomerSchema>;
 export type Employee = typeof employees.$inferSelect;
@@ -385,6 +417,8 @@ export type SupplierImport = typeof supplierImports.$inferSelect;
 export type InsertSupplierImport = z.infer<typeof insertSupplierImportSchema>;
 export type PartsCatalogEntry = typeof partsCatalog.$inferSelect;
 export type InsertPartsCatalog = z.infer<typeof insertPartsCatalogSchema>;
+export type PartSupplierPrice = typeof partSupplierPrices.$inferSelect;
+export type InsertPartSupplierPrice = z.infer<typeof insertPartSupplierPriceSchema>;
 export type AssemblyPart = typeof assemblyParts.$inferSelect;
 export type InsertAssemblyPart = z.infer<typeof insertAssemblyPartSchema>;
 export type RoomPanelAssignment = typeof roomPanelAssignments.$inferSelect;
@@ -403,7 +437,7 @@ export type InsertReceipt = z.infer<typeof insertReceiptSchema>;
 export const PAYMENT_METHODS = ["cash", "cheque", "e-transfer", "credit_card"] as const;
 export const INVOICE_PHASES = ["service", "roughin", "finish"] as const;
 
-export const PROJECT_STATUSES = ["draft", "in_progress", "bid_sent", "won", "lost"] as const;
+export const PROJECT_STATUSES = ["pending_review", "draft", "in_progress", "bid_sent", "won", "lost"] as const;
 export const DWELLING_TYPES = [
   "single", "duplex", "triplex", "fourplex",
   "townhouse", "condo", "apartment", "commercial", "industrial",

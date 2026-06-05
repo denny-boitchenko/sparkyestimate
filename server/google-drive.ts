@@ -1,13 +1,77 @@
 import { google } from "googleapis";
 import { Readable } from "stream";
 import { storage } from "./storage";
+import { encryptSecret, decryptSecret } from "./crypto";
 
-// OAuth2 client credentials (developer sets these once in .env)
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
-const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "";
+// OAuth2 client credentials. The admin can set these from the UI (stored in the
+// settings table, secret encrypted at rest). Env vars act as a fallback so an
+// operator can still preconfigure them. loadGoogleCreds() refreshes the cache.
+let GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
+let GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "";
 
 let driveClient: ReturnType<typeof google.drive> | null = null;
 let cachedOAuth2Client: InstanceType<typeof google.auth.OAuth2> | null = null;
+
+/**
+ * Load OAuth client credentials from DB settings (falling back to env).
+ * Call at startup and after the admin saves new credentials.
+ */
+export async function loadGoogleCreds(): Promise<void> {
+  try {
+    const rows = await storage.getSettings();
+    const sm: Record<string, string> = {};
+    rows.forEach((s) => { sm[s.key] = s.value; });
+    const dbId = sm.googleClientId;
+    const dbSecretEnc = sm.googleClientSecret;
+    if (dbId && dbSecretEnc) {
+      GOOGLE_CLIENT_ID = dbId;
+      try {
+        GOOGLE_CLIENT_SECRET = decryptSecret(dbSecretEnc);
+      } catch {
+        // Decryption failed (almost always: SESSION_SECRET changed, which the
+        // key is derived from). Surface it loudly instead of silently
+        // disconnecting Drive, then fall back to env.
+        console.error(
+          "[google-drive] Could not decrypt the stored Google client secret. " +
+          "SESSION_SECRET may have changed since it was saved. Re-enter the " +
+          "credentials in Settings > Photos. Falling back to env vars.",
+        );
+        GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
+        GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "";
+      }
+    } else {
+      GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
+      GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "";
+    }
+  } catch {
+    // settings not reachable yet; keep env values
+  }
+  invalidateClient();
+}
+
+/**
+ * Persist admin-supplied OAuth client credentials (secret encrypted) and reload.
+ */
+export async function saveGoogleCreds(clientId: string, clientSecret: string): Promise<void> {
+  const prevClientId = GOOGLE_CLIENT_ID;
+  await storage.upsertSetting("googleClientId", clientId);
+  await storage.upsertSetting("googleClientSecret", encryptSecret(clientSecret));
+  // If the client ID changed, any existing OAuth tokens were issued by the old
+  // app and will fail (invalid_grant). Clear them so the admin re-authorizes,
+  // rather than showing "Connected" while every Drive call silently fails.
+  if (clientId !== prevClientId) {
+    await storage.upsertSetting("googleDriveRefreshToken", "");
+    await storage.upsertSetting("googleDriveAccessToken", "");
+    await storage.upsertSetting("googleDriveEmail", "");
+    await storage.upsertSetting("googleDriveRootFolderId", "");
+  }
+  await loadGoogleCreds();
+}
+
+/** The currently configured client ID (for status display; not secret). */
+export function getGoogleClientId(): string {
+  return GOOGLE_CLIENT_ID;
+}
 
 /**
  * Check if OAuth client credentials are configured (developer setup).

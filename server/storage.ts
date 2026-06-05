@@ -1,4 +1,5 @@
 import {
+  users, type User, type InsertUser,
   customers, employees, projects, estimates, estimateItems, invoices, invoiceItems,
   deviceAssemblies, aiAnalyses, settings,
   wireTypes, serviceBundles, panelCircuits, estimateServices, estimateCrew, complianceDocuments,
@@ -23,6 +24,7 @@ import {
   type SupplierImport, type InsertSupplierImport,
   type JobType, type InsertJobType,
   type PartsCatalogEntry, type InsertPartsCatalog,
+  partSupplierPrices, type PartSupplierPrice, type InsertPartSupplierPrice,
   type AssemblyPart, type InsertAssemblyPart,
   type RoomPanelAssignment, type InsertRoomPanelAssignment,
   type PermitFeeSchedule, type InsertPermitFeeSchedule,
@@ -36,6 +38,14 @@ import { db } from "./db";
 import { eq, desc, ilike, sql, and, gte, lte } from "drizzle-orm";
 
 export interface IStorage {
+  getUsers(): Promise<User[]>;
+  getUserByUsername(username: string): Promise<User | undefined>;
+  getUserById(id: number): Promise<User | undefined>;
+  createUser(data: InsertUser): Promise<User>;
+  updateUser(id: number, data: Partial<InsertUser>): Promise<User | undefined>;
+  deleteUser(id: number): Promise<void>;
+  countUsers(): Promise<number>;
+
   getCustomers(): Promise<Customer[]>;
   getCustomer(id: number): Promise<Customer | undefined>;
   createCustomer(data: InsertCustomer): Promise<Customer>;
@@ -145,6 +155,11 @@ export interface IStorage {
   updatePart(id: number, data: Partial<InsertPartsCatalog>): Promise<PartsCatalogEntry | undefined>;
   deletePart(id: number): Promise<void>;
   searchParts(query: string): Promise<PartsCatalogEntry[]>;
+  getPartSupplierPrices(partId: number): Promise<PartSupplierPrice[]>;
+  upsertPartSupplierPrice(data: InsertPartSupplierPrice): Promise<void>;
+  setPreferredSupplierPrice(partId: number, priceId: number): Promise<void>;
+  deletePartSupplierPrice(priceId: number): Promise<void>;
+  resolveEffectivePartPrice(partId: number): Promise<void>;
 
   // Assembly Parts
   getAssemblyParts(assemblyId: number): Promise<(AssemblyPart & { part: PartsCatalogEntry })[]>;
@@ -193,6 +208,39 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
+  async getUsers(): Promise<User[]> {
+    return db.select().from(users).orderBy(users.id);
+  }
+
+  async updateUser(id: number, data: Partial<InsertUser>): Promise<User | undefined> {
+    const [user] = await db.update(users).set(data).where(eq(users.id, id)).returning();
+    return user;
+  }
+
+  async deleteUser(id: number): Promise<void> {
+    await db.delete(users).where(eq(users.id, id));
+  }
+
+  async getUserByUsername(username: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.username, username));
+    return user;
+  }
+
+  async getUserById(id: number): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user;
+  }
+
+  async createUser(data: InsertUser): Promise<User> {
+    const [user] = await db.insert(users).values(data).returning();
+    return user;
+  }
+
+  async countUsers(): Promise<number> {
+    const [row] = await db.select({ count: sql<number>`count(*)::int` }).from(users);
+    return row?.count ?? 0;
+  }
+
   async getCustomers(): Promise<Customer[]> {
     return db.select().from(customers).orderBy(desc(customers.createdAt));
   }
@@ -606,6 +654,53 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(partsCatalog)
       .where(and(eq(partsCatalog.isActive, true), ilike(partsCatalog.name, `%${query}%`)))
       .orderBy(partsCatalog.name);
+  }
+
+  // ── Multi-supplier pricing ──
+  async getPartSupplierPrices(partId: number): Promise<PartSupplierPrice[]> {
+    return db.select().from(partSupplierPrices)
+      .where(eq(partSupplierPrices.partId, partId))
+      .orderBy(partSupplierPrices.price);
+  }
+
+  // Insert or update a supplier's price for a part (keyed by part + supplier),
+  // then re-resolve the part's effective price.
+  async upsertPartSupplierPrice(data: InsertPartSupplierPrice): Promise<void> {
+    const existing = await db.select().from(partSupplierPrices)
+      .where(and(eq(partSupplierPrices.partId, data.partId), eq(partSupplierPrices.supplierName, data.supplierName)));
+    if (existing[0]) {
+      await db.update(partSupplierPrices)
+        .set({ price: data.price, partNumber: data.partNumber ?? existing[0].partNumber, updatedAt: new Date() })
+        .where(eq(partSupplierPrices.id, existing[0].id));
+    } else {
+      await db.insert(partSupplierPrices).values(data);
+    }
+    await this.resolveEffectivePartPrice(data.partId);
+  }
+
+  // Pin a supplier as preferred (clears others), then re-resolve.
+  async setPreferredSupplierPrice(partId: number, priceId: number): Promise<void> {
+    await db.update(partSupplierPrices).set({ isPreferred: false }).where(eq(partSupplierPrices.partId, partId));
+    await db.update(partSupplierPrices).set({ isPreferred: true }).where(eq(partSupplierPrices.id, priceId));
+    await this.resolveEffectivePartPrice(partId);
+  }
+
+  async deletePartSupplierPrice(priceId: number): Promise<void> {
+    const [row] = await db.select().from(partSupplierPrices).where(eq(partSupplierPrices.id, priceId));
+    await db.delete(partSupplierPrices).where(eq(partSupplierPrices.id, priceId));
+    if (row) await this.resolveEffectivePartPrice(row.partId);
+  }
+
+  // Mirror the effective price (preferred if pinned, else cheapest) onto
+  // parts_catalog.unitCost + supplier, so all existing read paths keep working.
+  async resolveEffectivePartPrice(partId: number): Promise<void> {
+    const rows = await db.select().from(partSupplierPrices).where(eq(partSupplierPrices.partId, partId));
+    if (rows.length === 0) return;
+    const preferred = rows.find(r => r.isPreferred);
+    const chosen = preferred || rows.reduce((min, r) => (r.price < min.price ? r : min), rows[0]);
+    await db.update(partsCatalog)
+      .set({ unitCost: chosen.price, supplier: chosen.supplierName })
+      .where(eq(partsCatalog.id, partId));
   }
 
   // Assembly Parts

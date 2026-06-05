@@ -482,8 +482,12 @@ export function calculateDemandCEC8200(
   // 3. Range demand per CEC Table 62
   const rangeDemand = rangeDemandWatts(rangeCount);
 
-  // 4. Heating/cooling interlock — use the larger, not both
-  const heatingCoolingDemand = Math.max(heatingLoad, coolingLoad);
+  // 4. Heating/cooling interlock — use the larger, not both.
+  //    CEC 8-200(1)(a)(ii): electric space heating demand = first 10kW @ 100%, remainder @ 75%.
+  const heatingCoolingNameplate = Math.max(heatingLoad, coolingLoad);
+  const heatingCoolingDemand = heatingCoolingNameplate <= 10000
+    ? heatingCoolingNameplate
+    : 10000 + (heatingCoolingNameplate - 10000) * 0.75;
 
   // 5. Dryer demand: 25% demand factor per CEC 8-200(1)(b)(iv)
   const dryerDemand = dryerNameplate * 0.25;

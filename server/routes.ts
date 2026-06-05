@@ -16,13 +16,20 @@ import {
   ANALYSIS_MODES, INVOICE_PHASES
 } from "@shared/schema";
 import { z } from "zod";
+import { setupAuth } from "./auth";
 import * as cecRules from "./cec-rules";
 import { isR2Configured, getUploadUrl, getDownloadUrl, deleteObject, buildStorageKey } from "./r2";
-import { isGoogleDriveConfigured, isGoogleDriveOAuthAvailable, getOAuth2Client, invalidateClient, getProjectFolderIds, uploadToGoogleDrive, getGoogleDriveDownloadUrl, deleteFromGoogleDrive, deleteProjectFolder, hasProjectFolder, phaseFolderKey } from "./google-drive";
+import { isGoogleDriveConfigured, isGoogleDriveOAuthAvailable, getOAuth2Client, invalidateClient, getProjectFolderIds, uploadToGoogleDrive, getGoogleDriveDownloadUrl, deleteFromGoogleDrive, deleteProjectFolder, hasProjectFolder, phaseFolderKey, loadGoogleCreds, saveGoogleCreds, getGoogleClientId } from "./google-drive";
+import { requireAdmin } from "./auth";
 import { google } from "googleapis";
 import crypto from "crypto";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024, fieldSize: 50 * 1024 * 1024 } });
+
+// Gemini model used for all AI analysis (legend extraction, room/electrical detection).
+// gemini-2.0-flash was retired by Google (returns 404 NOT_FOUND) — keep this on a current model.
+// Override via GEMINI_MODEL env var without code changes.
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
 function parseId(raw: string): number | null {
   const n = parseInt(raw, 10);
@@ -34,7 +41,13 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
+  // Auth must be wired before business routes so the guard covers them.
+  await setupAuth(app);
+
   await seedDatabase();
+
+  // Load Google OAuth client credentials from DB settings (env fallback).
+  await loadGoogleCreds();
 
   // Projects
   app.get("/api/projects", async (_req, res) => {
@@ -245,6 +258,40 @@ export async function registerRoutes(
     if (!id) return res.status(400).json({ message: "Invalid part ID" });
     await storage.deletePart(id);
     res.status(204).send();
+  });
+
+  // ── Per-part supplier prices (multi-supplier) ──
+  app.get("/api/parts-catalog/:id/supplier-prices", async (req, res) => {
+    const id = parseId(String(req.params.id));
+    if (!id) return res.status(400).json({ message: "Invalid part ID" });
+    res.json(await storage.getPartSupplierPrices(id));
+  });
+
+  app.post("/api/parts-catalog/:id/supplier-prices", requireAdmin, async (req, res) => {
+    const id = parseId(String(req.params.id));
+    if (!id) return res.status(400).json({ message: "Invalid part ID" });
+    const supplierName = String(req.body?.supplierName || "").trim();
+    const price = Number(req.body?.price);
+    if (!supplierName || !Number.isFinite(price)) {
+      return res.status(400).json({ message: "supplierName and a numeric price are required" });
+    }
+    await storage.upsertPartSupplierPrice({ partId: id, supplierName, price, partNumber: req.body?.partNumber || null, isPreferred: false });
+    res.json(await storage.getPartSupplierPrices(id));
+  });
+
+  app.post("/api/part-supplier-prices/:id/preferred", requireAdmin, async (req, res) => {
+    const priceId = parseId(String(req.params.id));
+    const partId = parseId(String(req.body?.partId || ""));
+    if (!priceId || !partId) return res.status(400).json({ message: "Invalid id" });
+    await storage.setPreferredSupplierPrice(partId, priceId);
+    res.json(await storage.getPartSupplierPrices(partId));
+  });
+
+  app.delete("/api/part-supplier-prices/:id", requireAdmin, async (req, res) => {
+    const priceId = parseId(String(req.params.id));
+    if (!priceId) return res.status(400).json({ message: "Invalid id" });
+    await storage.deletePartSupplierPrice(priceId);
+    res.json({ ok: true });
   });
 
   // Room Panel Assignments
@@ -2126,7 +2173,7 @@ FINAL CHECKLIST — before returning, verify you checked for:
           const pageBase64 = dataUrlParts[1] || dataUrlParts[0];
 
           const legendResult = await ai.models.generateContent({
-            model: "gemini-2.0-flash",
+            model: GEMINI_MODEL,
             contents: [{
               role: "user",
               parts: [
@@ -2134,7 +2181,7 @@ FINAL CHECKLIST — before returning, verify you checked for:
                 { inlineData: { mimeType: pageMime, data: pageBase64 } },
               ],
             }],
-            config: { temperature: 0.1, maxOutputTokens: 4096 },
+            config: { temperature: 0.1, maxOutputTokens: 4096, thinkingConfig: { thinkingBudget: 0 } },
           });
 
           const legendText = legendResult.text || "";
@@ -2203,7 +2250,7 @@ FINAL CHECKLIST — before returning, verify you checked for:
           const pageBase64 = dataUrlParts[1] || dataUrlParts[0];
 
           const result = await ai.models.generateContent({
-            model: "gemini-2.0-flash",
+            model: GEMINI_MODEL,
             contents: [
               {
                 role: "user",
@@ -2216,6 +2263,7 @@ FINAL CHECKLIST — before returning, verify you checked for:
             config: {
               temperature: 0.1,
               maxOutputTokens: 8192,
+              thinkingConfig: { thinkingBudget: 0 },
             },
           });
 
@@ -2297,34 +2345,38 @@ FINAL CHECKLIST — before returning, verify you checked for:
           }
         }
 
-        // Deduplicate rooms (same room detected on multiple pages)
+        // Deduplicate rooms (same room detected on multiple pages).
+        // Keyed by room name into the stored room object — no index mutation,
+        // because splicing a live array invalidates indices held in a Map.
         {
-          const seenRooms = new Map<string, number>();
-          for (let i = allRooms.length - 1; i >= 0; i--) {
-            const key = (allRooms[i].name || "").toLowerCase().trim();
-            const existingIdx = seenRooms.get(key);
-            if (existingIdx !== undefined) {
-              // Merge devices: keep max count per device type
-              const existing = allRooms[existingIdx];
-              for (const device of (allRooms[i].devices || [])) {
-                const existingDevice = (existing.devices || []).find(
-                  (d: any) => d.type === device.type
-                );
-                if (existingDevice) {
-                  existingDevice.count = Math.max(existingDevice.count || 1, device.count || 1);
-                } else {
-                  existing.devices = existing.devices || [];
-                  existing.devices.push(device);
-                }
+          const byName = new Map<string, any>();
+          const deduped: any[] = [];
+          for (const room of allRooms) {
+            const key = (room.name || "").toLowerCase().trim();
+            const existing = byName.get(key);
+            if (!existing) {
+              byName.set(key, room);
+              deduped.push(room);
+              continue;
+            }
+            // Merge devices: keep max count per device type
+            for (const device of (room.devices || [])) {
+              const existingDevice = (existing.devices || []).find(
+                (d: any) => d.type === device.type
+              );
+              if (existingDevice) {
+                existingDevice.count = Math.max(existingDevice.count || 1, device.count || 1);
+              } else {
+                existing.devices = existing.devices || [];
+                existing.devices.push(device);
               }
-              if (allRooms[i].area_sqft && (!existing.area_sqft || allRooms[i].area_sqft > existing.area_sqft)) {
-                existing.area_sqft = allRooms[i].area_sqft;
-              }
-              allRooms.splice(i, 1);
-            } else {
-              seenRooms.set(key, i);
+            }
+            if (room.area_sqft && (!existing.area_sqft || room.area_sqft > existing.area_sqft)) {
+              existing.area_sqft = room.area_sqft;
             }
           }
+          allRooms.length = 0;
+          allRooms.push(...deduped);
         }
 
         if (!panelBoardAdded && allRooms.length > 0) {
@@ -2419,30 +2471,34 @@ FINAL CHECKLIST — before returning, verify you checked for:
           }
         }
 
-        // Deduplicate rooms (same room detected on multiple pages)
+        // Deduplicate rooms (same room detected on multiple pages).
+        // Keyed by name into the stored room — no index mutation (splice would
+        // invalidate indices held in the Map).
         {
-          const seenRooms = new Map<string, number>();
-          for (let i = allRooms.length - 1; i >= 0; i--) {
-            const key = (allRooms[i].name || "").toLowerCase().trim();
-            const existingIdx = seenRooms.get(key);
-            if (existingIdx !== undefined) {
-              const existing = allRooms[existingIdx];
-              for (const device of (allRooms[i].devices || [])) {
-                const existingDevice = (existing.devices || []).find(
-                  (d: any) => d.type === device.type
-                );
-                if (existingDevice) {
-                  existingDevice.count = Math.max(existingDevice.count || 1, device.count || 1);
-                } else {
-                  existing.devices = existing.devices || [];
-                  existing.devices.push(device);
-                }
+          const byName = new Map<string, any>();
+          const deduped: any[] = [];
+          for (const room of allRooms) {
+            const key = (room.name || "").toLowerCase().trim();
+            const existing = byName.get(key);
+            if (!existing) {
+              byName.set(key, room);
+              deduped.push(room);
+              continue;
+            }
+            for (const device of (room.devices || [])) {
+              const existingDevice = (existing.devices || []).find(
+                (d: any) => d.type === device.type
+              );
+              if (existingDevice) {
+                existingDevice.count = Math.max(existingDevice.count || 1, device.count || 1);
+              } else {
+                existing.devices = existing.devices || [];
+                existing.devices.push(device);
               }
-              allRooms.splice(i, 1);
-            } else {
-              seenRooms.set(key, i);
             }
           }
+          allRooms.length = 0;
+          allRooms.push(...deduped);
         }
 
         const deviceTotals: Record<string, { count: number; rooms: string[] }> = {};
@@ -2893,7 +2949,7 @@ FINAL CHECKLIST — before returning, verify you checked for:
             const pageBase64 = dataUrlParts[1] || dataUrlParts[0];
 
             const legendResult = await ai.models.generateContent({
-              model: "gemini-2.0-flash",
+              model: GEMINI_MODEL,
               contents: [{
                 role: "user",
                 parts: [
@@ -2901,7 +2957,7 @@ FINAL CHECKLIST — before returning, verify you checked for:
                   { inlineData: { mimeType: pageMime, data: pageBase64 } },
                 ],
               }],
-              config: { temperature: 0.1, maxOutputTokens: 4096 },
+              config: { temperature: 0.1, maxOutputTokens: 4096, thinkingConfig: { thinkingBudget: 0 } },
             });
 
             const legendText = legendResult.text || "";
@@ -2968,7 +3024,7 @@ FINAL CHECKLIST — before returning, verify you checked for:
           const pageBase64 = dataUrlParts[1] || dataUrlParts[0];
 
           const result = await ai.models.generateContent({
-            model: "gemini-2.0-flash",
+            model: GEMINI_MODEL,
             contents: [
               {
                 role: "user",
@@ -2978,7 +3034,7 @@ FINAL CHECKLIST — before returning, verify you checked for:
                 ],
               },
             ],
-            config: { temperature: 0.1, maxOutputTokens: 8192 },
+            config: { temperature: 0.1, maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 0 } },
           });
 
           const responseText = result.text || "";
@@ -3040,29 +3096,31 @@ FINAL CHECKLIST — before returning, verify you checked for:
         }
         // Deduplicate rooms (same room detected on multiple pages)
         {
-          const seenRooms = new Map<string, number>();
-          for (let i = allRooms.length - 1; i >= 0; i--) {
-            const key = (allRooms[i].name || "").toLowerCase().trim();
-            const existingIdx = seenRooms.get(key);
-            if (existingIdx !== undefined) {
-              const existing = allRooms[existingIdx];
-              for (const device of (allRooms[i].devices || [])) {
-                const existingDevice = (existing.devices || []).find((d: any) => d.type === device.type);
-                if (existingDevice) {
-                  existingDevice.count = Math.max(existingDevice.count || 1, device.count || 1);
-                } else {
-                  existing.devices = existing.devices || [];
-                  existing.devices.push(device);
-                }
+          const byName = new Map<string, any>();
+          const deduped: any[] = [];
+          for (const room of allRooms) {
+            const key = (room.name || "").toLowerCase().trim();
+            const existing = byName.get(key);
+            if (!existing) {
+              byName.set(key, room);
+              deduped.push(room);
+              continue;
+            }
+            for (const device of (room.devices || [])) {
+              const existingDevice = (existing.devices || []).find((d: any) => d.type === device.type);
+              if (existingDevice) {
+                existingDevice.count = Math.max(existingDevice.count || 1, device.count || 1);
+              } else {
+                existing.devices = existing.devices || [];
+                existing.devices.push(device);
               }
-              if (allRooms[i].area_sqft && (!existing.area_sqft || allRooms[i].area_sqft > existing.area_sqft)) {
-                existing.area_sqft = allRooms[i].area_sqft;
-              }
-              allRooms.splice(i, 1);
-            } else {
-              seenRooms.set(key, i);
+            }
+            if (room.area_sqft && (!existing.area_sqft || room.area_sqft > existing.area_sqft)) {
+              existing.area_sqft = room.area_sqft;
             }
           }
+          allRooms.length = 0;
+          allRooms.push(...deduped);
         }
         if (!panelBoardAdded && allRooms.length > 0) {
           const targetRoom = allRooms.find((r: any) => r.type === "mechanical_room") || allRooms.find((r: any) => r.type === "garage") || allRooms.find((r: any) => r.type === "utility_room") || allRooms[0];
@@ -3105,26 +3163,28 @@ FINAL CHECKLIST — before returning, verify you checked for:
         }
         // Deduplicate rooms (same room detected on multiple pages)
         {
-          const seenRooms = new Map<string, number>();
-          for (let i = allRooms.length - 1; i >= 0; i--) {
-            const key = (allRooms[i].name || "").toLowerCase().trim();
-            const existingIdx = seenRooms.get(key);
-            if (existingIdx !== undefined) {
-              const existing = allRooms[existingIdx];
-              for (const device of (allRooms[i].devices || [])) {
-                const existingDevice = (existing.devices || []).find((d: any) => d.type === device.type);
-                if (existingDevice) {
-                  existingDevice.count = Math.max(existingDevice.count || 1, device.count || 1);
-                } else {
-                  existing.devices = existing.devices || [];
-                  existing.devices.push(device);
-                }
+          const byName = new Map<string, any>();
+          const deduped: any[] = [];
+          for (const room of allRooms) {
+            const key = (room.name || "").toLowerCase().trim();
+            const existing = byName.get(key);
+            if (!existing) {
+              byName.set(key, room);
+              deduped.push(room);
+              continue;
+            }
+            for (const device of (room.devices || [])) {
+              const existingDevice = (existing.devices || []).find((d: any) => d.type === device.type);
+              if (existingDevice) {
+                existingDevice.count = Math.max(existingDevice.count || 1, device.count || 1);
+              } else {
+                existing.devices = existing.devices || [];
+                existing.devices.push(device);
               }
-              allRooms.splice(i, 1);
-            } else {
-              seenRooms.set(key, i);
             }
           }
+          allRooms.length = 0;
+          allRooms.push(...deduped);
         }
         const deviceTotals: Record<string, { count: number; rooms: string[] }> = {};
         for (const room of allRooms) {
@@ -3266,8 +3326,9 @@ Return ONLY valid JSON:
       }
 
       const result = await ai.models.generateContent({
-        model: "gemini-2.0-flash",
+        model: GEMINI_MODEL,
         contents: [{ role: "user", parts }],
+        config: { temperature: 0.1, thinkingConfig: { thinkingBudget: 0 } },
       });
 
       const responseText = result.text || "";
@@ -3333,26 +3394,36 @@ Return ONLY valid JSON:
             }
           }
         } else if (item.itemType === "part") {
-          // Upsert into parts catalog
+          // Ensure the part exists, then record THIS supplier's price as its own
+          // row (upsert by part+supplier) rather than overwriting other
+          // suppliers' prices. The effective price (cheapest/preferred) is then
+          // mirrored back onto parts_catalog.unitCost.
           const existingParts = await storage.searchParts(item.name);
           const match = existingParts.find(p => p.name === item.name);
+          const supplierName = item.supplier || importRecord.supplierName;
+          const price = parseFloat(item.unitCost) || 0;
+          let partId: number;
           if (match) {
-            await storage.updatePart(match.id, {
-              unitCost: parseFloat(item.unitCost) || match.unitCost,
-              supplier: item.supplier || importRecord.supplierName,
-              partNumber: item.partNumber || match.partNumber,
-            });
+            partId = match.id;
           } else {
-            await storage.createPart({
+            const created = await storage.createPart({
               name: item.name,
               category: item.category || "misc",
-              unitCost: parseFloat(item.unitCost) || 0,
-              supplier: item.supplier || importRecord.supplierName,
+              unitCost: price,
+              supplier: supplierName,
               partNumber: item.partNumber || null,
               description: item.description || null,
               isActive: true,
             });
+            partId = created.id;
           }
+          await storage.upsertPartSupplierPrice({
+            partId,
+            supplierName,
+            price,
+            partNumber: item.partNumber || null,
+            isPreferred: false,
+          });
           count++;
         } else {
           // Default: material (complete assembly)
@@ -3431,7 +3502,13 @@ Return ONLY valid JSON:
       const markup = cost * (item.markupPct / 100);
       return sum + cost + markup;
     }, 0);
-    const totalLaborHours = items.reduce((sum, item) => sum + item.quantity * item.laborHours, 0);
+    // Effective labour hours: manual override wins, else apply the job-type multiplier.
+    const rawLaborHours = items.reduce((sum, item) => sum + item.quantity * item.laborHours, 0);
+    const laborMultiplier = (estimate as any).laborMultiplier ?? 1;
+    const laborHoursOverride = (estimate as any).laborHoursOverride;
+    const totalLaborHours = (laborHoursOverride !== null && laborHoursOverride !== undefined)
+      ? Number(laborHoursOverride)
+      : rawLaborHours * laborMultiplier;
     const totalLaborCost = totalLaborHours * estimate.laborRate;
 
     // Wire cost from wire_types catalog
@@ -3454,7 +3531,11 @@ Return ONLY valid JSON:
     const overhead = subtotal * (estimate.overheadPct / 100);
     const subtotalWithOverhead = subtotal + overhead;
     const profit = subtotalWithOverhead * (estimate.profitPct / 100);
-    const grandTotal = subtotalWithOverhead + profit;
+    const miscExpenses = Number((estimate as any).miscExpenses) || 0;
+    // Include permit fee so the exported total matches the on-screen estimate.
+    const permitFeeAmount = (estimate.includePermit && (estimate as any).permitFee)
+      ? Number((estimate as any).permitFee) : 0;
+    const grandTotal = subtotalWithOverhead + profit + miscExpenses + permitFeeAmount;
 
     res.json({
       company: {
@@ -3485,6 +3566,8 @@ Return ONLY valid JSON:
         subtotal,
         overhead,
         profit,
+        permitFee: permitFeeAmount,
+        miscExpenses,
         grandTotal,
       },
     });
@@ -3809,6 +3892,11 @@ Return ONLY valid JSON:
       const wireTypesAll = await storage.getWireTypes();
       const wireCostMap = new Map(wireTypesAll.map(w => [w.name, w.costPerFoot]));
 
+      // Labour job-type multiplier + manual override + misc apply to a FULL invoice.
+      const invLaborMultiplier = (estimate as any).laborMultiplier ?? 1;
+      const invLaborHoursOverride = (estimate as any).laborHoursOverride;
+      const isFullInvoiceScope = !itemIds && !serviceIds;
+
       // Helper: calculate raw cost for a set of items (before global markup/overhead)
       const calcItemsCost = (itemSet: typeof items) => {
         const matCost = itemSet.reduce((sum, item) => {
@@ -3816,7 +3904,12 @@ Return ONLY valid JSON:
           const markup = cost * (item.markupPct / 100);
           return sum + cost + markup;
         }, 0);
-        const laborCost = itemSet.reduce((sum, item) => sum + item.quantity * item.laborHours, 0) * estimate.laborRate;
+        const rawHours = itemSet.reduce((sum, item) => sum + item.quantity * item.laborHours, 0);
+        // Full invoice with a manual hours override uses it; otherwise apply the job-type multiplier.
+        const effHours = (isFullInvoiceScope && invLaborHoursOverride !== null && invLaborHoursOverride !== undefined)
+          ? Number(invLaborHoursOverride)
+          : rawHours * invLaborMultiplier;
+        const laborCost = effHours * estimate.laborRate;
         const wireCost = itemSet.reduce((sum, item) => {
           const costPerFt = wireCostMap.get(item.wireType || "") || 0;
           return sum + item.quantity * item.wireFootage * costPerFt;
@@ -3844,17 +3937,18 @@ Return ONLY valid JSON:
 
       // Only include permit fee if all items are selected (full invoice)
       let permitFeeAmount = 0;
-      const isFullInvoiceScope = !itemIds && !serviceIds;
       if (isFullInvoiceScope && estimate.includePermit && estimate.permitFee) {
         permitFeeAmount = estimate.permitFee;
       }
+      // Misc / expenses pass-through, full invoice only.
+      const invMiscExpenses = isFullInvoiceScope ? (Number((estimate as any).miscExpenses) || 0) : 0;
 
       // If customItems are provided, use their sum as the grand total
       let grandTotal: number;
       if (customItems && customItems.length > 0) {
         grandTotal = customItems.reduce((sum, ci) => sum + ci.amount, 0);
       } else {
-        grandTotal = subtotalWithOverhead + profit + permitFeeAmount;
+        grandTotal = subtotalWithOverhead + profit + permitFeeAmount + invMiscExpenses;
       }
 
       const taxRate = parseFloat(sm.gstRate || "5");
@@ -4250,6 +4344,45 @@ Return ONLY valid JSON:
     res.json(schedule);
   });
 
+  // Create a new permit fee schedule (admin only). Created inactive; activate explicitly.
+  app.post("/api/permit-fee-schedules", requireAdmin, async (req, res) => {
+    const { name, effectiveDate, rates } = req.body || {};
+    if (!name || !effectiveDate || !rates) {
+      return res.status(400).json({ message: "name, effectiveDate, and rates are required" });
+    }
+    // rates must be a JSON object (the fee tables); a string/number/array would
+    // crash the permit-fee calculation later.
+    if (typeof rates !== "object" || Array.isArray(rates)) {
+      return res.status(400).json({ message: "rates must be an object of fee tables" });
+    }
+    const created = await storage.createPermitFeeSchedule({ name, effectiveDate, rates, isActive: false });
+    res.status(201).json(created);
+  });
+
+  // Make a schedule the active one (deactivates all others).
+  app.post("/api/permit-fee-schedules/:id/activate", requireAdmin, async (req, res) => {
+    const id = parseId(String(req.params.id));
+    if (!id) return res.status(400).json({ message: "Invalid schedule ID" });
+    const all = await storage.getPermitFeeSchedules();
+    if (!all.find(s => s.id === id)) return res.status(404).json({ message: "Schedule not found" });
+    for (const s of all) {
+      await storage.updatePermitFeeSchedule(s.id, { isActive: s.id === id });
+    }
+    res.json({ ok: true });
+  });
+
+  // Delete a schedule (admin only). The active schedule cannot be deleted.
+  app.delete("/api/permit-fee-schedules/:id", requireAdmin, async (req, res) => {
+    const id = parseId(String(req.params.id));
+    if (!id) return res.status(400).json({ message: "Invalid schedule ID" });
+    const all = await storage.getPermitFeeSchedules();
+    const target = all.find(s => s.id === id);
+    if (!target) return res.status(404).json({ message: "Schedule not found" });
+    if (target.isActive) return res.status(400).json({ message: "Cannot delete the active schedule. Activate another first." });
+    await storage.deletePermitFeeSchedule(id);
+    res.json({ ok: true });
+  });
+
   // Calculate permit fee for an estimate
   app.get("/api/estimates/:id/permit-fee", async (req, res) => {
     const id = parseId(req.params.id);
@@ -4341,9 +4474,31 @@ Return ONLY valid JSON:
   // ─── Google Drive OAuth ───
   const pendingOAuthStates = new Set<string>();
 
+  // Admin: view Google OAuth credential status + the exact redirect URI to
+  // register in the Google Cloud console for THIS install.
+  app.get("/api/google-drive/config", requireAdmin, (req, res) => {
+    const clientId = getGoogleClientId();
+    res.json({
+      hasCredentials: isGoogleDriveOAuthAvailable(),
+      clientId: clientId ? clientId : "",
+      redirectUri: `${req.protocol}://${req.get("host")}/api/google-drive/callback`,
+    });
+  });
+
+  // Admin: save Google OAuth client ID + secret (secret encrypted at rest).
+  app.post("/api/google-drive/config", requireAdmin, async (req, res) => {
+    const clientId = String(req.body?.clientId || "").trim();
+    const clientSecret = String(req.body?.clientSecret || "").trim();
+    if (!clientId || !clientSecret) {
+      return res.status(400).json({ message: "Client ID and Client Secret are required" });
+    }
+    await saveGoogleCreds(clientId, clientSecret);
+    res.json({ ok: true, hasCredentials: isGoogleDriveOAuthAvailable() });
+  });
+
   app.get("/api/google-drive/auth", (req, res) => {
     if (!isGoogleDriveOAuthAvailable()) {
-      return res.status(503).json({ message: "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET not set in .env" });
+      return res.status(503).json({ message: "Google OAuth credentials not set. Add your Client ID and Secret in Settings." });
     }
     const state = crypto.randomUUID();
     pendingOAuthStates.add(state);
@@ -4726,8 +4881,47 @@ Return ONLY valid JSON:
     const allEmployees = await storage.getEmployees();
     const employee = allEmployees.find(e => e.pin === String(pin) && e.isActive);
     if (!employee) return res.status(401).json({ message: "Invalid PIN" });
+    req.session.employeeId = employee.id; // establish employee session for portal API calls
     const assignments = await storage.getEmployeeProjects(employee.id);
     res.json({ employee: { id: employee.id, name: employee.name, role: employee.role }, assignments });
+  });
+
+  // ─── Field job intake (employee creates a pending-review job from the portal) ───
+  app.post("/api/employee-jobs", async (req, res) => {
+    const employeeId = req.session.employeeId;
+    if (!employeeId) return res.status(403).json({ message: "Employee sign-in required" });
+
+    const name = String(req.body?.name || "").trim();
+    const address = String(req.body?.address || "").trim();
+    const notes = String(req.body?.notes || "").trim();
+    if (!name) return res.status(400).json({ message: "Job name is required" });
+
+    // Duplicate guard: reject if a project with the same name + address already
+    // exists (case-insensitive, whitespace-normalized), so the same site can't
+    // be entered twice by the field or duplicate an office-created job.
+    const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
+    const existing = await storage.getProjects();
+    const dup = existing.find(
+      p => norm(p.name) === norm(name) && norm(p.address || "") === norm(address),
+    );
+    if (dup) {
+      return res.status(409).json({ message: "A job with this name and address already exists." });
+    }
+
+    const project = await storage.createProject({
+      name,
+      clientName: "Pending review",
+      address: address || null,
+      dwellingType: "single",
+      status: "pending_review",
+      notes: notes || null,
+      createdByEmployeeId: employeeId,
+    } as any);
+
+    // Auto-assign the creator so it shows in their "My Projects" immediately.
+    const assignment = await storage.createProjectAssignment({ projectId: project.id, employeeId });
+
+    res.status(201).json({ project, assignment });
   });
 
   // ─── Time Entries ───
