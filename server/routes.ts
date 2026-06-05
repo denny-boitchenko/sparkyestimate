@@ -3784,6 +3784,70 @@ Return ONLY valid JSON:
     res.json(invs);
   });
 
+  // Add-on invoice: extra work billed on a project, NOT tied to the estimate
+  // baseline (estimateId stays null so it never counts against billed/remaining).
+  app.post("/api/projects/:id/addon-invoice", async (req, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (!id) return res.status(400).json({ message: "Invalid project ID" });
+      const project = await storage.getProject(id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+
+      const { invoiceName, customItems, taxable = true } = req.body as {
+        invoiceName?: string;
+        customItems?: { description: string; amount: number }[];
+        taxable?: boolean;
+      };
+      if (!customItems || customItems.length === 0) {
+        return res.status(400).json({ message: "Add-on invoice needs at least one line item" });
+      }
+
+      const settingsData = await storage.getSettings();
+      const sm = Object.fromEntries(settingsData.map(s => [s.key, s.value]));
+      const subtotal = customItems.reduce((sum, ci) => sum + (Number(ci.amount) || 0), 0);
+      const taxRate = taxable ? parseFloat(sm.gstRate || "5") : 0;
+      const taxLabel = taxable ? (sm.gstLabel || `GST ${taxRate}%`) : "No tax";
+      const taxAmount = subtotal * (taxRate / 100);
+
+      const existingInvoices = await storage.getInvoices();
+      const invoiceNumber = `INV-${String(existingInvoices.length + 1).padStart(4, "0")}`;
+      const dueDate = new Date();
+      dueDate.setDate(dueDate.getDate() + 30);
+
+      const invoice = await storage.createInvoice({
+        invoiceNumber,
+        estimateId: null,
+        projectId: id,
+        customerId: project.customerId,
+        status: "draft",
+        phase: null,
+        invoiceDate: new Date(),
+        dueDate,
+        subtotal,
+        taxRate,
+        taxLabel,
+        taxAmount,
+        total: subtotal + taxAmount,
+        notes: invoiceName || "Add-on work",
+        terms: sm.estimateTerms || null,
+      });
+      for (const ci of customItems) {
+        await storage.createInvoiceItem({
+          invoiceId: invoice.id,
+          description: ci.description,
+          room: null,
+          quantity: 1,
+          unitPrice: Number(ci.amount) || 0,
+          total: Number(ci.amount) || 0,
+        });
+      }
+      res.status(201).json({ id: invoice.id, invoiceId: invoice.id, invoiceNumber, message: "Add-on invoice created" });
+    } catch (err: any) {
+      console.error("Add-on invoice error:", err);
+      res.status(500).json({ message: err.message || "Failed to create add-on invoice" });
+    }
+  });
+
   app.post("/api/invoices", async (req, res) => {
     const parsed = insertInvoiceSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ message: parsed.error.issues.map(i => i.message).join(", ") });
@@ -3866,13 +3930,14 @@ Return ONLY valid JSON:
       const project = await storage.getProject(estimate.projectId);
       if (!project) return res.status(404).json({ message: "Project not found" });
 
-      // Aggregated invoice creation: mode, customItems, invoiceName, itemIds, serviceIds
-      const { invoiceName, itemIds, serviceIds, mode, customItems } = req.body as {
+      // Aggregated invoice creation: mode, customItems, invoiceName, itemIds, serviceIds, singlePhase
+      const { invoiceName, itemIds, serviceIds, mode, customItems, singlePhase } = req.body as {
         invoiceName?: string;
         itemIds?: number[];
         serviceIds?: number[];
         mode?: "by_phase" | "full"; // default: "by_phase"
         customItems?: { description: string; amount: number }[];
+        singlePhase?: "service" | "roughin" | "finish"; // invoice ONE phase as its own invoice
       };
 
       const allItems = await storage.getEstimateItems(id);
@@ -3880,13 +3945,22 @@ Return ONLY valid JSON:
       const settingsData = await storage.getSettings();
       const sm = Object.fromEntries(settingsData.map(s => [s.key, s.value]));
 
-      // Filter items based on selected IDs (backward compat: if no IDs provided, include everything)
-      const items = itemIds && itemIds.length > 0
-        ? allItems.filter(i => itemIds.includes(i.id))
-        : allItems;
-      const services = serviceIds && serviceIds.length > 0
-        ? allServices.filter(s => serviceIds.includes(s.id))
-        : (!itemIds && !serviceIds) ? allServices : allServices.filter(s => serviceIds?.includes(s.id));
+      // Single-phase invoicing: bill just Service / Rough-In / Finish as its own invoice.
+      // Services belong to the "service" phase.
+      let items: typeof allItems;
+      let services: typeof allServices;
+      if (singlePhase) {
+        items = allItems.filter(i => (i.phase || "unassigned") === singlePhase);
+        services = singlePhase === "service" ? allServices : [];
+      } else {
+        // Filter items based on selected IDs (backward compat: if no IDs provided, include everything)
+        items = itemIds && itemIds.length > 0
+          ? allItems.filter(i => itemIds.includes(i.id))
+          : allItems;
+        services = serviceIds && serviceIds.length > 0
+          ? allServices.filter(s => serviceIds.includes(s.id))
+          : (!itemIds && !serviceIds) ? allServices : allServices.filter(s => serviceIds?.includes(s.id));
+      }
 
       // Wire cost from wire_types catalog
       const wireTypesAll = await storage.getWireTypes();
@@ -3895,7 +3969,7 @@ Return ONLY valid JSON:
       // Labour job-type multiplier + manual override + misc apply to a FULL invoice.
       const invLaborMultiplier = (estimate as any).laborMultiplier ?? 1;
       const invLaborHoursOverride = (estimate as any).laborHoursOverride;
-      const isFullInvoiceScope = !itemIds && !serviceIds;
+      const isFullInvoiceScope = !itemIds && !serviceIds && !singlePhase;
 
       // Global labour scale so invoices (full OR by-phase) match the estimate's
       // effective hours: manual override wins, else job-type multiplier. Applied
@@ -3974,7 +4048,7 @@ Return ONLY valid JSON:
         projectId: estimate.projectId,
         customerId: project.customerId,
         status: "draft",
-        phase: null,
+        phase: singlePhase || null,
         invoiceDate: new Date(),
         dueDate,
         subtotal: grandTotal,
@@ -3999,6 +4073,28 @@ Return ONLY valid JSON:
             total: ci.amount,
           });
         }
+      } else if (singlePhase) {
+        // One invoice for a single phase — one descriptive line.
+        const phaseLabels: Record<string, string> = {
+          service: "Electrical Service",
+          roughin: "Rough-In",
+          finish: "Finishing",
+        };
+        const phaseDescSuffix: Record<string, string> = {
+          service: "Materials, labour & permits",
+          roughin: "Materials, labour & wire",
+          finish: "Materials, labour & fixtures",
+        };
+        const description = invoiceName
+          || `${phaseLabels[singlePhase] || singlePhase} — ${phaseDescSuffix[singlePhase] || "Materials & labour"}`;
+        await storage.createInvoiceItem({
+          invoiceId: invoice.id,
+          description,
+          room: null,
+          quantity: 1,
+          unitPrice: grandTotal,
+          total: grandTotal,
+        });
       } else if (mode === "full") {
         // Single aggregated line item
         const description = invoiceName || "Complete Electrical — Materials, labour & wire";
@@ -4996,6 +5092,51 @@ Return ONLY valid JSON:
   });
 
   // ─── Project Financials ───
+  // Compute an estimate's full grand total (pre-tax + with-tax) using the same
+  // markup/overhead/profit/permit/misc + effective-labour logic as the estimate
+  // screen and the convert-to-invoice endpoint. Used by the project billing hub.
+  async function computeEstimateTotals(estimateId: number) {
+    const estimate = await storage.getEstimate(estimateId);
+    if (!estimate) return { grandTotal: 0, total: 0, taxAmount: 0 };
+    const items = await storage.getEstimateItems(estimateId);
+    const services = await storage.getEstimateServices(estimateId);
+    const sm = Object.fromEntries((await storage.getSettings()).map(s => [s.key, s.value]));
+    const wireTypesAll = await storage.getWireTypes();
+    const wireCostMap = new Map(wireTypesAll.map(w => [w.name, w.costPerFoot]));
+
+    const laborMultiplier = (estimate as any).laborMultiplier ?? 1;
+    const laborHoursOverride = (estimate as any).laborHoursOverride;
+    const allRawHours = items.reduce((sum, it) => sum + it.quantity * it.laborHours, 0);
+    const effectiveTotalHours = (laborHoursOverride !== null && laborHoursOverride !== undefined)
+      ? Number(laborHoursOverride)
+      : allRawHours * laborMultiplier;
+    const labourScale = allRawHours > 0 ? effectiveTotalHours / allRawHours : 1;
+
+    const matCost = items.reduce((sum, item) => {
+      const cost = item.quantity * item.materialCost;
+      return sum + cost + cost * (item.markupPct / 100);
+    }, 0);
+    const wireCost = items.reduce((sum, item) => {
+      const costPerFt = wireCostMap.get(item.wireType || "") || 0;
+      return sum + item.quantity * item.wireFootage * costPerFt;
+    }, 0);
+    const laborCost = items.reduce((sum, item) => sum + item.quantity * item.laborHours, 0) * estimate.laborRate * labourScale;
+    const svcMat = services.reduce((sum, s) => sum + s.materialCost, 0);
+    const svcLabor = services.reduce((sum, s) => sum + s.laborHours, 0) * estimate.laborRate;
+
+    const materialWithMarkup = (matCost + wireCost + svcMat) * (1 + estimate.materialMarkupPct / 100);
+    const laborWithMarkup = (laborCost + svcLabor) * (1 + estimate.laborMarkupPct / 100);
+    const subtotalRaw = materialWithMarkup + laborWithMarkup;
+    const overhead = subtotalRaw * (estimate.overheadPct / 100);
+    const profit = (subtotalRaw + overhead) * (estimate.profitPct / 100);
+    const permitFee = (estimate.includePermit && estimate.permitFee) ? estimate.permitFee : 0;
+    const miscExpenses = Number((estimate as any).miscExpenses) || 0;
+    const grandTotal = subtotalRaw + overhead + profit + permitFee + miscExpenses;
+    const taxRate = parseFloat(sm.gstRate || "5");
+    const taxAmount = grandTotal * (taxRate / 100);
+    return { grandTotal, taxAmount, total: grandTotal + taxAmount };
+  }
+
   app.get("/api/projects/:id/financials", async (req, res) => {
     const id = parseId(req.params.id);
     if (!id) return res.status(400).json({ message: "Invalid project ID" });
@@ -5009,6 +5150,28 @@ Return ONLY valid JSON:
       .filter(inv => inv.status === "paid")
       .reduce((sum, inv) => sum + (inv.total || 0), 0);
     const outstanding = invoicedTotal - paidTotal;
+
+    // Estimate baseline + billed-vs-remaining (billing hub).
+    const projectEstimates = await storage.getEstimatesByProject(id);
+    const estimateBreakdown = await Promise.all(projectEstimates.map(async (est) => {
+      const totals = await computeEstimateTotals(est.id);
+      const tiedInvoices = projectInvoices.filter(inv => inv.estimateId === est.id);
+      const billed = tiedInvoices.reduce((sum, inv) => sum + (inv.total || 0), 0);
+      const billedPaid = tiedInvoices.filter(i => i.status === "paid").reduce((sum, inv) => sum + (inv.total || 0), 0);
+      return {
+        estimateId: est.id,
+        estimateName: est.name,
+        estimateTotal: totals.total,
+        estimatePreTax: totals.grandTotal,
+        billed,
+        billedPaid,
+        remaining: Math.max(0, totals.total - billed),
+        invoiceCount: tiedInvoices.length,
+      };
+    }));
+    // Add-on invoices: tied to the project but NOT to any estimate (extra work).
+    const addOnInvoices = projectInvoices.filter(inv => !inv.estimateId);
+    const addOnTotal = addOnInvoices.reduce((sum, inv) => sum + (inv.total || 0), 0);
 
     // Labour cost from time entries + employee rates
     const timeSummary = await storage.getProjectTimeSummary(id);
@@ -5042,6 +5205,9 @@ Return ONLY valid JSON:
       labourCost,
       margin,
       employeeBreakdown,
+      estimateBreakdown,
+      addOnTotal,
+      addOnCount: addOnInvoices.length,
     });
   });
 

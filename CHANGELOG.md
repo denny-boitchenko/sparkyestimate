@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-06-05 (batch 3) — Progressive / milestone billing
+
+### Added
+- **GST now shows on the estimate.** The Estimate Summary (screen) and PDF both show `Grand Total (before tax)` → `GST 5%` → `Total incl. tax`, so the estimate matches what the invoice charges — no 5% surprise. (Guse: $29,661.35 → $1,483.07 GST → $31,144.42.)
+- **Split / progressive invoicing.** A project's estimate can be billed in pieces, each its own independently-sent/paid invoice:
+  - **By phase** — `singlePhase: "service" | "roughin" | "finish"` on `POST /api/estimates/:id/convert-to-invoice` bills just that phase's items + labour (with tax), and tags `invoice.phase` so the hub tracks it.
+  - **Custom amount / %** — a deposit or progress payment via `customItems` (e.g. "20% service deposit").
+- **Add-on invoices.** `POST /api/projects/:id/addon-invoice` bills extra mid-project work as its own invoice with `estimateId = null`, so it never counts against the estimate's billed/remaining.
+- **Project billing hub** (Financials tab). Per estimate: contract total (incl. tax), a billed-vs-remaining progress bar (Billed / Paid / Remaining), and **New Invoice** (phase or custom %/$) + **Add-on Invoice** buttons. Lists every project invoice with type (phase / estimate / add-on) and status. `GET /api/projects/:id/financials` now returns `estimateBreakdown`, `addOnTotal`, `addOnCount`.
+- **Receipt reachable from the invoice list.** Paid rows get a **Receipt** action (opens the invoice where Generate/Download Receipt live), and the "mark paid" toast points there. (Receipt is still download-only; emailing needs a Resend key.)
+
 ## 2026-06-05 (batch 2)
 
 ### Fixed

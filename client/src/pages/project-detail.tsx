@@ -26,9 +26,20 @@ import {
   FolderOpen, FileImage, FolderPlus, FolderX, Pencil, Check, X,
   DollarSign, TrendingUp, TrendingDown, Users, Clock
 } from "lucide-react";
-import type { Project, Estimate, Customer, ProjectPhoto } from "@shared/schema";
+import type { Project, Estimate, Customer, ProjectPhoto, Invoice } from "@shared/schema";
 
 type PhotoWithUrl = ProjectPhoto & { downloadUrl: string | null; uploadedBy?: string };
+
+type EstimateBilling = {
+  estimateId: number;
+  estimateName: string;
+  estimateTotal: number;
+  estimatePreTax: number;
+  billed: number;
+  billedPaid: number;
+  remaining: number;
+  invoiceCount: number;
+};
 
 type EmployeeBreakdown = {
   employeeId: number;
@@ -46,6 +57,9 @@ type ProjectFinancials = {
   labourCost: number;
   margin: number;
   employeeBreakdown: EmployeeBreakdown[];
+  estimateBreakdown?: EstimateBilling[];
+  addOnTotal?: number;
+  addOnCount?: number;
 };
 
 function StatusBadge({ status }: { status: string }) {
@@ -115,6 +129,74 @@ export default function ProjectDetail() {
   const { data: financials } = useQuery<ProjectFinancials>({
     queryKey: ["/api/projects", projectId, "financials"],
     enabled: projectId > 0,
+  });
+
+  const { data: projectInvoices } = useQuery<Invoice[]>({
+    queryKey: ["/api/projects", projectId, "invoices"],
+    enabled: projectId > 0,
+  });
+
+  // ---- Billing hub: create invoices from the project ----
+  const [billDialogOpen, setBillDialogOpen] = useState(false);
+  const [billEstimateId, setBillEstimateId] = useState<number | null>(null);
+  const [billMode, setBillMode] = useState<"phase" | "custom">("phase");
+  const [billPhase, setBillPhase] = useState<"service" | "roughin" | "finish">("service");
+  const [billCustomKind, setBillCustomKind] = useState<"amount" | "percent">("percent");
+  const [billCustomValue, setBillCustomValue] = useState("");
+  const [billCustomDesc, setBillCustomDesc] = useState("");
+
+  const [addonDialogOpen, setAddonDialogOpen] = useState(false);
+  const [addonLines, setAddonLines] = useState<{ description: string; amount: string }[]>([{ description: "", amount: "" }]);
+
+  const refreshBilling = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "financials"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "invoices"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+  };
+
+  const createBillMutation = useMutation({
+    mutationFn: async () => {
+      if (!billEstimateId) throw new Error("No estimate selected");
+      const est = financials?.estimateBreakdown?.find(e => e.estimateId === billEstimateId);
+      let body: any;
+      if (billMode === "phase") {
+        body = { singlePhase: billPhase };
+      } else {
+        const v = parseFloat(billCustomValue);
+        if (!v || v <= 0) throw new Error("Enter an amount");
+        const amount = billCustomKind === "percent"
+          ? Math.round(((est?.estimateTotal || 0) * (v / 100)) * 100) / 100
+          : v;
+        const label = billCustomKind === "percent" ? `${v}% progress payment` : "Progress payment";
+        body = { customItems: [{ description: billCustomDesc.trim() || label, amount }] };
+      }
+      return apiRequest("POST", `/api/estimates/${billEstimateId}/convert-to-invoice`, body);
+    },
+    onSuccess: () => {
+      setBillDialogOpen(false);
+      setBillCustomValue("");
+      setBillCustomDesc("");
+      refreshBilling();
+      toast({ title: "Invoice created", description: "Find it in the Invoices tab." });
+    },
+    onError: (err: any) => toast({ title: "Failed to create invoice", description: err.message, variant: "destructive" }),
+  });
+
+  const createAddonMutation = useMutation({
+    mutationFn: async () => {
+      const customItems = addonLines
+        .map(l => ({ description: l.description.trim(), amount: parseFloat(l.amount) }))
+        .filter(l => l.description && l.amount > 0);
+      if (customItems.length === 0) throw new Error("Add at least one line with a description and amount");
+      return apiRequest("POST", `/api/projects/${projectId}/addon-invoice`, { customItems });
+    },
+    onSuccess: () => {
+      setAddonDialogOpen(false);
+      setAddonLines([{ description: "", amount: "" }]);
+      refreshBilling();
+      toast({ title: "Add-on invoice created" });
+    },
+    onError: (err: any) => toast({ title: "Failed to create add-on invoice", description: err.message, variant: "destructive" }),
   });
 
   const { data: storageStatus } = useQuery<{ configured: boolean; provider: string | null }>({
@@ -589,6 +671,119 @@ export default function ProjectDetail() {
             </Card>
           </div>
 
+          {/* Billing Hub: estimate baseline → billed vs remaining → create invoices */}
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-2">
+              <CardTitle className="text-base font-semibold">Billing</CardTitle>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => { setAddonDialogOpen(true); }}
+                data-testid="button-add-addon"
+              >
+                <Plus className="w-4 h-4 mr-1" /> Add-on Invoice
+              </Button>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {(!financials?.estimateBreakdown || financials.estimateBreakdown.length === 0) ? (
+                <div className="text-center py-6 text-muted-foreground text-sm">
+                  No estimates yet. Create an estimate first, then bill it here in phases or progress payments.
+                </div>
+              ) : (
+                financials.estimateBreakdown.map((est) => {
+                  const pct = est.estimateTotal > 0 ? Math.min(100, (est.billed / est.estimateTotal) * 100) : 0;
+                  return (
+                    <div key={est.estimateId} className="rounded-lg border p-4 space-y-3">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <Link href={`/estimates/${est.estimateId}`} className="font-medium hover:underline">
+                            {est.estimateName || `Estimate #${est.estimateId}`}
+                          </Link>
+                          <p className="text-xs text-muted-foreground">
+                            Contract total ${est.estimateTotal.toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} incl. tax
+                            {" · "}{est.invoiceCount} invoice{est.invoiceCount === 1 ? "" : "s"}
+                          </p>
+                        </div>
+                        <Button
+                          size="sm"
+                          onClick={() => {
+                            setBillEstimateId(est.estimateId);
+                            setBillMode("phase");
+                            setBillPhase("service");
+                            setBillCustomKind("percent");
+                            setBillCustomValue("");
+                            setBillCustomDesc("");
+                            setBillDialogOpen(true);
+                          }}
+                          data-testid={`button-bill-estimate-${est.estimateId}`}
+                        >
+                          <Plus className="w-4 h-4 mr-1" /> New Invoice
+                        </Button>
+                      </div>
+                      <div className="w-full bg-muted rounded-full h-3 overflow-hidden">
+                        <div
+                          className="bg-primary h-full rounded-full transition-all duration-500"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 text-sm">
+                        <div>
+                          <p className="text-xs text-muted-foreground">Billed</p>
+                          <p className="font-semibold">${est.billed.toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">Paid</p>
+                          <p className="font-semibold text-emerald-600 dark:text-emerald-400">${est.billedPaid.toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">Remaining</p>
+                          <p className="font-semibold text-amber-600 dark:text-amber-400">${est.remaining.toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+              {(financials?.addOnCount || 0) > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Plus {financials?.addOnCount} add-on invoice{financials?.addOnCount === 1 ? "" : "s"} totalling ${(financials?.addOnTotal || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (billed separately from the estimate).
+                </p>
+              )}
+
+              {/* Invoice list */}
+              {projectInvoices && projectInvoices.length > 0 && (
+                <div className="border-t pt-3">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Invoice</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="text-right">Total</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {projectInvoices.map((inv) => (
+                        <TableRow key={inv.id} className="cursor-pointer" onClick={() => navigate(`/invoices/${inv.id}`)}>
+                          <TableCell className="font-medium">{inv.invoiceNumber}</TableCell>
+                          <TableCell className="text-muted-foreground text-sm">
+                            {!inv.estimateId ? "Add-on" : inv.phase ? phaseLabel(inv.phase) : "Estimate"}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={inv.status === "paid" ? "default" : inv.status === "overdue" ? "destructive" : "secondary"}>
+                              {inv.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right">${(inv.total || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
           {/* Progress Bar: Paid vs Invoiced */}
           {(financials?.invoicedTotal || 0) > 0 && (
             <Card>
@@ -1029,6 +1224,167 @@ export default function ProjectDetail() {
                 )}
               </Button>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* New Invoice from estimate (phase OR custom amount/%) */}
+      <Dialog open={billDialogOpen} onOpenChange={setBillDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>New Invoice</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                variant={billMode === "phase" ? "default" : "outline"}
+                onClick={() => setBillMode("phase")}
+                type="button"
+              >
+                Bill a phase
+              </Button>
+              <Button
+                variant={billMode === "custom" ? "default" : "outline"}
+                onClick={() => setBillMode("custom")}
+                type="button"
+              >
+                Custom amount / %
+              </Button>
+            </div>
+
+            {billMode === "phase" ? (
+              <div className="space-y-2">
+                <Label>Phase</Label>
+                <Select value={billPhase} onValueChange={(v) => setBillPhase(v as any)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="service">Electrical Service</SelectItem>
+                    <SelectItem value="roughin">Rough-In</SelectItem>
+                    <SelectItem value="finish">Finishing</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Invoices just this phase's items + labour from the estimate, with tax.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    variant={billCustomKind === "percent" ? "default" : "outline"}
+                    onClick={() => setBillCustomKind("percent")}
+                    type="button"
+                    size="sm"
+                  >
+                    % of contract
+                  </Button>
+                  <Button
+                    variant={billCustomKind === "amount" ? "default" : "outline"}
+                    onClick={() => setBillCustomKind("amount")}
+                    type="button"
+                    size="sm"
+                  >
+                    Fixed $ amount
+                  </Button>
+                </div>
+                <div className="space-y-2">
+                  <Label>{billCustomKind === "percent" ? "Percentage (e.g. 20)" : "Amount ($)"}</Label>
+                  <Input
+                    type="number"
+                    value={billCustomValue}
+                    onChange={(e) => setBillCustomValue(e.target.value)}
+                    placeholder={billCustomKind === "percent" ? "20" : "5000"}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Description (optional)</Label>
+                  <Input
+                    value={billCustomDesc}
+                    onChange={(e) => setBillCustomDesc(e.target.value)}
+                    placeholder="Service deposit"
+                  />
+                </div>
+                {billCustomKind === "percent" && billCustomValue && billEstimateId && (
+                  <p className="text-xs text-muted-foreground">
+                    ≈ ${(((financials?.estimateBreakdown?.find(e => e.estimateId === billEstimateId)?.estimateTotal || 0) * (parseFloat(billCustomValue) / 100)) || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} of the contract total.
+                  </p>
+                )}
+              </div>
+            )}
+
+            <Button
+              className="w-full"
+              onClick={() => createBillMutation.mutate()}
+              disabled={createBillMutation.isPending}
+              data-testid="button-create-bill"
+            >
+              {createBillMutation.isPending ? "Creating…" : "Create Invoice"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add-on invoice (extra work, separate from the estimate) */}
+      <Dialog open={addonDialogOpen} onOpenChange={setAddonDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add-on Invoice</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Bill extra work added mid-project. This is separate from the estimate and won't change the contract's billed/remaining.
+            </p>
+            {addonLines.map((line, idx) => (
+              <div key={idx} className="flex gap-2 items-start">
+                <Input
+                  className="flex-1"
+                  value={line.description}
+                  onChange={(e) => {
+                    const next = [...addonLines];
+                    next[idx] = { ...next[idx], description: e.target.value };
+                    setAddonLines(next);
+                  }}
+                  placeholder="Extra panel circuit"
+                />
+                <Input
+                  className="w-28"
+                  type="number"
+                  value={line.amount}
+                  onChange={(e) => {
+                    const next = [...addonLines];
+                    next[idx] = { ...next[idx], amount: e.target.value };
+                    setAddonLines(next);
+                  }}
+                  placeholder="$"
+                />
+                {addonLines.length > 1 && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setAddonLines(addonLines.filter((_, i) => i !== idx))}
+                    type="button"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                )}
+              </div>
+            ))}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setAddonLines([...addonLines, { description: "", amount: "" }])}
+              type="button"
+            >
+              <Plus className="w-4 h-4 mr-1" /> Add line
+            </Button>
+            <Button
+              className="w-full"
+              onClick={() => createAddonMutation.mutate()}
+              disabled={createAddonMutation.isPending}
+              data-testid="button-create-addon"
+            >
+              {createAddonMutation.isPending ? "Creating…" : "Create Add-on Invoice"}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

@@ -1258,6 +1258,14 @@ export default function EstimateDetail() {
   const miscExpenses = Number((estimate as any).miscExpenses) || 0;
   const grandTotal = subtotalWithOverhead + profit + permitFee + miscExpenses;
 
+  // GST so the estimate shows the same with-tax total the invoice will charge.
+  const estSettingsMap: Record<string, string> = {};
+  for (const s of (settingsData || [])) estSettingsMap[s.key] = s.value;
+  const estGstRate = parseFloat(estSettingsMap.gstRate || "5") / 100;
+  const estGstLabel = estSettingsMap.gstLabel || "GST 5%";
+  const estGstAmount = grandTotal * estGstRate;
+  const totalInclGst = grandTotal + estGstAmount;
+
   const totalCircuitAmps = (circuits || []).reduce((sum, c) => sum + c.amps * c.poles, 0);
   const recommendedPanelSize = totalCircuitAmps <= 100 ? 100 : totalCircuitAmps <= 200 ? 200 : 400;
 
@@ -1889,9 +1897,17 @@ export default function EstimateDetail() {
                     <span>${permitHandlingFee.toFixed(2)}</span>
                   </div>
                 )}
+                <div className="border-t pt-2 flex justify-between gap-4 text-sm font-medium">
+                  <span>Grand Total (before tax)</span>
+                  <span>${grandTotal.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between gap-4 text-sm">
+                  <span className="text-muted-foreground">{estGstLabel}</span>
+                  <span>${estGstAmount.toFixed(2)}</span>
+                </div>
                 <div className="border-t pt-2 flex justify-between gap-4 text-lg font-bold">
-                  <span>Grand Total</span>
-                  <span className="text-chart-3">${grandTotal.toFixed(2)}</span>
+                  <span>Total incl. tax</span>
+                  <span className="text-chart-3">${totalInclGst.toFixed(2)}</span>
                 </div>
               </div>
             </CardContent>

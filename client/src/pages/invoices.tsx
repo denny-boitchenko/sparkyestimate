@@ -23,7 +23,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { FileText, DollarSign, Clock, CheckCircle, MoreHorizontal, Send, Trash2, Users, Search, ArrowUpDown, CreditCard } from "lucide-react";
+import { FileText, DollarSign, Clock, CheckCircle, MoreHorizontal, Send, Trash2, Users, Search, ArrowUpDown, CreditCard, Receipt } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Invoice, Project, Customer } from "@shared/schema";
@@ -427,6 +427,14 @@ export default function Invoices() {
                                 Mark as Paid
                               </DropdownMenuItem>
                             )}
+                            {invoice.status === "paid" && (
+                              <DropdownMenuItem asChild data-testid={`button-receipt-${invoice.id}`}>
+                                <Link href={`/invoices/${invoice.id}`}>
+                                  <Receipt className="w-4 h-4 mr-2" />
+                                  Receipt
+                                </Link>
+                              </DropdownMenuItem>
+                            )}
                             <DropdownMenuItem
                               onClick={() => setDeleteTarget(invoice)}
                               className="text-destructive"
@@ -545,6 +553,13 @@ export default function Invoices() {
                     status: "paid",
                     paymentDate: new Date().toISOString(),
                     paymentMethod,
+                  }, {
+                    onSuccess: () => {
+                      toast({
+                        title: "Marked as paid",
+                        description: "Open the invoice to generate or download the receipt.",
+                      });
+                    },
                   });
                 }
                 setPayTarget(null);
