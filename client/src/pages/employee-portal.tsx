@@ -41,6 +41,12 @@ export default function EmployeePortal() {
   const [logHours, setLogHours] = useState("8");
   const [logNotes, setLogNotes] = useState("");
 
+  // Create-job (field intake) state
+  const [showNewJob, setShowNewJob] = useState(false);
+  const [newJobName, setNewJobName] = useState("");
+  const [newJobAddress, setNewJobAddress] = useState("");
+  const [newJobNotes, setNewJobNotes] = useState("");
+
   // Login via PIN only
   const loginMutation = useMutation({
     mutationFn: async () => {
@@ -112,6 +118,36 @@ export default function EmployeePortal() {
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  // Create a field job; it goes to the office as "pending review".
+  const createJobMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/employee-jobs", {
+        name: newJobName.trim(),
+        address: newJobAddress.trim(),
+        notes: newJobNotes.trim(),
+      });
+      return res.json();
+    },
+    onSuccess: (data: { project: Project; assignment: { id: number; projectId: number; employeeId: number } }) => {
+      // Append the new assignment locally so the job appears in My Projects now.
+      setAuth(prev => prev
+        ? { ...prev, assignments: [...prev.assignments, { id: data.assignment.id, projectId: data.assignment.projectId, employeeId: data.assignment.employeeId }] }
+        : prev);
+      queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
+      setShowNewJob(false);
+      setNewJobName("");
+      setNewJobAddress("");
+      setNewJobNotes("");
+      toast({ title: "Job created", description: "Sent to the office for review." });
+    },
+    onError: (err: Error) => {
+      const msg = String(err.message || "").replace(/^\d+:\s*/, "");
+      let desc = "Could not create job";
+      try { desc = JSON.parse(msg).message; } catch { if (msg) desc = msg; }
+      toast({ title: "Could not create job", description: desc, variant: "destructive" });
     },
   });
 
@@ -254,11 +290,44 @@ export default function EmployeePortal() {
         </div>
 
         <div className="p-4 space-y-3">
+          {/* Create a field job */}
+          <Card>
+            <CardContent className="pt-4">
+              {!showNewJob ? (
+                <Button className="w-full" variant="outline" onClick={() => setShowNewJob(true)}>
+                  <Plus className="w-4 h-4 mr-2" /> Create Job
+                </Button>
+              ) : (
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-sm font-medium">Job / site name</label>
+                    <Input value={newJobName} onChange={(e) => setNewJobName(e.target.value)} placeholder="e.g. Smith Reno - 123 Main St" />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Address</label>
+                    <Input value={newJobAddress} onChange={(e) => setNewJobAddress(e.target.value)} placeholder="Site address" />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Notes (optional)</label>
+                    <Input value={newJobNotes} onChange={(e) => setNewJobNotes(e.target.value)} placeholder="What's the job?" />
+                  </div>
+                  <p className="text-xs text-muted-foreground">This sends the job to the office for review. They'll assign the client.</p>
+                  <div className="flex gap-2">
+                    <Button className="flex-1" onClick={() => createJobMutation.mutate()} disabled={!newJobName.trim() || createJobMutation.isPending}>
+                      {createJobMutation.isPending ? "Creating..." : "Create"}
+                    </Button>
+                    <Button variant="ghost" onClick={() => { setShowNewJob(false); }}>Cancel</Button>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
           {myProjects.length === 0 ? (
             <Card>
               <CardContent className="pt-6 text-center text-muted-foreground">
                 <p>No projects assigned to you yet.</p>
-                <p className="text-sm mt-1">Ask the owner to assign you to a project.</p>
+                <p className="text-sm mt-1">Create a job above, or ask the owner to assign you to one.</p>
               </CardContent>
             </Card>
           ) : (

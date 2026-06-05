@@ -141,6 +141,7 @@ export default function EstimateDetail() {
   const [addSubpanelOpen, setAddSubpanelOpen] = useState(false);
   const [addBomMaterialOpen, setAddBomMaterialOpen] = useState(false);
   const [addServiceOpen, setAddServiceOpen] = useState(false);
+  const [expandedServiceId, setExpandedServiceId] = useState<number | null>(null);
   const [createDeviceOpen, setCreateDeviceOpen] = useState(false);
   const [pendingDeviceItemId, setPendingDeviceItemId] = useState<number | null>(null);
   const [addWireRunOpen, setAddWireRunOpen] = useState(false);
@@ -567,7 +568,9 @@ export default function EstimateDetail() {
       doc.setFont("helvetica", "bold");
       doc.text("TOTAL", infoBoxX + 4, 34);
       doc.setFontSize(9);
+      doc.setTextColor(217, 119, 6); // amber accent on the headline total
       doc.text(`$${grandTotal.toFixed(2)}`, infoBoxX + infoBoxW - 4, 34, { align: "right" });
+      doc.setTextColor(60, 60, 60);
 
       doc.setDrawColor(180, 205, 235);
       doc.rect(infoBoxX, 15, infoBoxW, 21, "S");
@@ -1165,6 +1168,13 @@ export default function EstimateDetail() {
     },
   });
 
+  // Save a service's parts list and recompute its material/labour totals from the parts.
+  const saveServiceItems = (serviceId: number, items: Array<{ name: string; materialCost: number; laborHours: number; qty: number }>) => {
+    const materialCost = items.reduce((s, it) => s + (Number(it.materialCost) || 0) * (Number(it.qty) || 1), 0);
+    const laborHours = items.reduce((s, it) => s + (Number(it.laborHours) || 0) * (Number(it.qty) || 1), 0);
+    updateServiceMutation.mutate({ id: serviceId, items, materialCost, laborHours } as any);
+  };
+
   if (isLoading) {
     return (
       <div className="p-6 space-y-6">
@@ -1194,7 +1204,14 @@ export default function EstimateDetail() {
     return sum + cost + markup;
   }, 0);
 
-  const totalLaborHours = (items || []).reduce((sum, item) => sum + item.quantity * item.laborHours, 0);
+  // Effective labour hours drive the grand total so the Labour tab (job-type
+  // multiplier + manual override) actually moves the headline numbers.
+  const rawLaborHours = (items || []).reduce((sum, item) => sum + item.quantity * item.laborHours, 0);
+  const laborMultiplier = (estimate as any).laborMultiplier ?? 1;
+  const laborHoursOverrideVal = (estimate as any).laborHoursOverride;
+  const totalLaborHours = (laborHoursOverrideVal !== null && laborHoursOverrideVal !== undefined && laborHoursOverrideVal !== "")
+    ? Number(laborHoursOverrideVal)
+    : rawLaborHours * laborMultiplier;
   const totalLaborCost = totalLaborHours * estimate.laborRate;
   const totalWireFootage = (items || []).reduce((sum, item) => sum + item.quantity * item.wireFootage, 0);
 
@@ -1222,7 +1239,9 @@ export default function EstimateDetail() {
   const tsbcPermitFee = estimate.includePermit ? (permitFeeData?.fee || 0) : 0;
   const permitHandlingFee = estimate.includePermit ? ((estimate as any)?.permitHandlingFee || 0) : 0;
   const permitFee = tsbcPermitFee + permitHandlingFee;
-  const grandTotal = subtotalWithOverhead + profit + permitFee;
+  // Misc / expenses (fuel, dump fees, etc.) — pass-through, added after overhead + profit.
+  const miscExpenses = Number((estimate as any).miscExpenses) || 0;
+  const grandTotal = subtotalWithOverhead + profit + permitFee + miscExpenses;
 
   const totalCircuitAmps = (circuits || []).reduce((sum, c) => sum + c.amps * c.poles, 0);
   const recommendedPanelSize = totalCircuitAmps <= 100 ? 100 : totalCircuitAmps <= 200 ? 200 : 400;
@@ -1400,6 +1419,18 @@ export default function EstimateDetail() {
                 value={(estimate as any).laborCostRate ?? 45}
                 onChange={(e) => updateEstimateMutation.mutate({ laborCostRate: parseFloat(e.target.value) || 0 } as any)}
                 data-testid="input-labor-cost-rate"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Misc / Expenses $</Label>
+              <Input
+                type="number"
+                step="0.01"
+                key={`misc-${(estimate as any).miscExpenses ?? 0}`}
+                defaultValue={(estimate as any).miscExpenses ?? 0}
+                onBlur={(e) => updateEstimateMutation.mutate({ miscExpenses: parseFloat(e.target.value) || 0 } as any)}
+                placeholder="fuel, dump fees, etc."
+                data-testid="input-misc-expenses"
               />
             </div>
             <div className="space-y-1">
@@ -3340,8 +3371,12 @@ export default function EstimateDetail() {
 
             // CEC Table 62 range demand
             const rangeDemand = rangeCount <= 0 ? 0 : rangeCount === 1 ? 6000 : rangeCount === 2 ? 9000 : 9000 + (rangeCount - 2) * 2500;
-            // Heating/cooling interlock: use larger, not both
-            const heatingCoolingDemand = Math.max(heatingLoad, coolingLoad);
+            // Heating/cooling interlock: use larger, not both.
+            // CEC 8-200(1)(a)(ii): electric space heating demand = first 10kW @ 100%, remainder @ 75%.
+            const heatingCoolingNameplate = Math.max(heatingLoad, coolingLoad);
+            const heatingCoolingDemand = heatingCoolingNameplate <= 10000
+              ? heatingCoolingNameplate
+              : 10000 + (heatingCoolingNameplate - 10000) * 0.75;
             const heatingCoolingLabel = heatingLoad >= coolingLoad ? "Heating" : "Cooling";
 
             // CEC 8-200(1)(b)(iv): appliances rated over 1500W at 25% demand factor
@@ -3454,7 +3489,7 @@ export default function EstimateDetail() {
                               <span>{coolingLoad.toLocaleString()}W</span>
                             </div>
                             <div className="flex justify-between pl-3 text-foreground">
-                              <span>Interlock: use {heatingCoolingLabel} (larger)</span>
+                              <span>{heatingCoolingLabel} demand (first 10kW @ 100%, rest @ 75%)</span>
                               <span>{heatingCoolingDemand.toLocaleString()}W</span>
                             </div>
                           </>
@@ -3673,18 +3708,31 @@ export default function EstimateDetail() {
                     </TableHeader>
                     <TableBody>
                       {services.map((service) => (
-                        <TableRow key={service.id} className="group" data-testid={`row-service-${service.id}`}>
+                        <Fragment key={service.id}>
+                        <TableRow className="group" data-testid={`row-service-${service.id}`}>
                           <TableCell>
-                            <Input
-                              className="h-7 text-sm font-medium border-none shadow-none p-0 focus-visible:ring-1 bg-transparent"
-                              defaultValue={service.name}
-                              key={`svc-name-${service.id}-${service.name}`}
-                              onBlur={(e) => {
-                                const v = e.target.value.trim();
-                                if (v && v !== service.name) updateServiceMutation.mutate({ id: service.id, name: v });
-                              }}
-                              data-testid={`input-service-name-${service.id}`}
-                            />
+                            <div className="flex items-center gap-1">
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-6 w-6 shrink-0"
+                                onClick={() => setExpandedServiceId(expandedServiceId === service.id ? null : service.id)}
+                                data-testid={`button-expand-service-${service.id}`}
+                                title="Show parts"
+                              >
+                                {expandedServiceId === service.id ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                              </Button>
+                              <Input
+                                className="h-7 text-sm font-medium border-none shadow-none p-0 focus-visible:ring-1 bg-transparent"
+                                defaultValue={service.name}
+                                key={`svc-name-${service.id}-${service.name}`}
+                                onBlur={(e) => {
+                                  const v = e.target.value.trim();
+                                  if (v && v !== service.name) updateServiceMutation.mutate({ id: service.id, name: v });
+                                }}
+                                data-testid={`input-service-name-${service.id}`}
+                              />
+                            </div>
                           </TableCell>
                           <TableCell className="text-right">
                             <Input
@@ -3728,6 +3776,18 @@ export default function EstimateDetail() {
                             </Button>
                           </TableCell>
                         </TableRow>
+                        {expandedServiceId === service.id && (
+                          <TableRow key={`${service.id}-parts`} className="bg-muted/30">
+                            <TableCell colSpan={4} className="p-3">
+                              <ServicePartsEditor
+                                key={`parts-${service.id}-${Array.isArray((service as any).items) ? (service as any).items.length : 0}`}
+                                service={service}
+                                onSave={(parts) => saveServiceItems(service.id, parts)}
+                              />
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </Fragment>
                       ))}
                     </TableBody>
                   </Table>
@@ -4889,6 +4949,73 @@ function AddSubpanelDialog({ open, onOpenChange, onAdd, isPending, existingPanel
   );
 }
 
+type ServicePart = { name: string; materialCost: number; laborHours: number; qty: number };
+
+function ServicePartsEditor({ service, onSave }: {
+  service: EstimateService;
+  onSave: (parts: ServicePart[]) => void;
+}) {
+  const normalize = (it: any): ServicePart =>
+    typeof it === "string"
+      ? { name: it, materialCost: 0, laborHours: 0, qty: 1 }
+      : { name: it?.name || "", materialCost: Number(it?.materialCost) || 0, laborHours: Number(it?.laborHours) || 0, qty: Number(it?.qty) || 1 };
+  const [parts, setParts] = useState<ServicePart[]>(() =>
+    Array.isArray((service as any).items) ? (service as any).items.map(normalize) : [],
+  );
+
+  const commit = (next: ServicePart[]) => { setParts(next); onSave(next); };
+  const patch = (i: number, p: Partial<ServicePart>) => commit(parts.map((it, idx) => idx === i ? { ...it, ...p } : it));
+  const addPart = () => commit([...parts, { name: "", materialCost: 0, laborHours: 0, qty: 1 }]);
+  const removePart = (i: number) => commit(parts.filter((_, idx) => idx !== i));
+
+  return (
+    <div className="space-y-2">
+      <div className="text-xs font-medium text-muted-foreground">Parts breakdown</div>
+      {parts.length === 0 && (
+        <div className="text-xs text-muted-foreground">No parts yet. Add the materials/labour that make up this service.</div>
+      )}
+      {parts.map((part, i) => (
+        <div key={i} className="flex items-center gap-2">
+          <Input
+            className="h-7 text-sm flex-1"
+            placeholder="Part / material"
+            defaultValue={part.name}
+            key={`pname-${i}-${part.name}`}
+            onBlur={(e) => patch(i, { name: e.target.value })}
+          />
+          <Input
+            type="number" step="1" min={0} className="h-7 text-sm w-16 text-right"
+            placeholder="Qty" defaultValue={part.qty} key={`pqty-${i}-${part.qty}`}
+            onBlur={(e) => patch(i, { qty: parseFloat(e.target.value) || 1 })}
+            title="Quantity"
+          />
+          <Input
+            type="number" step="0.01" min={0} className="h-7 text-sm w-24 text-right"
+            placeholder="$ ea" defaultValue={part.materialCost} key={`pmat-${i}-${part.materialCost}`}
+            onBlur={(e) => patch(i, { materialCost: parseFloat(e.target.value) || 0 })}
+            title="Material $ each"
+          />
+          <Input
+            type="number" step="0.25" min={0} className="h-7 text-sm w-20 text-right"
+            placeholder="hrs ea" defaultValue={part.laborHours} key={`phrs-${i}-${part.laborHours}`}
+            onBlur={(e) => patch(i, { laborHours: parseFloat(e.target.value) || 0 })}
+            title="Labour hours each"
+          />
+          <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" onClick={() => removePart(i)} title="Remove part">
+            <Trash2 className="w-3.5 h-3.5 text-destructive" />
+          </Button>
+        </div>
+      ))}
+      <Button size="sm" variant="outline" onClick={addPart} data-testid={`button-add-part-${service.id}`}>
+        <Plus className="w-3.5 h-3.5 mr-1" /> Add part
+      </Button>
+      <div className="text-[11px] text-muted-foreground pt-1">
+        Service material &amp; labour totals are calculated from these parts.
+      </div>
+    </div>
+  );
+}
+
 function AddServiceDialog({ open, onOpenChange, bundles, onAdd, isPending }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -4903,9 +5030,19 @@ function AddServiceDialog({ open, onOpenChange, bundles, onAdd, isPending }: {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (bundle) {
+      // Copy the bundle's parts into the estimate service so they can be
+      // edited/removed per-job. Bundle items may be plain strings (legacy) or
+      // objects; normalize both to { name, materialCost, laborHours, qty }.
+      const rawItems = Array.isArray((bundle as any).items) ? (bundle as any).items : [];
+      const items = rawItems.map((it: any) =>
+        typeof it === "string"
+          ? { name: it, materialCost: 0, laborHours: 0, qty: 1 }
+          : { name: it.name || "", materialCost: Number(it.materialCost) || 0, laborHours: Number(it.laborHours) || 0, qty: Number(it.qty) || 1 },
+      );
       onAdd({
         serviceBundleId: bundle.id,
         name: bundle.name,
+        items,
         materialCost: bundle.materialCost,
         laborHours: bundle.laborHours,
       });

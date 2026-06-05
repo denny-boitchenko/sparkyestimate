@@ -76,11 +76,6 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
-      <SidebarFooter className="p-4">
-        <div className="text-xs text-sidebar-foreground/40">
-          CEC 2021 Compliant
-        </div>
-      </SidebarFooter>
     </Sidebar>
   );
 }

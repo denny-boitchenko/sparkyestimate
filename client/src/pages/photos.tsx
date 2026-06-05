@@ -49,6 +49,16 @@ export default function Photos() {
     },
   });
 
+  const saveNoteMutation = useMutation({
+    mutationFn: async ({ photoId, caption }: { photoId: number; caption: string }) => {
+      await apiRequest("PATCH", `/api/projects/${selectedProject?.id}/photos/${photoId}`, { caption });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", selectedProject?.id, "photos"] });
+      toast({ title: "Note saved" });
+    },
+  });
+
   const handlePhotoUpload = async (file: File) => {
     if (!selectedProject) return;
     setUploading(true);
@@ -326,27 +336,40 @@ export default function Photos() {
             {phasePhotos(phase).length > 0 && (
               <div className="border rounded-lg divide-y">
                 {phasePhotos(phase).map(photo => (
-                  <div key={photo.id} className="flex items-center gap-3 px-4 py-3 hover:bg-muted/50">
-                    <FileImage className="w-4 h-4 text-muted-foreground shrink-0" />
-                    <span className="text-sm font-medium truncate flex-1 min-w-0">
-                      {photo.originalFilename}
-                    </span>
-                    <span className="text-xs text-muted-foreground shrink-0">
-                      {new Date(photo.createdAt).toLocaleDateString()}
-                    </span>
-                    {photo.uploadedBy && (
-                      <Badge variant="outline" className="text-[10px] h-5 px-1.5 shrink-0">
-                        {photo.uploadedBy}
-                      </Badge>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="w-7 h-7 shrink-0"
-                      onClick={() => deleteMutation.mutate(photo.id)}
-                    >
-                      <Trash2 className="w-3.5 h-3.5 text-destructive" />
-                    </Button>
+                  <div key={photo.id} className="px-4 py-3 hover:bg-muted/50">
+                    <div className="flex items-center gap-3">
+                      <FileImage className="w-4 h-4 text-muted-foreground shrink-0" />
+                      <span className="text-sm font-medium truncate flex-1 min-w-0">
+                        {photo.originalFilename}
+                      </span>
+                      <span className="text-xs text-muted-foreground shrink-0">
+                        {new Date(photo.createdAt).toLocaleDateString()}
+                      </span>
+                      {photo.uploadedBy && (
+                        <Badge variant="outline" className="text-[10px] h-5 px-1.5 shrink-0">
+                          {photo.uploadedBy}
+                        </Badge>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="w-7 h-7 shrink-0"
+                        onClick={() => deleteMutation.mutate(photo.id)}
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                      </Button>
+                    </div>
+                    <Input
+                      key={`note-${photo.id}-${photo.caption ?? ""}`}
+                      defaultValue={photo.caption ?? ""}
+                      placeholder="Add a note for this photo..."
+                      className="mt-2 h-8 text-xs"
+                      onBlur={(e) => {
+                        const v = e.target.value.trim();
+                        if (v !== (photo.caption ?? "")) saveNoteMutation.mutate({ photoId: photo.id, caption: v });
+                      }}
+                      data-testid={`input-photo-note-${photo.id}`}
+                    />
                   </div>
                 ))}
               </div>

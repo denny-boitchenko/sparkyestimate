@@ -36,6 +36,7 @@ import type { Project, Customer } from "@shared/schema";
 import { PROJECT_STATUSES, DWELLING_TYPES } from "@shared/schema";
 
 const STATUS_COLORS: Record<string, string> = {
+  pending_review: "bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300",
   draft: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
   in_progress: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
   bid_sent: "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300",
@@ -44,6 +45,7 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 const STATUS_LABELS: Record<string, string> = {
+  pending_review: "Pending Review",
   draft: "Draft",
   in_progress: "In Progress",
   bid_sent: "Bid Sent",
@@ -431,7 +433,7 @@ export default function Projects() {
   });
 
   // Sort
-  const STATUS_ORDER: Record<string, number> = { in_progress: 0, bid_sent: 1, draft: 2, won: 3, lost: 4 };
+  const STATUS_ORDER: Record<string, number> = { pending_review: -1, in_progress: 0, bid_sent: 1, draft: 2, won: 3, lost: 4 };
   const sorted = [...filtered].sort((a, b) => {
     switch (sortBy) {
       case "date_newest": return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();

@@ -13,12 +13,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { parseApiError } from "@/lib/utils";
 import {
   DollarSign, Percent, Wrench, Save, CheckCircle2, Shield,
   Plus, Pencil, Trash2, Cable, Package, Settings, Upload, Briefcase,
-  ChevronDown, ChevronRight, Search, ListTree
+  ChevronDown, ChevronRight, Search, ListTree, Users
 } from "lucide-react";
 import React, { useState, useEffect, useRef, useMemo } from "react";
+import UserAccountsTab from "@/components/user-accounts-tab";
 import type { Setting, DeviceAssembly, WireType, ComplianceDocument, SupplierImport, JobType, PartsCatalogEntry, AssemblyPart, PermitFeeSchedule } from "@shared/schema";
 import { DEVICE_CATEGORIES, PART_CATEGORIES } from "@shared/schema";
 
@@ -1826,6 +1828,48 @@ const defaultPartForm: PartFormData = {
   partNumber: "",
 };
 
+function PartSupplierPrices({ partId }: { partId: number }) {
+  const { toast } = useToast();
+  const { data: prices } = useQuery<Array<{ id: number; supplierName: string; price: number; isPreferred: boolean }>>({
+    queryKey: ["/api/parts-catalog", partId, "supplier-prices"],
+  });
+  const [supplierName, setSupplierName] = useState("");
+  const [price, setPrice] = useState("");
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/parts-catalog", partId, "supplier-prices"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/parts-catalog"] });
+  };
+  const onErr = (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" });
+  const addM = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/parts-catalog/${partId}/supplier-prices`, { supplierName: supplierName.trim(), price: parseFloat(price) || 0 }),
+    onSuccess: () => { setSupplierName(""); setPrice(""); invalidate(); }, onError: onErr,
+  });
+  const prefM = useMutation({ mutationFn: (id: number) => apiRequest("POST", `/api/part-supplier-prices/${id}/preferred`, { partId }), onSuccess: invalidate, onError: onErr });
+  const delM = useMutation({ mutationFn: (id: number) => apiRequest("DELETE", `/api/part-supplier-prices/${id}`), onSuccess: invalidate, onError: onErr });
+  const rows = prices || [];
+  return (
+    <div className="space-y-2">
+      <div className="text-xs font-medium text-muted-foreground">Supplier prices (the preferred one, or the cheapest, is used in estimates)</div>
+      {rows.length === 0 && <div className="text-xs text-muted-foreground">No supplier prices yet. Add one below, or they fill in when you import a supplier list.</div>}
+      {rows.map((r) => (
+        <div key={r.id} className="flex items-center gap-2 text-sm">
+          <span className="flex-1 truncate">{r.supplierName}</span>
+          <span className="w-20 text-right font-mono">${r.price.toFixed(2)}</span>
+          {r.isPreferred
+            ? <Badge className="bg-green-600 text-white text-[10px]">Preferred</Badge>
+            : <Button size="sm" variant="outline" className="h-6 text-[11px]" onClick={() => prefM.mutate(r.id)}>Set preferred</Button>}
+          <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => delM.mutate(r.id)}><Trash2 className="w-3.5 h-3.5 text-destructive" /></Button>
+        </div>
+      ))}
+      <div className="flex items-end gap-2 pt-1">
+        <Input value={supplierName} onChange={(e) => setSupplierName(e.target.value)} placeholder="Supplier name" className="h-8 text-xs w-44" />
+        <Input value={price} onChange={(e) => setPrice(e.target.value)} type="number" step="0.01" placeholder="$ price" className="h-8 text-xs w-28" />
+        <Button size="sm" onClick={() => addM.mutate()} disabled={!supplierName.trim() || addM.isPending}>Add</Button>
+      </div>
+    </div>
+  );
+}
+
 function PartsCatalogTab() {
   const { toast } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -1881,6 +1925,8 @@ function PartsCatalogTab() {
       toast({ title: "Error", description: err.message, variant: "destructive" });
     },
   });
+
+  const [expandedPartId, setExpandedPartId] = useState<number | null>(null);
 
   const handleInlineBlur = (id: number, field: string, newValue: string, originalValue: string | number | null | undefined) => {
     const orig = originalValue == null ? "" : String(originalValue);
@@ -1943,7 +1989,8 @@ function PartsCatalogTab() {
             </TableHeader>
             <TableBody>
               {filteredParts.length > 0 ? filteredParts.map((p) => (
-                <TableRow key={p.id} data-testid={`row-part-${p.id}`}>
+                <React.Fragment key={p.id}>
+                <TableRow data-testid={`row-part-${p.id}`}>
                   <TableCell>
                     <Input
                       key={`name-${p.id}-${p.name}`}
@@ -1988,16 +2035,35 @@ function PartsCatalogTab() {
                     />
                   </TableCell>
                   <TableCell>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      onClick={() => deleteMutation.mutate(p.id)}
-                      data-testid={`button-delete-part-${p.id}`}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-xs"
+                        onClick={() => setExpandedPartId(expandedPartId === p.id ? null : p.id)}
+                        data-testid={`button-part-suppliers-${p.id}`}
+                      >
+                        Suppliers
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => deleteMutation.mutate(p.id)}
+                        data-testid={`button-delete-part-${p.id}`}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
+                {expandedPartId === p.id && (
+                  <TableRow className="bg-muted/30">
+                    <TableCell colSpan={6} className="p-3">
+                      <PartSupplierPrices partId={p.id} />
+                    </TableCell>
+                  </TableRow>
+                )}
+                </React.Fragment>
               )) : (
                 <TableRow>
                   <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
@@ -2102,6 +2168,13 @@ function PhotosSettingsTab() {
     provider: string | null;
   }>({
     queryKey: ["/api/r2-status"],
+    // Don't refetch on window focus: it would flip the Drive section between
+    // states and remount the credential inputs, losing what the admin is typing.
+    refetchOnWindowFocus: false,
+  });
+  const { data: driveConfig } = useQuery<{ hasCredentials: boolean; clientId: string; redirectUri: string }>({
+    queryKey: ["/api/google-drive/config"],
+    refetchOnWindowFocus: false,
   });
 
   const disconnectMutation = useMutation({
@@ -2129,6 +2202,65 @@ function PhotosSettingsTab() {
   const [r2AccessKeyId, setR2AccessKeyId] = useState(sm.r2AccessKeyId || "");
   const [r2SecretKey, setR2SecretKey] = useState(sm.r2SecretKey || "");
   const [r2BucketName, setR2BucketName] = useState(sm.r2BucketName || "sparkyestimate-photos");
+  const [gClientId, setGClientId] = useState("");
+  const [gClientSecret, setGClientSecret] = useState("");
+  const [showDriveCreds, setShowDriveCreds] = useState(false);
+
+  const saveDriveCreds = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/google-drive/config", { clientId: gClientId.trim(), clientSecret: gClientSecret.trim() });
+    },
+    onSuccess: () => {
+      setGClientSecret("");
+      setShowDriveCreds(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/google-drive/config"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/r2-status"] });
+      toast({ title: "Google credentials saved", description: "Now click Connect Google Drive to authorize." });
+    },
+    onError: (err: Error) => {
+      const msg = String(err.message || "").replace(/^\d+:\s*/, "");
+      toast({ title: "Could not save credentials", description: msg || "Check the values and try again", variant: "destructive" });
+    },
+  });
+
+  function copyRedirectUri() {
+    if (driveConfig?.redirectUri) {
+      navigator.clipboard?.writeText(driveConfig.redirectUri);
+      toast({ title: "Redirect URI copied" });
+    }
+  }
+
+  const driveCredsForm = (
+    <div className="space-y-3 rounded-md border p-3 bg-muted/30">
+      <p className="text-sm font-medium">Google OAuth credentials</p>
+      <div className="space-y-1">
+        <Label className="text-xs">Authorized redirect URI (add this to your Google OAuth app)</Label>
+        <div className="flex items-center gap-2">
+          <Input readOnly value={driveConfig?.redirectUri || ""} className="font-mono text-xs" />
+          <Button type="button" variant="outline" size="sm" onClick={copyRedirectUri}>Copy</Button>
+        </div>
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor="gClientId" className="text-xs">Client ID</Label>
+        <Input id="gClientId" placeholder="xxxxx.apps.googleusercontent.com" value={gClientId} onChange={(e) => setGClientId(e.target.value)} />
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor="gClientSecret" className="text-xs">Client Secret</Label>
+        <Input id="gClientSecret" type="password" placeholder="GOCSPX-..." value={gClientSecret} onChange={(e) => setGClientSecret(e.target.value)} />
+      </div>
+      <div className="rounded bg-amber-50 dark:bg-amber-950/40 p-2 text-xs text-amber-800 dark:text-amber-300">
+        Important: in the Google Cloud console, set the OAuth consent screen to <strong>Published</strong> (not Testing). Testing mode expires the connection every 7 days. Unverified is fine for your own Drive.
+      </div>
+      <div className="flex gap-2">
+        <Button onClick={() => saveDriveCreds.mutate()} disabled={!gClientId.trim() || !gClientSecret.trim() || saveDriveCreds.isPending}>
+          {saveDriveCreds.isPending ? "Saving..." : "Save credentials"}
+        </Button>
+        {showDriveCreds && (
+          <Button variant="ghost" onClick={() => setShowDriveCreds(false)}>Cancel</Button>
+        )}
+      </div>
+    </div>
+  );
 
   useEffect(() => {
     if (settings) {
@@ -2262,6 +2394,12 @@ function PhotosSettingsTab() {
                   >
                     {disconnectMutation.isPending ? "Disconnecting..." : "Disconnect Google Drive"}
                   </Button>
+                  <div>
+                    <Button variant="ghost" size="sm" className="px-0 text-muted-foreground" onClick={() => setShowDriveCreds(v => !v)}>
+                      {showDriveCreds ? "Hide credentials" : "Edit OAuth credentials"}
+                    </Button>
+                  </div>
+                  {showDriveCreds && driveCredsForm}
                 </div>
               ) : storageStatus?.googleDriveOAuthAvailable ? (
                 <div className="space-y-3">
@@ -2272,22 +2410,26 @@ function PhotosSettingsTab() {
                     Connect your Google Drive account to store inspection photos. A &quot;SparkyEstimate Photos&quot;
                     folder will be auto-created with subfolders per project.
                   </p>
-                  <Button onClick={() => { window.location.href = "/api/google-drive/auth"; }}>
-                    Connect Google Drive
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button onClick={() => { window.location.href = "/api/google-drive/auth"; }}>
+                      Connect Google Drive
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => setShowDriveCreds(v => !v)}>
+                      {showDriveCreds ? "Hide credentials" : "Edit OAuth credentials"}
+                    </Button>
+                  </div>
+                  {showDriveCreds && driveCredsForm}
                 </div>
               ) : (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2 mb-2">
-                    <Badge variant="secondary">Not available</Badge>
+                    <Badge variant="secondary">Setup required</Badge>
                   </div>
-                  <div className="p-3 bg-muted/50 rounded-lg">
-                    <p className="text-xs text-muted-foreground">
-                      Google Drive OAuth is not configured. Set <code className="mx-1">GOOGLE_CLIENT_ID</code> and
-                      <code className="mx-1">GOOGLE_CLIENT_SECRET</code> in the <code className="ml-1">.env</code> file
-                      and restart the server.
-                    </p>
-                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Create a Google OAuth app (your admin can do this once), paste the Client ID and Secret below,
+                    then click Connect. A &quot;SparkyEstimate Photos&quot; folder is created automatically.
+                  </p>
+                  {driveCredsForm}
                 </div>
               )}
             </div>
@@ -2354,113 +2496,156 @@ function PermitsTab() {
   const { data: schedules, isLoading } = useQuery<PermitFeeSchedule[]>({
     queryKey: ["/api/permit-fee-schedules"],
   });
-  const [isEditing, setIsEditing] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [editRates, setEditRates] = useState<any>(null);
+  const [showNew, setShowNew] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newDate, setNewDate] = useState("");
 
-  const activeSchedule = useMemo(() => {
-    if (!schedules || schedules.length === 0) return null;
-    return schedules.find(s => s.isActive) || schedules[0];
-  }, [schedules]);
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["/api/permit-fee-schedules"] });
+  const onErr = (e: any) => {
+    toast({ title: "Action failed", description: parseApiError(e), variant: "destructive" });
+  };
+
+  const activeSchedule = useMemo(() => (schedules || []).find(s => s.isActive) || null, [schedules]);
 
   const saveRatesMutation = useMutation({
-    mutationFn: async ({ id, rates }: { id: number; rates: any }) => {
-      await apiRequest("PATCH", `/api/permit-fee-schedules/${id}`, { rates });
+    mutationFn: async ({ id, rates }: { id: number; rates: any }) => apiRequest("PATCH", `/api/permit-fee-schedules/${id}`, { rates }),
+    onSuccess: () => { invalidate(); setEditingId(null); setEditRates(null); toast({ title: "Rates saved" }); },
+    onError: onErr,
+  });
+  const createMutation = useMutation({
+    mutationFn: async () => {
+      const baseRates = activeSchedule?.rates || (schedules && schedules[0]?.rates) || {};
+      return apiRequest("POST", "/api/permit-fee-schedules", {
+        name: newName.trim(),
+        effectiveDate: newDate.trim(),
+        rates: JSON.parse(JSON.stringify(baseRates)),
+      });
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/permit-fee-schedules"] });
-      setIsEditing(false);
-      setEditRates(null);
-      toast({ title: "Rates saved" });
-    },
+    onSuccess: () => { invalidate(); setShowNew(false); setNewName(""); setNewDate(""); toast({ title: "Schedule created", description: "Edit its rates, then set it active." }); },
+    onError: onErr,
+  });
+  const activateMutation = useMutation({
+    mutationFn: async (id: number) => apiRequest("POST", `/api/permit-fee-schedules/${id}/activate`),
+    onSuccess: () => { invalidate(); toast({ title: "Schedule activated" }); },
+    onError: onErr,
+  });
+  const deleteMutation = useMutation({
+    mutationFn: async (id: number) => apiRequest("DELETE", `/api/permit-fee-schedules/${id}`),
+    onSuccess: () => { invalidate(); toast({ title: "Schedule deleted" }); },
+    onError: onErr,
   });
 
-  const startEditing = () => {
-    if (!activeSchedule) return;
-    setIsEditing(true);
-    setEditRates(JSON.parse(JSON.stringify(activeSchedule.rates)));
+  const startEditing = (s: PermitFeeSchedule) => {
+    setEditingId(s.id);
+    setEditRates(JSON.parse(JSON.stringify(s.rates)));
   };
 
   if (isLoading) return <Skeleton className="h-48 w-full" />;
+  const list = schedules || [];
 
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle className="text-base font-semibold flex items-center gap-2">
-            <Shield className="w-4 h-4 text-amber-500" />
-            TSBC Permit Fee Schedule
-          </CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base font-semibold flex items-center gap-2">
+              <Shield className="w-4 h-4 text-amber-500" />
+              TSBC Permit Fee Schedules
+            </CardTitle>
+            <Button size="sm" onClick={() => { setShowNew(v => !v); setNewName(""); setNewDate(""); }}>
+              <Plus className="w-3 h-3 mr-1" /> New Schedule
+            </Button>
+          </div>
         </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground mb-4">
-            Edit the active TSBC fee schedule below. These rates auto-calculate permit fees on estimates when the permit checkbox is enabled.
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Permit fees update yearly. Add a new schedule (it starts as a copy of the active one so you only edit what changed), set it active when it takes effect, and remove old ones. The active schedule auto-calculates permit fees on estimates.
           </p>
-          {!activeSchedule ? (
-            <p className="text-sm text-muted-foreground">No permit fee schedule found. Run the database seed to load TSBC rates.</p>
+
+          {showNew && (
+            <div className="flex flex-wrap items-end gap-2 rounded-md border p-3 bg-muted/30">
+              <div className="space-y-1">
+                <Label className="text-xs">Name</Label>
+                <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="TSBC 2027" className="w-40" />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Effective date</Label>
+                <Input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)} className="w-44" />
+              </div>
+              <Button onClick={() => createMutation.mutate()} disabled={!newName.trim() || !newDate.trim() || createMutation.isPending}>
+                {createMutation.isPending ? "Creating..." : "Create (copy of active)"}
+              </Button>
+              <Button variant="ghost" onClick={() => setShowNew(false)}>Cancel</Button>
+            </div>
+          )}
+
+          {list.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No permit fee schedule found. Run the database seed to load TSBC rates, or add one above.</p>
           ) : (
-            <Card className="border-primary">
-              <CardHeader className="pb-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <CardTitle className="text-sm">{activeSchedule.name}</CardTitle>
-                    <Badge variant="default" className="text-xs">Active</Badge>
-                    <span className="text-xs text-muted-foreground">Effective: {activeSchedule.effectiveDate}</span>
-                  </div>
-                  <div className="flex gap-2">
-                    {isEditing ? (
-                      <>
-                        <Button size="sm" variant="outline" onClick={() => { setIsEditing(false); setEditRates(null); }}>
-                          Cancel
-                        </Button>
-                        <Button size="sm" onClick={() => saveRatesMutation.mutate({ id: activeSchedule.id, rates: editRates })}
-                          disabled={saveRatesMutation.isPending}>
-                          <Save className="w-3 h-3 mr-1" />
-                          {saveRatesMutation.isPending ? "Saving..." : "Save"}
-                        </Button>
-                      </>
-                    ) : (
-                      <Button size="sm" variant="outline" onClick={startEditing}>
-                        <Pencil className="w-3 h-3 mr-1" />
-                        Edit Rates
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {(() => {
-                  const rates = isEditing ? editRates : (activeSchedule.rates as any);
-                  return (
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                      {rates?.residential_service && (
-                        <EditableRateTable
-                          category="residential_service"
-                          label="Single Family (by Amps)"
-                          rates={rates.residential_service}
-                          onChange={(updated) => isEditing && setEditRates({ ...editRates, residential_service: updated })}
-                        />
-                      )}
-                      {rates?.service_upgrade && (
-                        <EditableRateTable
-                          category="service_upgrade"
-                          label="Service Upgrade (by Amps)"
-                          rates={rates.service_upgrade}
-                          onChange={(updated) => isEditing && setEditRates({ ...editRates, service_upgrade: updated })}
-                        />
-                      )}
-                      {rates?.other && (
-                        <EditableRateTable
-                          category="other"
-                          label="Other (by Job Value)"
-                          rates={rates.other}
-                          onChange={(updated) => isEditing && setEditRates({ ...editRates, other: updated })}
-                        />
-                      )}
+            list.map((s) => {
+              const isEditing = editingId === s.id;
+              const showRates = isEditing || s.isActive;
+              const rates = isEditing ? editRates : (s.rates as any);
+              return (
+                <Card key={s.id} className={s.isActive ? "border-primary" : ""}>
+                  <CardHeader className="pb-2">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <div className="flex items-center gap-2">
+                        <CardTitle className="text-sm">{s.name}</CardTitle>
+                        {s.isActive && <Badge variant="default" className="text-xs">Active</Badge>}
+                        <span className="text-xs text-muted-foreground">Effective: {s.effectiveDate}</span>
+                      </div>
+                      <div className="flex gap-2">
+                        {isEditing ? (
+                          <>
+                            <Button size="sm" variant="outline" onClick={() => { setEditingId(null); setEditRates(null); }}>Cancel</Button>
+                            <Button size="sm" onClick={() => saveRatesMutation.mutate({ id: s.id, rates: editRates })} disabled={saveRatesMutation.isPending}>
+                              <Save className="w-3 h-3 mr-1" />{saveRatesMutation.isPending ? "Saving..." : "Save"}
+                            </Button>
+                          </>
+                        ) : (
+                          <>
+                            <Button size="sm" variant="outline" onClick={() => startEditing(s)}>
+                              <Pencil className="w-3 h-3 mr-1" /> Edit Rates
+                            </Button>
+                            {!s.isActive && (
+                              <Button size="sm" variant="outline" onClick={() => activateMutation.mutate(s.id)} disabled={activateMutation.isPending}>
+                                Set Active
+                              </Button>
+                            )}
+                            {!s.isActive && (
+                              <Button size="sm" variant="ghost" onClick={() => { if (confirm(`Delete schedule "${s.name}"?`)) deleteMutation.mutate(s.id); }}>
+                                <Trash2 className="w-3 h-3 text-destructive" />
+                              </Button>
+                            )}
+                          </>
+                        )}
+                      </div>
                     </div>
-                  );
-                })()}
-              </CardContent>
-            </Card>
+                  </CardHeader>
+                  {showRates && (
+                    <CardContent>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        {rates?.residential_service && (
+                          <EditableRateTable category="residential_service" label="Single Family (by Amps)" rates={rates.residential_service}
+                            onChange={(u) => isEditing && setEditRates({ ...editRates, residential_service: u })} />
+                        )}
+                        {rates?.service_upgrade && (
+                          <EditableRateTable category="service_upgrade" label="Service Upgrade (by Amps)" rates={rates.service_upgrade}
+                            onChange={(u) => isEditing && setEditRates({ ...editRates, service_upgrade: u })} />
+                        )}
+                        {rates?.other && (
+                          <EditableRateTable category="other" label="Other (by Job Value)" rates={rates.other}
+                            onChange={(u) => isEditing && setEditRates({ ...editRates, other: u })} />
+                        )}
+                      </div>
+                    </CardContent>
+                  )}
+                </Card>
+              );
+            })
           )}
         </CardContent>
       </Card>
@@ -2562,6 +2747,10 @@ export default function SettingsPage() {
             <Upload className="w-4 h-4 mr-2" />
             Photos
           </TabsTrigger>
+          <TabsTrigger value="user-accounts" data-testid="tab-user-accounts">
+            <Users className="w-4 h-4 mr-2" />
+            User Accounts
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="general">
@@ -2603,6 +2792,10 @@ export default function SettingsPage() {
 
         <TabsContent value="photos">
           <PhotosSettingsTab />
+        </TabsContent>
+
+        <TabsContent value="user-accounts">
+          <UserAccountsTab />
         </TabsContent>
       </Tabs>
     </div>

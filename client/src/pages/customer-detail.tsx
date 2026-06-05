@@ -434,8 +434,29 @@ export default function CustomerDetail() {
               </CardContent>
             </Card>
           ) : (
-            <div className="space-y-2">
-              {customerInvoices.map((invoice) => {
+            <div className="space-y-5">
+              {([
+                { key: "service", label: "Service" },
+                { key: "roughin", label: "Rough-In" },
+                { key: "finish", label: "Finish" },
+                { key: "__general__", label: "General / Full Invoices" },
+              ] as const).map(group => {
+                const groupInvoices = customerInvoices.filter(i =>
+                  group.key === "__general__"
+                    ? !i.phase || !["service", "roughin", "finish"].includes(i.phase as string)
+                    : i.phase === group.key,
+                );
+                if (groupInvoices.length === 0) return null;
+                const groupTotal = groupInvoices.reduce((s, i) => s + (i.total || 0), 0);
+                return (
+                  <div key={group.key} className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{group.label}</h4>
+                      <span className="text-xs text-muted-foreground">
+                        ${groupTotal.toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
+              {groupInvoices.map((invoice) => {
                 const linkedProject = (allProjects || []).find(p => p.id === invoice.projectId);
                 return (
                   <Link key={invoice.id} href={`/invoices/${invoice.id}`}>
@@ -473,6 +494,9 @@ export default function CustomerDetail() {
                       </CardContent>
                     </Card>
                   </Link>
+                );
+              })}
+                  </div>
                 );
               })}
             </div>
