@@ -39,6 +39,13 @@ const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
   { value: "overdue", label: "Overdue" },
 ];
 
+const STATUS_TRIGGER_CLASS: Record<string, string> = {
+  draft: "bg-muted text-foreground",
+  sent: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 border-blue-200",
+  paid: "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 border-green-200",
+  overdue: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300 border-red-200",
+};
+
 function InvoiceStatusBadge({ status }: { status: string }) {
   switch (status) {
     case "draft":
@@ -66,10 +73,30 @@ export default function Invoices() {
   const [paymentMethod, setPaymentMethod] = useState<string>("e-transfer");
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState("date_newest");
+  const [newInvoiceOpen, setNewInvoiceOpen] = useState(false);
+  const [newInvoiceEstimateId, setNewInvoiceEstimateId] = useState("");
   const { toast } = useToast();
 
   const { data: invoices, isLoading } = useQuery<Invoice[]>({
     queryKey: ["/api/invoices"],
+  });
+
+  const { data: estimates } = useQuery<Array<{ id: number; name: string; projectId: number }>>({
+    queryKey: ["/api/estimates"],
+  });
+
+  const createInvoiceMutation = useMutation({
+    mutationFn: async (estimateId: number) => {
+      const res = await apiRequest("POST", `/api/estimates/${estimateId}/convert-to-invoice`, { mode: "by_phase" });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      setNewInvoiceOpen(false);
+      setNewInvoiceEstimateId("");
+      toast({ title: "Invoice created from estimate" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
   const { data: projects } = useQuery<Project[]>({
@@ -177,6 +204,9 @@ export default function Invoices() {
       <div className="flex items-center gap-3 flex-wrap">
         <h1 className="text-2xl font-bold tracking-tight" data-testid="text-invoices-title">Invoices</h1>
         <Badge variant="secondary" data-testid="badge-invoice-count">{allInvoices.length}</Badge>
+        <Button className="ml-auto" onClick={() => setNewInvoiceOpen(true)} data-testid="button-new-invoice">
+          <FileText className="w-4 h-4 mr-2" /> New Invoice from Estimate
+        </Button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -337,7 +367,26 @@ export default function Invoices() {
                         <span className="text-sm font-medium">{formatCurrency(invoice.total)}</span>
                       </TableCell>
                       <TableCell>
-                        <InvoiceStatusBadge status={getEffectiveStatus(invoice)} />
+                        <Select
+                          value={invoice.status}
+                          onValueChange={(v) => {
+                            if (v === "paid") { setPayTarget(invoice); setPaymentMethod("e-transfer"); }
+                            else updateStatusMutation.mutate({ id: invoice.id, status: v, paymentDate: null, paymentMethod: null });
+                          }}
+                        >
+                          <SelectTrigger
+                            className={`h-7 w-[108px] text-xs font-medium ${STATUS_TRIGGER_CLASS[getEffectiveStatus(invoice)] || ""}`}
+                            data-testid={`select-status-${invoice.id}`}
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="draft">Draft</SelectItem>
+                            <SelectItem value="sent">Sent</SelectItem>
+                            <SelectItem value="paid">Paid</SelectItem>
+                            <SelectItem value="overdue">Overdue</SelectItem>
+                          </SelectContent>
+                        </Select>
                       </TableCell>
                       <TableCell>
                         {invoice.status === "paid" && (invoice as any).paymentMethod ? (
@@ -397,6 +446,47 @@ export default function Invoices() {
           </CardContent>
         </Card>
       )}
+
+      <Dialog open={newInvoiceOpen} onOpenChange={setNewInvoiceOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>New Invoice from Estimate</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Estimate</Label>
+              <Select value={newInvoiceEstimateId} onValueChange={setNewInvoiceEstimateId}>
+                <SelectTrigger data-testid="select-new-invoice-estimate">
+                  <SelectValue placeholder="Pick an estimate..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {(estimates || []).map(est => {
+                    const proj = (projects || []).find(p => p.id === est.projectId);
+                    return (
+                      <SelectItem key={est.id} value={String(est.id)}>
+                        {proj ? `${proj.name} — ` : ""}{est.name}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Pulls the estimate's numbers and splits the invoice into Service / Rough-in / Finish.
+              </p>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setNewInvoiceOpen(false)}>Cancel</Button>
+              <Button
+                onClick={() => newInvoiceEstimateId && createInvoiceMutation.mutate(Number(newInvoiceEstimateId))}
+                disabled={!newInvoiceEstimateId || createInvoiceMutation.isPending}
+                data-testid="button-create-invoice"
+              >
+                {createInvoiceMutation.isPending ? "Creating..." : "Create Invoice"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <AlertDialogContent>

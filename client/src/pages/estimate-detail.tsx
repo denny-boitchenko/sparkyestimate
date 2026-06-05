@@ -650,46 +650,61 @@ export default function EstimateDetail() {
       // Permit as separate line
       const headerColor = [44, 82, 130]; // Blue instead of grey
       const serviceRows: any[] = [];
-      let servicesSubtotal = 0;
 
-      // All device line items → single "Rough In/Finishing" line
-      if (data.lineItems && data.lineItems.length > 0) {
-        const deviceTotal = data.lineItems.reduce((s: number, i: any) => s + (i.total || 0), 0);
-        servicesSubtotal += deviceTotal;
+      // Raw (cost) work totals before markup/overhead/profit.
+      const deviceRaw = (data.lineItems && data.lineItems.length > 0)
+        ? data.lineItems.reduce((s: number, i: any) => s + (i.total || 0), 0) : 0;
+      const serviceRaw = (data.services || []).reduce((s: number, svc: any) => s + (svc.total || 0), 0);
+
+      // Permit + handling + misc are pass-through (no markup), shown separately.
+      let pdfPermitFee = estimate?.includePermit && permitFeeData?.fee ? permitFeeData.fee : 0;
+      const pdfHandlingFee = estimate?.includePermit ? ((estimate as any)?.permitHandlingFee || 0) : 0;
+      const pdfMisc = (data.summary as any)?.miscExpenses || (estimate as any)?.miscExpenses || 0;
+
+      // Bake markup + overhead + profit into the displayed work lines so the
+      // client total equals the real grand total (margin hidden, not itemized).
+      const rawWork = deviceRaw + serviceRaw;
+      const workTarget = grandTotal - pdfPermitFee - pdfHandlingFee - pdfMisc;
+      const scale = rawWork > 0 ? workTarget / rawWork : 1;
+
+      let servicesSubtotal = 0;
+      if (deviceRaw > 0) {
+        const v = deviceRaw * scale;
+        servicesSubtotal += v;
         serviceRows.push([
           { content: "Rough In/Finishing - Material & Labor", styles: { fontStyle: "normal" as const, fontSize: 9 } },
-          { content: `$${deviceTotal.toFixed(2)}`, styles: { halign: "right" as const, fontSize: 9 } }
+          { content: `$${v.toFixed(2)}`, styles: { halign: "right" as const, fontSize: 9 } }
         ]);
       }
-
-      // Each service as its own line (panel, meter base, etc.)
       if (data.services && data.services.length > 0) {
         for (const svc of data.services) {
-          const svcTotal = svc.total || 0;
-          servicesSubtotal += svcTotal;
+          const v = (svc.total || 0) * scale;
+          servicesSubtotal += v;
           serviceRows.push([
             { content: svc.name, styles: { fontStyle: "normal" as const, fontSize: 9 } },
-            { content: `$${svcTotal.toFixed(2)}`, styles: { halign: "right" as const, fontSize: 9 } }
+            { content: `$${v.toFixed(2)}`, styles: { halign: "right" as const, fontSize: 9 } }
           ]);
         }
       }
-
-      // Permit fee as a line item in the table
-      let pdfPermitFee = 0;
-      if (estimate?.includePermit && permitFeeData?.fee) {
-        pdfPermitFee = permitFeeData.fee;
+      // Permit / handling / misc lines (pass-through)
+      if (pdfPermitFee > 0) {
         serviceRows.push([
           { content: "Electrical Permit (TSBC)", styles: { fontStyle: "normal" as const, fontSize: 9 } },
           { content: `$${pdfPermitFee.toFixed(2)}`, styles: { halign: "right" as const, fontSize: 9 } }
         ]);
       }
-      const pdfHandlingFee = estimate?.includePermit ? ((estimate as any)?.permitHandlingFee || 0) : 0;
       if (pdfHandlingFee > 0) {
         serviceRows.push([
           { content: "Permit Handling Fee", styles: { fontStyle: "normal" as const, fontSize: 9 } },
           { content: `$${pdfHandlingFee.toFixed(2)}`, styles: { halign: "right" as const, fontSize: 9 } }
         ]);
         pdfPermitFee += pdfHandlingFee;
+      }
+      if (pdfMisc > 0) {
+        serviceRows.push([
+          { content: "Misc / Expenses", styles: { fontStyle: "normal" as const, fontSize: 9 } },
+          { content: `$${pdfMisc.toFixed(2)}`, styles: { halign: "right" as const, fontSize: 9 } }
+        ]);
       }
 
       if (serviceRows.length > 0) {
@@ -715,8 +730,8 @@ export default function EstimateDetail() {
 
       let finalY = (doc as any).lastAutoTable?.finalY || startY + 20;
 
-      if (servicesSubtotal === 0) servicesSubtotal = grandTotal / (1 + gstRate);
-      const subtotalWithPermit = servicesSubtotal + pdfPermitFee;
+      // Subtotal now equals the real pre-tax grand total (work incl. margin + permit + misc).
+      const subtotalWithPermit = servicesSubtotal + pdfPermitFee + pdfMisc;
 
       // Summary box (right-aligned)
       finalY += 10;

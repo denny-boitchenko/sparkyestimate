@@ -3897,6 +3897,15 @@ Return ONLY valid JSON:
       const invLaborHoursOverride = (estimate as any).laborHoursOverride;
       const isFullInvoiceScope = !itemIds && !serviceIds;
 
+      // Global labour scale so invoices (full OR by-phase) match the estimate's
+      // effective hours: manual override wins, else job-type multiplier. Applied
+      // uniformly to every item so the override is distributed proportionally.
+      const allRawHours = allItems.reduce((sum, it) => sum + it.quantity * it.laborHours, 0);
+      const effectiveTotalHours = (invLaborHoursOverride !== null && invLaborHoursOverride !== undefined)
+        ? Number(invLaborHoursOverride)
+        : allRawHours * invLaborMultiplier;
+      const labourScale = allRawHours > 0 ? effectiveTotalHours / allRawHours : 1;
+
       // Helper: calculate raw cost for a set of items (before global markup/overhead)
       const calcItemsCost = (itemSet: typeof items) => {
         const matCost = itemSet.reduce((sum, item) => {
@@ -3905,11 +3914,7 @@ Return ONLY valid JSON:
           return sum + cost + markup;
         }, 0);
         const rawHours = itemSet.reduce((sum, item) => sum + item.quantity * item.laborHours, 0);
-        // Full invoice with a manual hours override uses it; otherwise apply the job-type multiplier.
-        const effHours = (isFullInvoiceScope && invLaborHoursOverride !== null && invLaborHoursOverride !== undefined)
-          ? Number(invLaborHoursOverride)
-          : rawHours * invLaborMultiplier;
-        const laborCost = effHours * estimate.laborRate;
+        const laborCost = rawHours * estimate.laborRate * labourScale;
         const wireCost = itemSet.reduce((sum, item) => {
           const costPerFt = wireCostMap.get(item.wireType || "") || 0;
           return sum + item.quantity * item.wireFootage * costPerFt;
