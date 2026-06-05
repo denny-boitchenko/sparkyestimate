@@ -4247,6 +4247,9 @@ Return ONLY valid JSON:
         const count = await storage.countReceipts();
         body.receiptNumber = `REC-${String(count + 1).padStart(4, "0")}`;
       }
+      // paymentDate arrives as an ISO string from the client; the timestamp
+      // column expects a Date. Coerce (default to now if missing/blank).
+      body.paymentDate = body.paymentDate ? new Date(body.paymentDate) : new Date();
 
       const parsed = insertReceiptSchema.safeParse(body);
       if (!parsed.success) return res.status(400).json({ message: parsed.error.issues.map(i => i.message).join(", ") });
