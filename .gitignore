@@ -12,3 +12,7 @@ vite.config.ts.*
 .config/
 migrations/
 uploads/
+.gstack/
+
+.empirica/
+.empirica_reflex_logs/

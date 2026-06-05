@@ -130,5 +130,31 @@ npm run check      # TypeScript type checking
 
 ## Environment Variables (.env)
 - `DATABASE_URL` — PostgreSQL connection string (required)
-- `GOOGLE_GENERATIVE_AI_API_KEY` — Gemini API key (required for AI analysis)
-- `SESSION_SECRET` — Express session secret
+- `GEMINI_API_KEY` — Gemini API key (required for AI analysis)
+- `GEMINI_MODEL` — optional override; defaults to `gemini-2.5-flash`
+- `SESSION_SECRET` — Express session secret (also derives the credential encryption key — set a strong value in prod)
+- `ADMIN_USERNAME` / `ADMIN_PASSWORD` — first-run admin seed (random password generated + logged once if unset)
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` — optional; Drive OAuth can also be set from the UI (Settings → Photos)
+
+## Auth & Security (added 2026-06-05)
+- `server/auth.ts` wires sessions (express-session + connect-pg-simple), bcrypt, and the route guards. `setupAuth(app)` runs at the top of `registerRoutes`, BEFORE business routes, so the guard covers them.
+- `requireAuth` protects every `/api/*` except: `/api/auth/login|logout|me` and `/api/employee-login`. `requireAdmin` requires a user session with `role === "admin"` (employee PIN sessions are rejected).
+- Employee PIN login sets `req.session.employeeId`; the guard accepts admin OR employee sessions so the `/employee` portal keeps working.
+- `users` table: roles `admin` | `estimator`. Manage via Settings → User Accounts (admin only). Guards prevent deleting yourself or the last active admin.
+- Credentials/secrets at rest use `server/crypto.ts` (AES-256-GCM, key from `SESSION_SECRET`). Google Drive client secret is stored encrypted in `settings`.
+- Production needs HTTPS (cookie is `secure`; `trust proxy` is set). CSP is intentionally off in helmet — tune per deployment.
+
+## Gemini analysis — MUST-KNOW gotchas
+- Use the `GEMINI_MODEL` constant in `routes.ts`, never hardcode a model. `gemini-2.0-flash` is retired (404).
+- `gemini-2.5-flash` is a THINKING model. ALWAYS pass `config.thinkingConfig = { thinkingBudget: 0 }` or thinking eats `maxOutputTokens`, the JSON truncates (finishReason MAX_TOKENS), and analysis silently returns 0 rooms.
+
+## CEC accuracy — NOT a RAG system
+- The LLM does room/symbol PERCEPTION only. CEC compliance is a deterministic rules engine: `cec-devices.ts` (device generation) + `cec-rules.ts` (wire/circuit/demand tables), with hardcoded clause citations. Device quantities are calibrated from real BC projects.
+- Uploaded CEC documents (Settings → CEC) are REFERENCE STORAGE ONLY — never injected into any prompt. Do not assume the model knows the code; it doesn't.
+
+## Tooling note
+- `npm run check` (tsc) has pre-existing drizzle-zod errors (boolean→never). The app runs via `tsx` (types stripped). Verify changes by running, not by tsc.
+- **DANGER: `npm run db:push` wants to DROP the `session` table.** That table is created at runtime by connect-pg-simple and is NOT in `shared/schema.ts`, so drizzle-kit push sees it as "extra" and offers to remove it. NEVER accept the "remove table" prompt — it would wipe all login sessions. For additive schema changes (new column), prefer a manual `ALTER TABLE ... ADD COLUMN IF NOT EXISTS ...` instead. (Long-term fix: model the `session` table in schema.ts.)
+
+## Field job intake (employee-created jobs)
+- Employees can create a job from the portal: `POST /api/employee-jobs` (employee session) → creates a project with `status = "pending_review"` and `createdByEmployeeId`, and auto-assigns the creator. Has a duplicate guard (rejects same name+address, normalized). `pending_review` is in `PROJECT_STATUSES` and surfaces in the admin Projects list (purple badge, sorted first). Admin promotes it by assigning a customer and changing status.
