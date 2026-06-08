@@ -1385,17 +1385,6 @@ export default function EstimateDetail() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
           <CardTitle className="text-base font-semibold">Rates & Markups</CardTitle>
-          <div className="flex items-center gap-2">
-            <Checkbox
-              id="include-permit"
-              checked={estimate.includePermit}
-              onCheckedChange={(checked) => updateEstimateMutation.mutate({ includePermit: !!checked } as any)}
-              data-testid="checkbox-include-permit"
-            />
-            <label htmlFor="include-permit" className="text-sm text-muted-foreground cursor-pointer select-none">
-              Include permit fee
-            </label>
-          </div>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
