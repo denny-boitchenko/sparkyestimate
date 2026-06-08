@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-06-08 — UI cleanup (simple / clean / professional)
+
+- **One shared `StatStrip`** replaces the repeated icon-chip metric-card grids on the dashboard, estimate, project financials, and invoices pages. It's a single cohesive bordered strip split by hairline dividers (not N identical decorated cards), with consistent baseline alignment and no decorative icon chips.
+- **Color is now semantic, not decorative.** Dollar/stat numbers are neutral by default; green is reserved for money received (Paid), amber for money owed (Outstanding/attention), red for a negative margin. The estimate Grand Total uses the brand accent.
+- **Tab bars no longer break.** The estimate tab row used `flex-wrap`, which orphaned "AI Analysis" centered on its own line; settings tabs were cut off. Both now scroll horizontally on one line.
+- **Flattened a nested card** in the project Billing section (the per-estimate box no longer sits as a card-inside-a-card; estimates separate with a hairline).
+- **Estimate permit tile fixed** — the "include permit fee" checkbox moved out of the cramped stat tile into the Rates & Markups header; the tile now shows the fee cleanly with its full schedule label.
+
 ## 2026-06-08 — Security hardening + billing single-source-of-truth
 
 ### Security

@@ -2710,7 +2710,7 @@ export default function SettingsPage() {
       </div>
 
       <Tabs defaultValue="general">
-        <TabsList data-testid="tabs-settings">
+        <TabsList data-testid="tabs-settings" className="w-full justify-start overflow-x-auto">
           <TabsTrigger value="general" data-testid="tab-general">
             <Settings className="w-4 h-4 mr-2" />
             General

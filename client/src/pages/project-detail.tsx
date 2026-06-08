@@ -26,9 +26,12 @@ import {
   FolderOpen, FileImage, FolderPlus, FolderX, Pencil, Check, X,
   DollarSign, TrendingUp, TrendingDown, Users, Clock
 } from "lucide-react";
+import { StatStrip } from "@/components/stat-strip";
 import type { Project, Estimate, Customer, ProjectPhoto, Invoice } from "@shared/schema";
 
 type PhotoWithUrl = ProjectPhoto & { downloadUrl: string | null; uploadedBy?: string };
+
+const money = (n: number) => "$" + n.toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 type EstimateBilling = {
   estimateId: number;
@@ -581,95 +584,16 @@ export default function ProjectDetail() {
         </TabsContent>
 
         <TabsContent value="financials" className="space-y-4 mt-4">
-          {/* Summary Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-            <Card>
-              <CardContent className="pt-4">
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center justify-center w-9 h-9 rounded-md bg-primary/10 dark:bg-primary/20 flex-shrink-0">
-                    <DollarSign className="w-4 h-4 text-primary" />
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground">Invoiced Total</p>
-                    <p className="text-lg font-semibold" data-testid="text-invoiced-total">
-                      ${(financials?.invoicedTotal || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="pt-4">
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center justify-center w-9 h-9 rounded-md bg-emerald-500/10 dark:bg-emerald-500/20 flex-shrink-0">
-                    <DollarSign className="w-4 h-4 text-emerald-500" />
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground">Paid by Customer</p>
-                    <p className="text-lg font-semibold text-emerald-600 dark:text-emerald-400" data-testid="text-paid-total">
-                      ${(financials?.paidTotal || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="pt-4">
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center justify-center w-9 h-9 rounded-md bg-amber-500/10 dark:bg-amber-500/20 flex-shrink-0">
-                    <DollarSign className="w-4 h-4 text-amber-500" />
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground">Outstanding</p>
-                    <p className="text-lg font-semibold text-amber-600 dark:text-amber-400" data-testid="text-outstanding">
-                      ${(financials?.outstanding || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="pt-4">
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center justify-center w-9 h-9 rounded-md bg-violet-500/10 dark:bg-violet-500/20 flex-shrink-0">
-                    <Clock className="w-4 h-4 text-violet-500" />
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground">Labour Cost</p>
-                    <p className="text-lg font-semibold" data-testid="text-labour-cost">
-                      ${(financials?.labourCost || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="pt-4">
-                <div className="flex items-center gap-3">
-                  <div className={`flex items-center justify-center w-9 h-9 rounded-md flex-shrink-0 ${
-                    (financials?.margin || 0) >= 0
-                      ? "bg-emerald-500/10 dark:bg-emerald-500/20"
-                      : "bg-red-500/10 dark:bg-red-500/20"
-                  }`}>
-                    {(financials?.margin || 0) >= 0
-                      ? <TrendingUp className="w-4 h-4 text-emerald-500" />
-                      : <TrendingDown className="w-4 h-4 text-red-500" />
-                    }
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground">Margin</p>
-                    <p className={`text-lg font-semibold ${
-                      (financials?.margin || 0) >= 0
-                        ? "text-emerald-600 dark:text-emerald-400"
-                        : "text-red-600 dark:text-red-400"
-                    }`} data-testid="text-margin">
-                      ${(financials?.margin || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+          {/* Summary */}
+          <StatStrip
+            stats={[
+              { label: "Invoiced Total", value: money(financials?.invoicedTotal || 0), testId: "text-invoiced-total" },
+              { label: "Paid by Customer", value: money(financials?.paidTotal || 0), tone: "positive", testId: "text-paid-total" },
+              { label: "Outstanding", value: money(financials?.outstanding || 0), tone: (financials?.outstanding || 0) > 0 ? "attention" : "default", testId: "text-outstanding" },
+              { label: "Labour Cost", value: money(financials?.labourCost || 0), testId: "text-labour-cost" },
+              { label: "Margin", value: money(financials?.margin || 0), tone: (financials?.margin || 0) >= 0 ? "positive" : "negative", testId: "text-margin" },
+            ]}
+          />
 
           {/* Billing Hub: estimate baseline → billed vs remaining → create invoices */}
           <Card>
@@ -693,7 +617,7 @@ export default function ProjectDetail() {
                 financials.estimateBreakdown.map((est) => {
                   const pct = est.estimateTotal > 0 ? Math.min(100, (est.billed / est.estimateTotal) * 100) : 0;
                   return (
-                    <div key={est.estimateId} className="rounded-lg border p-4 space-y-3">
+                    <div key={est.estimateId} className="space-y-3 [&:not(:first-child)]:border-t [&:not(:first-child)]:pt-4">
                       <div className="flex flex-wrap items-start justify-between gap-2">
                         <div>
                           <Link href={`/estimates/${est.estimateId}`} className="font-medium hover:underline">

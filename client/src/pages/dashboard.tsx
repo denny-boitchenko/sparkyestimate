@@ -8,31 +8,11 @@ import {
   FolderOpen, Calculator, Clock, DollarSign,
   Plus, ArrowRight, Zap, CheckCircle2, Send, FileText
 } from "lucide-react";
+import { StatStrip } from "@/components/stat-strip";
 import type { Project, Estimate, Invoice } from "@shared/schema";
 
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD" }).format(amount);
-}
-
-function StatCard({ title, value, icon: Icon, description, color }: {
-  title: string; value: string | number; icon: any; description: string; color: string;
-}) {
-  return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-        <CardTitle className="text-sm font-medium text-muted-foreground">{title}</CardTitle>
-        <div className={`flex items-center justify-center w-9 h-9 rounded-md ${color}`}>
-          <Icon className="w-4 h-4" />
-        </div>
-      </CardHeader>
-      <CardContent>
-        <div className="text-2xl font-bold" data-testid={`stat-${title.toLowerCase().replace(/\s/g, "-")}`}>
-          {value}
-        </div>
-        <p className="text-xs text-muted-foreground mt-1">{description}</p>
-      </CardContent>
-    </Card>
-  );
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -113,82 +93,23 @@ export default function Dashboard() {
         </Link>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          title="Total Projects"
-          value={totalProjects}
-          icon={FolderOpen}
-          description="All time projects"
-          color="bg-primary/10 text-primary dark:bg-primary/20"
-        />
-        <StatCard
-          title="Active"
-          value={activeProjects}
-          icon={Clock}
-          description="Currently in progress"
-          color="bg-chart-2/10 text-chart-2 dark:bg-chart-2/20"
-        />
-        <StatCard
-          title="Bids Sent"
-          value={bidsSent}
-          icon={Send}
-          description="Awaiting response"
-          color="bg-chart-4/10 text-chart-4 dark:bg-chart-4/20"
-        />
-        <StatCard
-          title="Won"
-          value={wonProjects}
-          icon={CheckCircle2}
-          description="Successfully won"
-          color="bg-chart-3/10 text-chart-3 dark:bg-chart-3/20"
-        />
-      </div>
+      <StatStrip
+        stats={[
+          { label: "Total Projects", value: String(totalProjects), sub: "All time", testId: "stat-total-projects" },
+          { label: "Active", value: String(activeProjects), sub: "In progress", testId: "stat-active" },
+          { label: "Bids Sent", value: String(bidsSent), sub: "Awaiting response", testId: "stat-bids-sent" },
+          { label: "Won", value: String(wonProjects), sub: "Successfully won", testId: "stat-won" },
+        ]}
+      />
 
       {allInvoices.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Total Invoiced</CardTitle>
-              <DollarSign className="w-4 h-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <p className="text-2xl font-bold" data-testid="stat-total-invoiced">
-                {formatCurrency(totalInvoiced)}
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                {allInvoices.length} invoice{allInvoices.length !== 1 ? "s" : ""}
-              </p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Paid</CardTitle>
-              <CheckCircle2 className="w-4 h-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <p className="text-2xl font-bold text-chart-3" data-testid="stat-total-paid">
-                {formatCurrency(totalPaid)}
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                {allInvoices.filter(i => i.status === "paid").length} paid
-              </p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Outstanding</CardTitle>
-              <Clock className="w-4 h-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <p className={`text-2xl font-bold ${totalOutstanding > 0 ? "text-chart-5" : ""}`} data-testid="stat-total-outstanding">
-                {formatCurrency(totalOutstanding)}
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                {allInvoices.filter(i => i.status !== "paid").length} unpaid
-              </p>
-            </CardContent>
-          </Card>
-        </div>
+        <StatStrip
+          stats={[
+            { label: "Total Invoiced", value: formatCurrency(totalInvoiced), sub: `${allInvoices.length} invoice${allInvoices.length !== 1 ? "s" : ""}`, testId: "stat-total-invoiced" },
+            { label: "Paid", value: formatCurrency(totalPaid), tone: "positive", sub: `${allInvoices.filter(i => i.status === "paid").length} paid`, testId: "stat-total-paid" },
+            { label: "Outstanding", value: formatCurrency(totalOutstanding), tone: totalOutstanding > 0 ? "attention" : "default", sub: `${allInvoices.filter(i => i.status !== "paid").length} unpaid`, testId: "stat-total-outstanding" },
+          ]}
+        />
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

@@ -26,6 +26,7 @@ import { Label } from "@/components/ui/label";
 import { FileText, DollarSign, Clock, CheckCircle, MoreHorizontal, Send, Trash2, Users, Search, ArrowUpDown, CreditCard, Receipt } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { StatStrip } from "@/components/stat-strip";
 import type { Invoice, Project, Customer } from "@shared/schema";
 import { PAYMENT_METHODS } from "@shared/schema";
 
@@ -209,35 +210,13 @@ export default function Invoices() {
         </Button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Card data-testid="card-total-invoiced">
-          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Total Invoiced</CardTitle>
-            <FileText className="w-4 h-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold" data-testid="text-total-invoiced">{formatCurrency(totalInvoiced)}</p>
-          </CardContent>
-        </Card>
-        <Card data-testid="card-total-paid">
-          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Total Paid</CardTitle>
-            <CheckCircle className="w-4 h-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold text-green-600 dark:text-green-400" data-testid="text-total-paid">{formatCurrency(totalPaid)}</p>
-          </CardContent>
-        </Card>
-        <Card data-testid="card-total-outstanding">
-          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Outstanding</CardTitle>
-            <Clock className="w-4 h-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold" data-testid="text-total-outstanding">{formatCurrency(totalOutstanding)}</p>
-          </CardContent>
-        </Card>
-      </div>
+      <StatStrip
+        stats={[
+          { label: "Total Invoiced", value: formatCurrency(totalInvoiced), testId: "text-total-invoiced" },
+          { label: "Total Paid", value: formatCurrency(totalPaid), tone: "positive", testId: "text-total-paid" },
+          { label: "Outstanding", value: formatCurrency(totalOutstanding), tone: totalOutstanding > 0 ? "attention" : "default", testId: "text-total-outstanding" },
+        ]}
+      />
 
       <div className="flex items-center gap-4 flex-wrap">
         <div className="flex items-center gap-2 flex-wrap">

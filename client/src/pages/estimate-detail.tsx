@@ -47,6 +47,9 @@ import type {
 } from "@shared/schema";
 import { DEVICE_CATEGORIES } from "@shared/schema";
 import { computeEstimateTotals as computeBilling } from "@shared/billing";
+import { StatStrip } from "@/components/stat-strip";
+
+const fmtMoney = (n: number) => "$" + n.toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 // Smart catalog matching — fuzzy match AI-generated device names to catalog assemblies
 function findBestCatalogMatch(deviceName: string, assemblies: DeviceAssembly[]): DeviceAssembly | null {
@@ -1362,78 +1365,37 @@ export default function EstimateDetail() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <Card>
-          <CardContent className="pt-4">
-            <div className="flex items-center gap-2 mb-1">
-              <DollarSign className="w-4 h-4 text-chart-3" />
-              <span className="text-xs text-muted-foreground">Materials</span>
-            </div>
-            <p className="text-lg font-bold" data-testid="text-total-materials">
-              ${materialWithMarkup.toFixed(2)}
-            </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4">
-            <div className="flex items-center gap-2 mb-1">
-              <Clock className="w-4 h-4 text-primary" />
-              <span className="text-xs text-muted-foreground">Labor</span>
-            </div>
-            <p className="text-lg font-bold" data-testid="text-total-labor">
-              ${laborWithMarkup.toFixed(2)}
-            </p>
-            <p className="text-xs text-muted-foreground">{(totalLaborHours + serviceLaborHours).toFixed(1)} hrs</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4">
-            <div className="flex items-center gap-2 mb-1">
-              <Cable className="w-4 h-4 text-chart-2" />
-              <span className="text-xs text-muted-foreground">Wire</span>
-            </div>
-            <p className="text-lg font-bold" data-testid="text-total-wire">
-              ${totalWireCost.toFixed(2)}
-            </p>
-            <p className="text-xs text-muted-foreground">{totalWireFootage.toFixed(0)} ft</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4">
-            <div className="flex items-center gap-2 mb-1">
-              <Checkbox
-                id="include-permit"
-                checked={estimate.includePermit}
-                onCheckedChange={(checked) => updateEstimateMutation.mutate({ includePermit: !!checked } as any)}
-                data-testid="checkbox-include-permit"
-              />
-              <ShieldCheck className="w-4 h-4 text-amber-500" />
-              <label htmlFor="include-permit" className="text-xs text-muted-foreground cursor-pointer">Permit Fee</label>
-            </div>
-            <p className="text-lg font-bold" data-testid="text-permit-fee">
-              ${estimate.includePermit ? permitFee.toFixed(2) : "0.00"}
-            </p>
-            {estimate.includePermit && permitFeeData?.label && (
-              <p className="text-xs text-muted-foreground truncate">{permitFeeData.label}{permitHandlingFee > 0 ? ` + $${permitHandlingFee} handling` : ""}</p>
-            )}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4">
-            <div className="flex items-center gap-2 mb-1">
-              <DollarSign className="w-4 h-4 text-chart-3" />
-              <span className="text-xs text-muted-foreground">Grand Total</span>
-            </div>
-            <p className="text-xl font-bold text-chart-3" data-testid="text-grand-total">
-              ${grandTotal.toFixed(2)}
-            </p>
-          </CardContent>
-        </Card>
-      </div>
+      <StatStrip
+        stats={[
+          { label: "Materials", value: fmtMoney(materialWithMarkup), testId: "text-total-materials" },
+          { label: "Labor", value: fmtMoney(laborWithMarkup), sub: `${(totalLaborHours + serviceLaborHours).toFixed(1)} hrs`, testId: "text-total-labor" },
+          { label: "Wire", value: fmtMoney(totalWireCost), sub: `${totalWireFootage.toFixed(0)} ft`, testId: "text-total-wire" },
+          {
+            label: "Permit Fee",
+            value: fmtMoney(estimate.includePermit ? permitFee : 0),
+            sub: estimate.includePermit
+              ? (permitFeeData?.label ? `${permitFeeData.label}${permitHandlingFee > 0 ? ` + $${permitHandlingFee} handling` : ""}` : undefined)
+              : "Not included",
+            testId: "text-permit-fee",
+          },
+          { label: "Grand Total", value: fmtMoney(grandTotal), tone: "accent", testId: "text-grand-total" },
+        ]}
+      />
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
           <CardTitle className="text-base font-semibold">Rates & Markups</CardTitle>
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="include-permit"
+              checked={estimate.includePermit}
+              onCheckedChange={(checked) => updateEstimateMutation.mutate({ includePermit: !!checked } as any)}
+              data-testid="checkbox-include-permit"
+            />
+            <label htmlFor="include-permit" className="text-sm text-muted-foreground cursor-pointer select-none">
+              Include permit fee
+            </label>
+          </div>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
@@ -1514,7 +1476,7 @@ export default function EstimateDetail() {
       </Card>
 
       <Tabs defaultValue="line-items">
-        <TabsList data-testid="tabs-estimate" className="flex-wrap">
+        <TabsList data-testid="tabs-estimate" className="w-full justify-start overflow-x-auto">
           <TabsTrigger value="line-items" data-testid="tab-line-items">
             <Package className="w-4 h-4 mr-1" />
             Line Items
