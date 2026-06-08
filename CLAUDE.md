@@ -49,8 +49,9 @@ sparkyestimate/
 │   ├── static.ts             # Production static file serving
 │   └── cec-devices.ts        # CEC compliance device data
 ├── shared/
-│   └── schema.ts             # ALL Drizzle table definitions + Zod insert schemas + types
-├── attached_assets/          # Reference docs and images from design phase
+│   ├── schema.ts             # ALL Drizzle table definitions + Zod insert schemas + types
+│   └── billing.ts            # Single source of truth for estimate totals (client + server)
+├── docs/                     # Project map, architecture diagram, screenshots
 ├── drizzle.config.ts         # Drizzle Kit config (PostgreSQL)
 ├── vite.config.ts            # Vite config with path aliases
 ├── tailwind.config.ts
@@ -94,7 +95,7 @@ All routes in `server/routes.ts`. Pattern:
 - **Routing**: wouter `<Route path="/path" component={Page} />`
 - **Data fetching**: TanStack Query `useQuery` / `useMutation` with `apiRequest()` helper
 - **UI components**: shadcn/ui (in `client/src/components/ui/`) — DO NOT edit these directly
-- **Path aliases**: `@/` = client/src, `@shared/` = shared/, `@assets/` = attached_assets/
+- **Path aliases**: `@/` = client/src, `@shared/` = shared/
 - **Theme**: CSS variables in index.css, ThemeProvider for dark/light mode
 - **Branding**: Electric blue primary (217 91% 40%), amber accent (37 92% 50%)
 
