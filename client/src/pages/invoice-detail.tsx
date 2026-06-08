@@ -852,7 +852,7 @@ export default function InvoiceDetail() {
         </Link>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl font-bold tracking-tight" data-testid="text-invoice-number">
+            <h1 className="text-2xl font-bold tracking-tight whitespace-nowrap" data-testid="text-invoice-number">
               Invoice {invoice.invoiceNumber}
             </h1>
             <InvoiceStatusBadge status={invoice.status} />

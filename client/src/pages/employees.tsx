@@ -4,6 +4,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Employee, Project, TimeEntry, Estimate, EstimateItem } from "@shared/schema";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { StatStrip } from "@/components/stat-strip";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -1066,74 +1067,15 @@ export default function Employees() {
       </div>
 
       {/* Summary Stats Row */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Team Size</CardTitle>
-            <Users className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold" data-testid="text-total-employees">
-              {employees?.length || 0}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {activeEmployees.length} active
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Average Rate</CardTitle>
-            <DollarSign className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold" data-testid="text-avg-rate">
-              ${avgRate.toFixed(2)}/hr
-            </div>
-            <p className="text-xs text-muted-foreground">Active employees</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Hours This Week</CardTitle>
-            <Clock className="h-4 w-4 text-blue-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-blue-600">
-              {totalWeekHours.toFixed(1)}
-            </div>
-            <p className="text-xs text-muted-foreground">All employees combined</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Labor Cost This Week</CardTitle>
-            <TrendingUp className="h-4 w-4 text-amber-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-amber-600">
-              ${totalWeekCost.toFixed(0)}
-            </div>
-            <p className="text-xs text-muted-foreground">{thisWeek.label}</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Over Budget</CardTitle>
-            <AlertTriangle className={`h-4 w-4 ${overBudgetProjects > 0 ? "text-red-500" : "text-muted-foreground"}`} />
-          </CardHeader>
-          <CardContent>
-            <div className={`text-2xl font-bold ${overBudgetProjects > 0 ? "text-red-500" : ""}`}>
-              {overBudgetProjects}
-            </div>
-            <p className="text-xs text-muted-foreground">Projects over estimated hours</p>
-          </CardContent>
-        </Card>
-      </div>
+      <StatStrip
+        stats={[
+          { label: "Team Size", value: String(employees?.length || 0), sub: `${activeEmployees.length} active`, testId: "text-total-employees" },
+          { label: "Average Rate", value: `$${avgRate.toFixed(2)}/hr`, sub: "Active employees", testId: "text-avg-rate" },
+          { label: "Hours This Week", value: totalWeekHours.toFixed(1), sub: "All employees" },
+          { label: "Labor Cost This Week", value: `$${totalWeekCost.toFixed(0)}`, sub: thisWeek.label },
+          { label: "Over Budget", value: String(overBudgetProjects), sub: "Over estimated hours", tone: overBudgetProjects > 0 ? "negative" : "default" },
+        ]}
+      />
 
       {/* Employee Cards (compact row) */}
       {isLoading ? (
