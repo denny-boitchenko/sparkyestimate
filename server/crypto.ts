@@ -1,10 +1,18 @@
 import crypto from "crypto";
 
 // Symmetric encryption for credentials stored at rest (e.g. OAuth client secret).
-// Key is derived from SESSION_SECRET so there is no extra secret to manage; set a
-// strong SESSION_SECRET in production. AES-256-GCM gives confidentiality + integrity.
+// AES-256-GCM gives confidentiality + integrity.
+//
+// Key source precedence: CREDENTIAL_ENCRYPTION_KEY > SESSION_SECRET > dev default.
+// Falling back to SESSION_SECRET preserves backward compatibility: data encrypted
+// before CREDENTIAL_ENCRYPTION_KEY existed still decrypts when it is unset.
+// NOTE: setting CREDENTIAL_ENCRYPTION_KEY *after* data has been stored changes the
+// derived key, so any already-encrypted creds must be re-entered through the UI.
 
-const SECRET = process.env.SESSION_SECRET || "dev-insecure-secret-change-me";
+const SECRET =
+  process.env.CREDENTIAL_ENCRYPTION_KEY ||
+  process.env.SESSION_SECRET ||
+  "dev-insecure-secret-change-me";
 const KEY = crypto.scryptSync(SECRET, "sparky-credential-salt", 32);
 
 // Returns "iv:authTag:ciphertext", all hex.

@@ -16,7 +16,8 @@ import {
   ANALYSIS_MODES, INVOICE_PHASES
 } from "@shared/schema";
 import { z } from "zod";
-import { setupAuth } from "./auth";
+import { setupAuth, requireOfficeUser, employeeLoginLimiter, aiLimiter, hashPin, verifyPin } from "./auth";
+import { computeEstimateTotals as computeBilling } from "@shared/billing";
 import * as cecRules from "./cec-rules";
 import { isR2Configured, getUploadUrl, getDownloadUrl, deleteObject, buildStorageKey } from "./r2";
 import { isGoogleDriveConfigured, isGoogleDriveOAuthAvailable, getOAuth2Client, invalidateClient, getProjectFolderIds, uploadToGoogleDrive, getGoogleDriveDownloadUrl, deleteFromGoogleDrive, deleteProjectFolder, hasProjectFolder, phaseFolderKey, loadGoogleCreds, saveGoogleCreds, getGoogleClientId } from "./google-drive";
@@ -24,7 +25,24 @@ import { requireAdmin } from "./auth";
 import { google } from "googleapis";
 import crypto from "crypto";
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024, fieldSize: 50 * 1024 * 1024 } });
+// Accept only the file kinds this app actually ingests: drawings/photos (images,
+// pdf) and price lists (xlsx/xls/csv). Rejects executables/archives/etc. 40MB cap
+// (a high-res floor-plan PDF is well under this; 100MB just invited memory DoS).
+const ALLOWED_UPLOAD_MIME = new Set([
+  "image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif", "image/tiff", "image/bmp",
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", // xlsx
+  "application/vnd.ms-excel", // xls
+  "text/csv", "application/csv", "text/plain",
+]);
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 40 * 1024 * 1024, fieldSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (ALLOWED_UPLOAD_MIME.has((file.mimetype || "").toLowerCase())) return cb(null, true);
+    cb(new Error(`Unsupported file type: ${file.mimetype}`));
+  },
+});
 
 // Gemini model used for all AI analysis (legend extraction, room/electrical detection).
 // gemini-2.0-flash was retired by Google (returns 404 NOT_FOUND) — keep this on a current model.
@@ -43,6 +61,30 @@ export async function registerRoutes(
 
   // Auth must be wired before business routes so the guard covers them.
   await setupAuth(app);
+
+  // Privilege separation: an employee PIN-portal session (employeeId, no userId)
+  // is a low-trust field worker. requireAuth lets such a session reach any
+  // non-admin route, which would expose financials, customer PII, coworker pay
+  // rates, and destructive deletes. Lock PIN sessions to ONLY the field-portal
+  // endpoints they actually use; everything else needs an office account.
+  // Office users (userId) and unauthenticated open paths are unaffected.
+  const EMPLOYEE_PORTAL_ALLOW: { method: string; re: RegExp }[] = [
+    { method: "GET", re: /^\/api\/r2-status\/?$/ },
+    { method: "GET", re: /^\/api\/projects\/?$/ },               // pick a job for time/photos
+    { method: "GET", re: /^\/api\/time-entries\/?$/ },
+    { method: "POST", re: /^\/api\/time-entries\/?$/ },
+    { method: "POST", re: /^\/api\/employee-jobs\/?$/ },
+    { method: "POST", re: /^\/api\/projects\/\d+\/photos\/upload-(gdrive|url)\/?$/ },
+  ];
+  app.use((req, res, next) => {
+    if (!req.path.startsWith("/api")) return next();
+    if (req.session?.userId) return next();          // office user: full access
+    if (req.session?.employeeId) {                   // PIN portal: allowlist only
+      const ok = EMPLOYEE_PORTAL_ALLOW.some(a => a.method === req.method && a.re.test(req.path));
+      return ok ? next() : res.status(403).json({ message: "Office account required" });
+    }
+    return next();                                   // no session: requireAuth already gated it
+  });
 
   await seedDatabase();
 
@@ -2112,7 +2154,7 @@ FINAL CHECKLIST — before returning, verify you checked for:
 [ ] Microwave "MW" label in kitchen area
 [ ] Garburator "GARB" near kitchen sink`;
 
-  app.post("/api/ai-analyze", upload.single("file"), async (req, res) => {
+  app.post("/api/ai-analyze", aiLimiter, upload.single("file"), async (req, res) => {
     const sessionId = (req.body?.sessionId as string) || null;
     try {
       const file = req.file;
@@ -2591,7 +2633,7 @@ FINAL CHECKLIST — before returning, verify you checked for:
   });
 
   // Generate Estimate from AI Analysis
-  app.post("/api/ai-analyses/:id/generate-estimate", async (req, res) => {
+  app.post("/api/ai-analyses/:id/generate-estimate", aiLimiter, async (req, res) => {
     try {
       const id = parseId(req.params.id);
       if (!id) return res.status(400).json({ message: "Invalid analysis ID" });
@@ -2876,7 +2918,7 @@ FINAL CHECKLIST — before returning, verify you checked for:
   });
 
   // Re-analyze an existing analysis with a different mode
-  app.post("/api/ai-analyses/:id/re-analyze", async (req, res) => {
+  app.post("/api/ai-analyses/:id/re-analyze", aiLimiter, async (req, res) => {
     const reSessionId = (req.body?.sessionId as string) || null;
     try {
       const id = parseId(req.params.id);
@@ -3497,45 +3539,15 @@ Return ONLY valid JSON:
     const settingsData = await storage.getSettings();
     const settingsMap = Object.fromEntries(settingsData.map(s => [s.key, s.value]));
 
-    const totalMaterialCost = items.reduce((sum, item) => {
-      const cost = item.quantity * item.materialCost;
-      const markup = cost * (item.markupPct / 100);
-      return sum + cost + markup;
-    }, 0);
-    // Effective labour hours: manual override wins, else apply the job-type multiplier.
-    const rawLaborHours = items.reduce((sum, item) => sum + item.quantity * item.laborHours, 0);
-    const laborMultiplier = (estimate as any).laborMultiplier ?? 1;
-    const laborHoursOverride = (estimate as any).laborHoursOverride;
-    const totalLaborHours = (laborHoursOverride !== null && laborHoursOverride !== undefined)
-      ? Number(laborHoursOverride)
-      : rawLaborHours * laborMultiplier;
-    const totalLaborCost = totalLaborHours * estimate.laborRate;
-
-    // Wire cost from wire_types catalog
+    // Wire cost catalog (full object so the canonical fn prefers costPerMeter).
     const wireTypesAll = await storage.getWireTypes();
-    const wireCostMap = new Map(wireTypesAll.map(w => [w.name, w.costPerFoot]));
-    const totalWireCost = items.reduce((sum, item) => {
-      const costPerFt = wireCostMap.get(item.wireType || "") || 0;
-      return sum + item.quantity * item.wireFootage * costPerFt;
-    }, 0);
-
-    const serviceMaterialCost = services.reduce((sum, s) => sum + s.materialCost, 0);
-    const serviceLaborHours = services.reduce((sum, s) => sum + s.laborHours, 0);
-    const serviceLaborCost = serviceLaborHours * estimate.laborRate;
-
-    const combinedMaterialCost = totalMaterialCost + totalWireCost + serviceMaterialCost;
-    const combinedLaborCost = totalLaborCost + serviceLaborCost;
-    const materialWithMarkup = combinedMaterialCost * (1 + estimate.materialMarkupPct / 100);
-    const laborWithMarkup = combinedLaborCost * (1 + estimate.laborMarkupPct / 100);
-    const subtotal = materialWithMarkup + laborWithMarkup;
-    const overhead = subtotal * (estimate.overheadPct / 100);
-    const subtotalWithOverhead = subtotal + overhead;
-    const profit = subtotalWithOverhead * (estimate.profitPct / 100);
-    const miscExpenses = Number((estimate as any).miscExpenses) || 0;
-    // Include permit fee so the exported total matches the on-screen estimate.
-    const permitFeeAmount = (estimate.includePermit && (estimate as any).permitFee)
-      ? Number((estimate as any).permitFee) : 0;
-    const grandTotal = subtotalWithOverhead + profit + miscExpenses + permitFeeAmount;
+    const wireCostMap = new Map(wireTypesAll.map(w => [w.name, { costPerFoot: w.costPerFoot, costPerMeter: (w as any).costPerMeter }]));
+    const wireUnit = (name: string | null) => {
+      const wc = wireCostMap.get(name || "");
+      return (wc?.costPerMeter || wc?.costPerFoot || 0);
+    };
+    // Single source of truth (shared/billing.ts) — same number the screen + invoice use.
+    const totals = computeBilling({ estimate, items, services, wireCostMap, settings: settingsMap });
 
     res.json({
       company: {
@@ -3547,7 +3559,7 @@ Return ONLY valid JSON:
       project: project ? { name: project.name, clientName: project.clientName, clientEmail: project.clientEmail, clientPhone: project.clientPhone, address: project.address } : null,
       estimate: { name: estimate.name, date: estimate.createdAt },
       lineItems: items.map(item => {
-        const wireCostPerItem = item.wireFootage * (wireCostMap.get(item.wireType || "") || 0);
+        const wireCostPerItem = item.wireFootage * wireUnit(item.wireType);
         const unitPrice = item.materialCost + wireCostPerItem + item.laborHours * estimate.laborRate;
         return {
           deviceType: item.deviceType,
@@ -3563,12 +3575,16 @@ Return ONLY valid JSON:
         total: s.materialCost + s.laborHours * estimate.laborRate,
       })),
       summary: {
-        subtotal,
-        overhead,
-        profit,
-        permitFee: permitFeeAmount,
-        miscExpenses,
-        grandTotal,
+        subtotal: totals.subtotal,
+        overhead: totals.overhead,
+        profit: totals.profit,
+        permitFee: totals.permitFee,
+        permitHandlingFee: totals.permitHandlingFee,
+        miscExpenses: totals.miscExpenses,
+        grandTotal: totals.grandTotal,
+        taxRate: totals.taxRate,
+        taxAmount: totals.taxAmount,
+        total: totals.total,
       },
     });
   });
@@ -3741,7 +3757,9 @@ Return ONLY valid JSON:
     const parsed = insertEmployeeSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ message: parsed.error.issues.map(i => i.message).join(", ") });
     try {
-      const employee = await storage.createEmployee(parsed.data);
+      const data = { ...parsed.data };
+      if (data.pin) data.pin = await hashPin(String(data.pin)); // never store PINs in plaintext
+      const employee = await storage.createEmployee(data);
       res.status(201).json(employee);
     } catch (err: any) {
       res.status(400).json({ message: err.message });
@@ -3751,7 +3769,9 @@ Return ONLY valid JSON:
   app.patch("/api/employees/:id", async (req, res) => {
     const id = parseId(req.params.id);
     if (!id) return res.status(400).json({ message: "Invalid employee ID" });
-    const employee = await storage.updateEmployee(id, req.body);
+    const data = { ...req.body };
+    if (data.pin) data.pin = await hashPin(String(data.pin)); // hash a (re)set PIN; leave other fields as-is
+    const employee = await storage.updateEmployee(id, data);
     if (!employee) return res.status(404).json({ message: "Employee not found" });
     res.json(employee);
   });
@@ -3800,6 +3820,12 @@ Return ONLY valid JSON:
       };
       if (!customItems || customItems.length === 0) {
         return res.status(400).json({ message: "Add-on invoice needs at least one line item" });
+      }
+      for (const ci of customItems) {
+        const amt = Number(ci.amount);
+        if (!Number.isFinite(amt) || amt < 0) {
+          return res.status(400).json({ message: "Each line amount must be a non-negative number" });
+        }
       }
 
       const settingsData = await storage.getSettings();
@@ -3962,9 +3988,13 @@ Return ONLY valid JSON:
           : (!itemIds && !serviceIds) ? allServices : allServices.filter(s => serviceIds?.includes(s.id));
       }
 
-      // Wire cost from wire_types catalog
+      // Wire cost from wire_types catalog (prefer costPerMeter, like the estimate screen).
       const wireTypesAll = await storage.getWireTypes();
-      const wireCostMap = new Map(wireTypesAll.map(w => [w.name, w.costPerFoot]));
+      const wireCostMap = new Map(wireTypesAll.map(w => [w.name, { costPerFoot: w.costPerFoot, costPerMeter: (w as any).costPerMeter }]));
+      const wireUnit = (name: string | null) => {
+        const wc = wireCostMap.get(name || "");
+        return (wc?.costPerMeter || wc?.costPerFoot || 0);
+      };
 
       // Labour job-type multiplier + manual override + misc apply to a FULL invoice.
       const invLaborMultiplier = (estimate as any).laborMultiplier ?? 1;
@@ -3990,8 +4020,7 @@ Return ONLY valid JSON:
         const rawHours = itemSet.reduce((sum, item) => sum + item.quantity * item.laborHours, 0);
         const laborCost = rawHours * estimate.laborRate * labourScale;
         const wireCost = itemSet.reduce((sum, item) => {
-          const costPerFt = wireCostMap.get(item.wireType || "") || 0;
-          return sum + item.quantity * item.wireFootage * costPerFt;
+          return sum + item.quantity * item.wireFootage * wireUnit(item.wireType);
         }, 0);
         return { matCost, laborCost, wireCost };
       };
@@ -4014,18 +4043,26 @@ Return ONLY valid JSON:
       const subtotalWithOverhead = subtotalRaw + overhead;
       const profit = subtotalWithOverhead * (estimate.profitPct / 100);
 
-      // Only include permit fee if all items are selected (full invoice)
+      // Only include permit fee + handling fee if all items are selected (full invoice).
+      // (Handling fee was previously dropped here — it's part of the on-screen total.)
       let permitFeeAmount = 0;
-      if (isFullInvoiceScope && estimate.includePermit && estimate.permitFee) {
-        permitFeeAmount = estimate.permitFee;
+      if (isFullInvoiceScope && estimate.includePermit) {
+        permitFeeAmount = (Number(estimate.permitFee) || 0) + (Number((estimate as any).permitHandlingFee) || 0);
       }
       // Misc / expenses pass-through, full invoice only.
       const invMiscExpenses = isFullInvoiceScope ? (Number((estimate as any).miscExpenses) || 0) : 0;
 
-      // If customItems are provided, use their sum as the grand total
+      // If customItems are provided, use their sum as the grand total.
+      // Validate amounts so a negative / NaN / Infinity / string can't corrupt billing.
       let grandTotal: number;
       if (customItems && customItems.length > 0) {
-        grandTotal = customItems.reduce((sum, ci) => sum + ci.amount, 0);
+        for (const ci of customItems) {
+          const amt = Number(ci.amount);
+          if (!Number.isFinite(amt) || amt < 0) {
+            return res.status(400).json({ message: "Each custom line amount must be a non-negative number" });
+          }
+        }
+        grandTotal = customItems.reduce((sum, ci) => sum + Number(ci.amount), 0);
       } else {
         grandTotal = subtotalWithOverhead + profit + permitFeeAmount + invMiscExpenses;
       }
@@ -4416,7 +4453,7 @@ Return ONLY valid JSON:
     res.json(s);
   });
 
-  app.post("/api/settings", async (req, res) => {
+  app.post("/api/settings", requireAdmin, async (req, res) => {
     try {
       const entries = Object.entries(req.body) as [string, string][];
       for (const [key, value] of entries) {
@@ -4440,7 +4477,7 @@ Return ONLY valid JSON:
     res.json(schedule);
   });
 
-  app.patch("/api/permit-fee-schedules/:id", async (req, res) => {
+  app.patch("/api/permit-fee-schedules/:id", requireAdmin, async (req, res) => {
     const id = parseId(req.params.id);
     if (!id) return res.status(400).json({ message: "Invalid schedule ID" });
     const schedule = await storage.updatePermitFeeSchedule(id, req.body);
@@ -4965,29 +5002,41 @@ Return ONLY valid JSON:
   });
 
   // ─── Employee Portal Auth (PIN-based) ───
-  app.post("/api/employee-auth", async (req, res) => {
+  app.post("/api/employee-auth", employeeLoginLimiter, async (req, res) => {
     const { employeeId, pin } = req.body;
     if (!employeeId || !pin) return res.status(400).json({ message: "Employee ID and PIN required" });
     const employee = await storage.getEmployee(Number(employeeId));
     if (!employee) return res.status(404).json({ message: "Employee not found" });
-    if (!employee.pin || employee.pin !== String(pin)) return res.status(401).json({ message: "Invalid PIN" });
+    if (!employee.pin) return res.status(401).json({ message: "Invalid PIN" });
+    const { ok, legacy } = await verifyPin(String(pin), employee.pin);
+    if (!ok) return res.status(401).json({ message: "Invalid PIN" });
     if (!employee.isActive) return res.status(403).json({ message: "Employee account is inactive" });
+    if (legacy) await storage.updateEmployee(employee.id, { pin: await hashPin(String(pin)) }); // upgrade plaintext → hash
     // Return employee info + their assigned projects
     const assignments = await storage.getEmployeeProjects(employee.id);
     res.json({ employee: { id: employee.id, name: employee.name, role: employee.role }, assignments });
   });
 
   // ─── Employee Login (PIN-only, no employee ID required) ───
-  app.post("/api/employee-login", async (req, res) => {
+  app.post("/api/employee-login", employeeLoginLimiter, async (req, res) => {
     const { pin } = req.body;
     if (!pin) return res.status(400).json({ message: "PIN is required" });
-    // Find employee by PIN
+    // PINs are bcrypt-hashed, so we can't index by value — verify against each
+    // active employee. Small staff list; cost is negligible. Legacy plaintext
+    // PINs are upgraded to a hash on first successful login.
     const allEmployees = await storage.getEmployees();
-    const employee = allEmployees.find(e => e.pin === String(pin) && e.isActive);
-    if (!employee) return res.status(401).json({ message: "Invalid PIN" });
-    req.session.employeeId = employee.id; // establish employee session for portal API calls
-    const assignments = await storage.getEmployeeProjects(employee.id);
-    res.json({ employee: { id: employee.id, name: employee.name, role: employee.role }, assignments });
+    let matched: typeof allEmployees[number] | null = null;
+    let wasLegacy = false;
+    for (const e of allEmployees) {
+      if (!e.isActive || !e.pin) continue;
+      const { ok, legacy } = await verifyPin(String(pin), e.pin);
+      if (ok) { matched = e; wasLegacy = legacy; break; }
+    }
+    if (!matched) return res.status(401).json({ message: "Invalid PIN" });
+    if (wasLegacy) await storage.updateEmployee(matched.id, { pin: await hashPin(String(pin)) });
+    req.session.employeeId = matched.id; // establish employee session for portal API calls
+    const assignments = await storage.getEmployeeProjects(matched.id);
+    res.json({ employee: { id: matched.id, name: matched.name, role: matched.role }, assignments });
   });
 
   // ─── Field job intake (employee creates a pending-review job from the portal) ───
@@ -5103,41 +5152,14 @@ Return ONLY valid JSON:
     if (!estimate) return { grandTotal: 0, total: 0, taxAmount: 0 };
     const items = await storage.getEstimateItems(estimateId);
     const services = await storage.getEstimateServices(estimateId);
-    const sm = Object.fromEntries((await storage.getSettings()).map(s => [s.key, s.value]));
+    const settings = Object.fromEntries((await storage.getSettings()).map(s => [s.key, s.value]));
     const wireTypesAll = await storage.getWireTypes();
-    const wireCostMap = new Map(wireTypesAll.map(w => [w.name, w.costPerFoot]));
-
-    const laborMultiplier = (estimate as any).laborMultiplier ?? 1;
-    const laborHoursOverride = (estimate as any).laborHoursOverride;
-    const allRawHours = items.reduce((sum, it) => sum + it.quantity * it.laborHours, 0);
-    const effectiveTotalHours = (laborHoursOverride !== null && laborHoursOverride !== undefined)
-      ? Number(laborHoursOverride)
-      : allRawHours * laborMultiplier;
-    const labourScale = allRawHours > 0 ? effectiveTotalHours / allRawHours : 1;
-
-    const matCost = items.reduce((sum, item) => {
-      const cost = item.quantity * item.materialCost;
-      return sum + cost + cost * (item.markupPct / 100);
-    }, 0);
-    const wireCost = items.reduce((sum, item) => {
-      const costPerFt = wireCostMap.get(item.wireType || "") || 0;
-      return sum + item.quantity * item.wireFootage * costPerFt;
-    }, 0);
-    const laborCost = items.reduce((sum, item) => sum + item.quantity * item.laborHours, 0) * estimate.laborRate * labourScale;
-    const svcMat = services.reduce((sum, s) => sum + s.materialCost, 0);
-    const svcLabor = services.reduce((sum, s) => sum + s.laborHours, 0) * estimate.laborRate;
-
-    const materialWithMarkup = (matCost + wireCost + svcMat) * (1 + estimate.materialMarkupPct / 100);
-    const laborWithMarkup = (laborCost + svcLabor) * (1 + estimate.laborMarkupPct / 100);
-    const subtotalRaw = materialWithMarkup + laborWithMarkup;
-    const overhead = subtotalRaw * (estimate.overheadPct / 100);
-    const profit = (subtotalRaw + overhead) * (estimate.profitPct / 100);
-    const permitFee = (estimate.includePermit && estimate.permitFee) ? estimate.permitFee : 0;
-    const miscExpenses = Number((estimate as any).miscExpenses) || 0;
-    const grandTotal = subtotalRaw + overhead + profit + permitFee + miscExpenses;
-    const taxRate = parseFloat(sm.gstRate || "5");
-    const taxAmount = grandTotal * (taxRate / 100);
-    return { grandTotal, taxAmount, total: grandTotal + taxAmount };
+    // Map the WHOLE wire-cost object so the canonical fn can prefer costPerMeter
+    // (Canadian unit) over the legacy costPerFoot — fixes the client/server drift.
+    const wireCostMap = new Map(wireTypesAll.map(w => [w.name, { costPerFoot: w.costPerFoot, costPerMeter: (w as any).costPerMeter }]));
+    // Single source of truth (shared/billing.ts). Permit fields fall back to the
+    // persisted estimate columns (incl. permitHandlingFee, previously omitted).
+    return computeBilling({ estimate, items, services, wireCostMap, settings });
   }
 
   app.get("/api/projects/:id/financials", async (req, res) => {

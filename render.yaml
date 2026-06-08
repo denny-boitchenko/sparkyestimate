@@ -18,6 +18,10 @@ services:
         fromDatabase:
           name: sparkyestimate-db
           property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: CREDENTIAL_ENCRYPTION_KEY
+        generateValue: true
       - key: GOOGLE_GENERATIVE_AI_API_KEY
         sync: false
       - key: GOOGLE_CLIENT_ID

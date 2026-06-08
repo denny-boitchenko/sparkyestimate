@@ -46,6 +46,7 @@ import type {
   Employee, Setting, EstimateCrew, JobType
 } from "@shared/schema";
 import { DEVICE_CATEGORIES } from "@shared/schema";
+import { computeEstimateTotals as computeBilling } from "@shared/billing";
 
 // Smart catalog matching — fuzzy match AI-generated device names to catalog assemblies
 function findBestCatalogMatch(deviceName: string, assemblies: DeviceAssembly[]): DeviceAssembly | null {
@@ -1245,26 +1246,38 @@ export default function EstimateDetail() {
   const combinedMaterialCost = totalMaterialCost + totalWireCost + serviceMaterialCost;
   const combinedLaborCost = totalLaborCost + serviceLaborCost;
 
-  const materialWithMarkup = combinedMaterialCost * (1 + estimate.materialMarkupPct / 100);
-  const laborWithMarkup = combinedLaborCost * (1 + estimate.laborMarkupPct / 100);
-  const subtotal = materialWithMarkup + laborWithMarkup;
-  const overhead = subtotal * (estimate.overheadPct / 100);
-  const subtotalWithOverhead = subtotal + overhead;
-  const profit = subtotalWithOverhead * (estimate.profitPct / 100);
-  const tsbcPermitFee = estimate.includePermit ? (permitFeeData?.fee || 0) : 0;
-  const permitHandlingFee = estimate.includePermit ? ((estimate as any)?.permitHandlingFee || 0) : 0;
-  const permitFee = tsbcPermitFee + permitHandlingFee;
-  // Misc / expenses (fuel, dump fees, etc.) — pass-through, added after overhead + profit.
-  const miscExpenses = Number((estimate as any).miscExpenses) || 0;
-  const grandTotal = subtotalWithOverhead + profit + permitFee + miscExpenses;
-
-  // GST so the estimate shows the same with-tax total the invoice will charge.
+  // Authoritative totals come from the ONE shared billing fn (shared/billing.ts) —
+  // the same code the server uses for invoices + the project billing hub, so the
+  // on-screen total, the PDF, and every invoice can never drift apart again.
   const estSettingsMap: Record<string, string> = {};
   for (const s of (settingsData || [])) estSettingsMap[s.key] = s.value;
-  const estGstRate = parseFloat(estSettingsMap.gstRate || "5") / 100;
-  const estGstLabel = estSettingsMap.gstLabel || "GST 5%";
-  const estGstAmount = grandTotal * estGstRate;
-  const totalInclGst = grandTotal + estGstAmount;
+  const tsbcPermitFee = estimate.includePermit ? (permitFeeData?.fee || 0) : 0;
+  const billingWireMap = new Map<string, { costPerFoot?: number | null; costPerMeter?: number | null }>();
+  for (const wt of (wireTypesData || [])) billingWireMap.set(wt.name, { costPerFoot: wt.costPerFoot, costPerMeter: (wt as any).costPerMeter });
+  const billing = computeBilling({
+    estimate: estimate as any,
+    items: items || [],
+    services: services || [],
+    wireCostMap: billingWireMap,
+    settings: estSettingsMap,
+    permitFee: tsbcPermitFee, // live TSBC fee from /permit-fee (server falls back to the saved column)
+  });
+  const materialWithMarkup = billing.materialWithMarkup;
+  const laborWithMarkup = billing.laborWithMarkup;
+  const subtotal = billing.subtotal;
+  const overhead = billing.overhead;
+  const subtotalWithOverhead = subtotal + overhead;
+  const profit = billing.profit;
+  const permitHandlingFee = billing.permitHandlingFee;
+  const permitFee = billing.permitFee + billing.permitHandlingFee;
+  const miscExpenses = billing.miscExpenses;
+  const grandTotal = billing.grandTotal;
+
+  // GST so the estimate shows the same with-tax total the invoice will charge.
+  const estGstRate = billing.taxRate / 100;
+  const estGstLabel = billing.taxLabel;
+  const estGstAmount = billing.taxAmount;
+  const totalInclGst = billing.total;
 
   const totalCircuitAmps = (circuits || []).reduce((sum, c) => sum + c.amps * c.poles, 0);
   const recommendedPanelSize = totalCircuitAmps <= 100 ? 100 : totalCircuitAmps <= 200 ? 200 : 400;

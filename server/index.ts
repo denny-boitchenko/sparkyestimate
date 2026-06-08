@@ -64,13 +64,19 @@ app.use((req, res, next) => {
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
 
     console.error("Internal Server Error:", err);
 
     if (res.headersSent) {
       return next(err);
     }
+
+    // Don't leak internal error details on 5xx in production; keep specific
+    // messages for client errors (<500) and in development.
+    const message =
+      status >= 500 && process.env.NODE_ENV === "production"
+        ? "Internal Server Error"
+        : err.message || "Internal Server Error";
 
     return res.status(status).json({ message });
   });

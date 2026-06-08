@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-06-08 — Security hardening + billing single-source-of-truth
+
+### Security
+- **Employee PIN sessions are now privilege-separated.** A PIN-portal session (field worker) previously reached almost every non-admin API — financials, customer PII, coworker pay rates, and destructive deletes. A deny-by-default middleware now limits PIN sessions to the 7 field-portal endpoints they actually use; everything else requires an office account (`requireOfficeUser`). Verified: PIN session gets 403 on financials/customers/invoice-delete/settings, 200 on the portal's project list.
+- **Employee PINs are bcrypt-hashed.** They were stored + compared in plaintext. New PINs hash on create/update; existing plaintext PINs upgrade to a hash on first successful login (`verifyPin`/`hashPin`). `/api/employee-login` + `/api/employee-auth` are now rate-limited (10/15min) — brute-force returns 429.
+- **AI (Gemini) endpoints rate-limited** (30/hr) so a logged-in user can't run up unbounded API cost.
+- **`POST /api/settings` and `PATCH /api/permit-fee-schedules/:id` now require admin** (an estimator could previously zero the GST rate or edit the active fee table).
+- **Money inputs validated** — `convert-to-invoice` and `addon-invoice` reject negative / NaN / Infinity / non-numeric line amounts (400); money/rate columns in `shared/schema.ts` are constrained to finite & non-negative.
+- **Secrets/crypto/config** — `SESSION_SECRET` hard-fails at startup in production (was a public dev default); credential encryption can use a separate `CREDENTIAL_ENCRYPTION_KEY`; 5xx errors no longer leak internals in production; multer now has a type allow-list + 40MB cap (was 100MB, any type); `xlsx` moved to the patched SheetJS CDN build (CVE-2023-30533 / CVE-2024-22363); added `.env.example` + `render.yaml` secret provisioning.
+
+### Billing
+- **One source of truth for the estimate total** — `shared/billing.ts`. The customer-facing math was copy-pasted in 4 places (estimate screen, PDF/export, convert-to-invoice, financials hub) and had drifted: the server used wire `costPerFoot` while the screen used `costPerMeter`, and the server dropped the permit handling fee. All sites now call one function. Verified: screen, financials hub, and export summary all report **$31,144.42** incl. tax for the Guse estimate.
+
+### Note
+- These changes required `npm install` (xlsx CDN). Because the repo lives in iCloud Drive, that triggered an iCloud re-sync of `node_modules`, which stalled the first server boot while iCloud re-downloaded the ~1,800-file `googleapis` package. Resolved by materializing the files; boot is back to ~13s. Long-term, keeping `node_modules` out of iCloud sync avoids this.
+
 ## 2026-06-05 (batch 3) — Progressive / milestone billing
 
 ### Added

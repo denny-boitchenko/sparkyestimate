@@ -24,6 +24,18 @@ declare module "express-session" {
 }
 
 const BCRYPT_ROUNDS = 12;
+const PIN_BCRYPT_ROUNDS = 10;
+
+// Resolve the session secret. In production a real secret is mandatory; the
+// insecure dev fallback is ONLY allowed when NODE_ENV !== "production".
+function resolveSessionSecret(): string {
+  const secret = process.env.SESSION_SECRET;
+  if (process.env.NODE_ENV === "production") {
+    if (!secret) throw new Error("SESSION_SECRET must be set in production");
+    return secret;
+  }
+  return secret || "dev-insecure-secret-change-me";
+}
 
 // Endpoints reachable without an authenticated session.
 // Auth endpoints (so you can log in) and the separate employee PIN login.
@@ -56,6 +68,58 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
 export function requireAdmin(req: Request, res: Response, next: NextFunction) {
   if (req.session?.userId && req.session?.role === "admin") return next();
   return res.status(403).json({ message: "Admin access required" });
+}
+
+// Office-only: requires a real office-user session (userId). An employee
+// PIN-portal session (employeeId only) is explicitly rejected with 403.
+// Stricter than requireAuth, which accepts either kind of session.
+export function requireOfficeUser(req: Request, res: Response, next: NextFunction) {
+  if (req.session?.userId) return next();
+  if (req.session?.employeeId) return res.status(403).json({ message: "Office account required" });
+  return res.status(401).json({ message: "Unauthorized" });
+}
+
+// Throttle employee PIN login attempts per IP (applied in routes.ts to
+// /api/employee-login and /api/employee-auth).
+export const employeeLoginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Too many attempts, try again later" },
+});
+
+// Cap AI (Gemini) calls per IP for cost control (applied in routes.ts to AI routes).
+export const aiLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Too many AI requests, try again later" },
+});
+
+// Hash an employee PIN with bcrypt (rounds 10).
+export async function hashPin(pin: string): Promise<string> {
+  return bcrypt.hash(pin, PIN_BCRYPT_ROUNDS);
+}
+
+// Verify an employee PIN. If `stored` is a bcrypt hash ($2…), use bcrypt.compare
+// (legacy:false). Otherwise treat `stored` as legacy plaintext and compare in
+// constant time (legacy:true) so the caller can upgrade it to a hash. Never throws.
+export async function verifyPin(pin: string, stored: string): Promise<{ ok: boolean; legacy: boolean }> {
+  if (typeof stored === "string" && stored.startsWith("$2")) {
+    try {
+      const ok = await bcrypt.compare(pin, stored);
+      return { ok, legacy: false };
+    } catch {
+      return { ok: false, legacy: false };
+    }
+  }
+  // Legacy plaintext: constant-time compare, guarding unequal lengths.
+  const a = Buffer.from(pin ?? "", "utf8");
+  const b = Buffer.from(stored ?? "", "utf8");
+  const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
+  return { ok, legacy: true };
 }
 
 const MIN_PASSWORD_LEN = 8;
@@ -118,7 +182,7 @@ export async function setupAuth(app: Express) {
   app.use(
     session({
       store: new PgSession({ pool, createTableIfMissing: true, tableName: "session" }),
-      secret: process.env.SESSION_SECRET || "dev-insecure-secret-change-me",
+      secret: resolveSessionSecret(),
       resave: false,
       saveUninitialized: false,
       cookie: {

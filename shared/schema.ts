@@ -346,15 +346,71 @@ export const receipts = pgTable("receipts", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Money / rate validation: reject NaN, Infinity, and negative values so a corrupt
+// number can never reach the DB and poison a total. Kept permissive on presence —
+// these refinements only constrain the VALUE when one is supplied, they never make
+// an optional/nullable field required. `null`/`undefined` pass through untouched so
+// drizzle-zod's generated optionality (notNull-with-default => optional, nullable
+// column => optional+nullable) is preserved.
+const moneyField = z
+  .number()
+  .refine((v) => Number.isFinite(v) && v >= 0, "must be a non-negative number");
+// .optional().nullable() so we can splice it onto either kind of generated field
+// without changing whether the caller is required to provide it.
+const moneyFieldOptional = moneyField.optional().nullable();
+
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
 export const insertCustomerSchema = createInsertSchema(customers).omit({ id: true, createdAt: true });
-export const insertEmployeeSchema = createInsertSchema(employees).omit({ id: true, createdAt: true });
+export const insertEmployeeSchema = createInsertSchema(employees)
+  .omit({ id: true, createdAt: true })
+  .extend({
+    // hourlyRate is notNull-with-default => optional in insert; keep it optional.
+    hourlyRate: moneyFieldOptional,
+  });
 export const insertProjectSchema = createInsertSchema(projects).omit({ id: true, createdAt: true, updatedAt: true });
-export const insertEstimateSchema = createInsertSchema(estimates).omit({ id: true, createdAt: true });
-export const insertEstimateItemSchema = createInsertSchema(estimateItems).omit({ id: true });
-export const insertInvoiceSchema = createInsertSchema(invoices).omit({ id: true, createdAt: true });
-export const insertInvoiceItemSchema = createInsertSchema(invoiceItems).omit({ id: true });
+export const insertEstimateSchema = createInsertSchema(estimates)
+  .omit({ id: true, createdAt: true })
+  .extend({
+    // Rate/markup/money knobs. permitFee/permitFeeOverride/laborHoursOverride are
+    // nullable columns (optional+nullable), the rest are notNull-with-default
+    // (optional). moneyFieldOptional preserves both shapes.
+    overheadPct: moneyFieldOptional,
+    profitPct: moneyFieldOptional,
+    materialMarkupPct: moneyFieldOptional,
+    laborMarkupPct: moneyFieldOptional,
+    laborRate: moneyFieldOptional,
+    laborCostRate: moneyFieldOptional,
+    miscExpenses: moneyFieldOptional,
+    laborHoursOverride: moneyFieldOptional,
+    permitFee: moneyFieldOptional,
+    permitFeeOverride: moneyFieldOptional,
+    permitHandlingFee: moneyFieldOptional,
+  });
+export const insertEstimateItemSchema = createInsertSchema(estimateItems)
+  .omit({ id: true })
+  .extend({
+    quantity: moneyFieldOptional,
+    materialCost: moneyFieldOptional,
+    laborHours: moneyFieldOptional,
+    wireFootage: moneyFieldOptional,
+    markupPct: moneyFieldOptional,
+  });
+export const insertInvoiceSchema = createInsertSchema(invoices)
+  .omit({ id: true, createdAt: true })
+  .extend({
+    subtotal: moneyFieldOptional,
+    taxRate: moneyFieldOptional,
+    taxAmount: moneyFieldOptional,
+    total: moneyFieldOptional,
+  });
+export const insertInvoiceItemSchema = createInsertSchema(invoiceItems)
+  .omit({ id: true })
+  .extend({
+    quantity: moneyFieldOptional,
+    unitPrice: moneyFieldOptional,
+    total: moneyFieldOptional,
+  });
 export const insertDeviceAssemblySchema = createInsertSchema(deviceAssemblies).omit({ id: true });
 export const insertJobTypeSchema = createInsertSchema(jobTypes).omit({ id: true });
 export const insertAiAnalysisSchema = createInsertSchema(aiAnalyses).omit({ id: true, createdAt: true });
@@ -374,7 +430,13 @@ export const insertPermitFeeScheduleSchema = createInsertSchema(permitFeeSchedul
 export const insertProjectPhotoSchema = createInsertSchema(projectPhotos).omit({ id: true, createdAt: true });
 export const insertProjectAssignmentSchema = createInsertSchema(projectAssignments).omit({ id: true, createdAt: true });
 export const insertTimeEntrySchema = createInsertSchema(timeEntries).omit({ id: true, createdAt: true });
-export const insertReceiptSchema = createInsertSchema(receipts).omit({ id: true, createdAt: true });
+export const insertReceiptSchema = createInsertSchema(receipts)
+  .omit({ id: true, createdAt: true })
+  .extend({
+    // amount is notNull with NO default => REQUIRED in insert; keep it required
+    // (non-optional) so we don't loosen a previously-mandatory field.
+    amount: moneyField,
+  });
 
 // Types
 export type User = typeof users.$inferSelect;
